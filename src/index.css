@@ -1,0 +1,273 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --color-brand-50: #f5f3ff;
+  --color-brand-100: #ede9fe;
+  --color-brand-500: #8b5cf6;
+  --color-brand-600: #7c3aed;
+  --color-brand-900: #4c1d95;
+}
+
+html.dark {
+  --color-white: #0f172a;
+  --color-slate-50: #1e293b;
+  --color-slate-100: #334155;
+  --color-slate-200: #475569;
+  --color-slate-300: #64748b;
+  --color-slate-400: #94a3b8;
+  --color-slate-500: #cbd5e1;
+  --color-slate-600: #e2e8f0;
+  --color-slate-700: #f1f5f9;
+  --color-slate-800: #f8fafc;
+  --color-slate-900: #ffffff;
+  
+  --color-brand-50: #2e1065;
+  --color-brand-100: #4c1d95;
+  --color-brand-500: #a78bfa;
+  --color-brand-600: #c4b5fd;
+  --color-brand-700: #ddd6fe;
+  --color-brand-900: #ede9fe;
+}
+
+/* Liquid Glass System Utilities */
+@keyframes liquid-shimmer {
+  0% { transform: translateX(-100%) rotate(25deg); }
+  100% { transform: translateX(200%) rotate(25deg); }
+}
+
+@keyframes liquid-pulse {
+  0%, 100% { opacity: 0.6; transform: scale(1); }
+  50% { opacity: 0.9; transform: scale(1.03); }
+}
+
+.liquid-glass-dock {
+  background: rgba(244, 246, 252, 0.78);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 
+    0 16px 40px -8px rgba(15, 23, 42, 0.12),
+    0 4px 12px -2px rgba(15, 23, 42, 0.04),
+    inset 0 1px 2px 0 rgba(255, 255, 255, 0.95),
+    inset 0 -1px 2px 0 rgba(148, 163, 184, 0.15);
+}
+
+html.dark .liquid-glass-dock {
+  background: rgba(15, 23, 42, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 
+    0 20px 48px -8px rgba(0, 0, 0, 0.6),
+    0 4px 16px -2px rgba(0, 0, 0, 0.4),
+    inset 0 1px 2px 0 rgba(255, 255, 255, 0.2),
+    inset 0 -1px 2px 0 rgba(0, 0, 0, 0.4);
+}
+
+.liquid-glass-pill {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(243, 240, 255, 0.85) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(196, 181, 253, 0.7);
+  box-shadow: 
+    0 4px 14px 0 rgba(124, 58, 237, 0.14),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 1),
+    inset 0 -1px 1px 0 rgba(167, 139, 250, 0.2);
+}
+
+html.dark .liquid-glass-pill {
+  background: linear-gradient(135deg, rgba(76, 29, 149, 0.55) 0%, rgba(46, 16, 101, 0.7) 100%);
+  border: 1px solid rgba(167, 139, 250, 0.4);
+  box-shadow: 
+    0 4px 16px 0 rgba(124, 58, 237, 0.3),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.25),
+    inset 0 -1px 1px 0 rgba(0, 0, 0, 0.5);
+}
+
+.liquid-glass-card {
+  background: rgba(255, 255, 255, 0.72);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 
+    0 10px 30px -5px rgba(15, 23, 42, 0.06),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+html.dark .liquid-glass-card {
+  background: rgba(30, 41, 59, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 
+    0 12px 36px -6px rgba(0, 0, 0, 0.4),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.liquid-glass-specular {
+  position: relative;
+  overflow: hidden;
+}
+
+.liquid-glass-specular::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 45%;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.4) 0%, rgba(255, 255, 255, 0) 100%);
+  pointer-events: none;
+  border-top-left-radius: inherit;
+  border-top-right-radius: inherit;
+}
+
+html.dark .liquid-glass-specular::before {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12) 0%, rgba(255, 255, 255, 0) 100%);
+}
+
+html.dark body {
+  background-color: var(--color-slate-50);
+  color: var(--color-slate-900);
+}
+
+html.dark .gemini-markdown h1,
+html.dark .gemini-markdown h2,
+html.dark .gemini-markdown h3,
+html.dark .gemini-markdown strong {
+  color: #f8fafc;
+}
+
+html.dark .gemini-markdown p,
+html.dark .gemini-markdown ul,
+html.dark .gemini-markdown ol {
+  color: #cbd5e1;
+}
+
+html.dark .gemini-markdown code,
+html.dark .gemini-markdown pre {
+  background-color: #1e293b;
+  color: #cbd5e1;
+  border-color: #334155;
+}
+
+html,
+body,
+#root {
+  max-width: 100vw;
+  overflow-x: hidden;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+}
+html[data-font-size="small"] {
+  font-size: 14px;
+}
+html[data-font-size="medium"] {
+  font-size: 16px;
+}
+html[data-font-size="large"] {
+  font-size: 18px;
+}
+
+body {
+  background-color: #f8fafc;
+  color: #0f172a;
+}
+
+.gemini-markdown h1,
+.gemini-markdown h2,
+.gemini-markdown h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  color: #0f172a;
+  margin-top: 3rem;
+  margin-bottom: 1.5rem;
+  letter-spacing: -0.02em;
+}
+
+.gemini-markdown h1 {
+  font-size: 1.75rem;
+}
+
+.gemini-markdown h2 {
+  font-size: 1.5rem;
+}
+
+.gemini-markdown h3 {
+  font-size: 1.25rem;
+}
+
+.gemini-markdown p {
+  font-size: 16px;
+  line-height: 1.7;
+  margin-bottom: 2rem;
+  color: #334155;
+}
+
+.gemini-markdown p:last-child {
+  margin-bottom: 0;
+}
+
+.gemini-markdown ul,
+.gemini-markdown ol {
+  font-size: 16px;
+  line-height: 1.7;
+  margin-bottom: 2rem;
+  padding-left: 1.75rem;
+  color: #334155;
+}
+
+.gemini-markdown li {
+  margin-bottom: 0.75rem;
+  padding-left: 0.25rem;
+}
+
+.gemini-markdown li::marker {
+  color: #94a3b8;
+}
+
+.gemini-markdown strong {
+  font-weight: 600;
+  color: #0f172a;
+}
+
+.gemini-markdown code {
+  background-color: #f8fafc;
+  color: #475569;
+  padding: 0.15rem 0.4rem;
+  border-radius: 0.25rem;
+  border: 1px solid #e2e8f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9em;
+}
+
+.gemini-markdown pre {
+  background-color: #f8fafc;
+  border: 1px solid #e2e8f0;
+  padding: 1.25rem;
+  border-radius: 0.75rem;
+  overflow-x: auto;
+  margin-bottom: 1.75rem;
+}
+
+.gemini-markdown pre code {
+  background-color: transparent;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font-size: 0.85em;
+}
+
+
+/* End of index.css */
+

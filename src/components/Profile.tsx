@@ -1,0 +1,349 @@
+import { Mail, MapPin, Building, Calendar, BookOpen, GraduationCap, BarChart2, LogOut, Award, Star, Clock, Camera, Loader2 } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import { supabase } from '../lib/supabase';
+
+export function Profile() {
+  const [user, setUser] = useState<any>(null);
+  const [profile, setProfile] = useState<any>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!supabase) return;
+
+    let isMounted = true;
+
+    const loadUserData = async () => {
+      try {
+        const res = await supabase.auth.getUser();
+        const user = res?.data?.user || null;
+        if (!isMounted) return;
+        setUser(user);
+        if (user) {
+          try {
+            const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+            if (!isMounted) return;
+            if (data) {
+              setProfile(data);
+            } else {
+              try {
+                const { data: newProfile } = await supabase.from('profiles').insert([{ id: user.id }]).select().single();
+                if (isMounted && newProfile) setProfile(newProfile);
+              } catch (e) {
+                console.warn("Profile insert error ignored:", e);
+              }
+            }
+          } catch (e) {
+            console.warn("Profile select error ignored:", e);
+          }
+        }
+      } catch (e) {
+        console.warn("GetUser error ignored:", e);
+      }
+    };
+
+    loadUserData();
+
+    return () => { isMounted = false; };
+  }, []);
+
+  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsUploading(true);
+      
+      // Upload directly to our backend which then puts it to B2
+      const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        body: file,
+        headers: {
+          'Content-Type': file.type,
+        },
+      });
+
+      if (!uploadRes.ok) {
+        const text = await uploadRes.text();
+        throw new Error(`Upload failed: ${uploadRes.status} ${text}`);
+      }
+
+      const { key: fileKey } = await uploadRes.json();
+      
+      // We will just use the returned fileKey to update Supabase metadata.
+      if (supabase && user && fileKey) {
+        const { data, error } = await supabase.from('profiles').update({
+          avatar_url: fileKey
+        }).eq('id', user.id).select().single();
+        if (!error && data) {
+          setProfile(data);
+        }
+      }
+
+    } catch (error) {
+      console.error('Error uploading photo:', error);
+      alert('Failed to upload photo: ' + (error instanceof Error ? error.message : ""));
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const getPublicUrl = (key: string) => {
+    // Check if it's already a full HTTP URL (e.g. from GitHub, Google, or direct S3 link)
+    if (key.startsWith('http')) return key;
+    // Otherwise fallback to backend download proxy
+    return `/api/download?key=${encodeURIComponent(key)}`;
+  };
+
+  return (
+    <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-6 sm:space-y-8">
+      {/* Cover & Profile Header */}
+      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+        {/* Cover Photo */}
+        <div className="h-48 xl:h-64 bg-gradient-to-r from-brand-500 to-indigo-600 relative">
+          <div className="absolute inset-0 bg-black/10 mix-blend-overlay"></div>
+        </div>
+        
+        <div className="px-6 pb-8 sm:px-10 relative">
+          {/* Profile Photo */}
+          <div className="flex justify-between items-end -mt-16 mb-4 sm:-mt-20 sm:mb-6">
+            <div className="relative group cursor-pointer" onClick={() => fileInputRef.current?.click()}>
+              <input 
+                type="file" 
+                ref={fileInputRef} 
+                onChange={handlePhotoUpload} 
+                className="hidden" 
+                accept="image/*" 
+              />
+              <div className="w-32 h-32 sm:w-40 sm:h-40 bg-white p-1.5 rounded-full z-10 shadow-md relative overflow-hidden">
+                {profile?.avatar_url ? (
+                  <img 
+                    src={getPublicUrl(profile.avatar_url)} 
+                    alt="Profile" 
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : user?.user_metadata?.profile_photo_key ? (
+                  <img 
+                    src={getPublicUrl(user.user_metadata.profile_photo_key)} 
+                    alt="Profile" 
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : (
+                  <div className="w-full h-full bg-brand-100 rounded-full flex items-center justify-center text-4xl font-display font-bold text-brand-600">
+                    {user?.email ? user.email.charAt(0).toUpperCase() : 'U'}
+                  </div>
+                )}
+                
+                {/* Overlay for uploading */}
+                <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
+                  {isUploading ? <Loader2 className="w-8 h-8 text-white animate-spin" /> : <Camera className="w-8 h-8 text-white" />}
+                </div>
+              </div>
+            </div>
+            
+            <button className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-colors shadow-sm hidden sm:block">
+              Edit Profile
+            </button>
+          </div>
+
+          {/* Name & Badge */}
+          <div className="space-y-1 sm:space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+              <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight">
+                {profile?.full_name || user?.user_metadata?.full_name || 'Edu AI Learner'}
+              </h1>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-brand-50 text-brand-700 text-xs font-semibold rounded-full w-fit">
+                <GraduationCap className="w-3.5 h-3.5" />
+                {profile?.education_level || user?.user_metadata?.education_level || 'Active Student'} {user?.user_metadata?.role ? `• ${user.user_metadata.role}` : ''}
+              </span>
+            </div>
+            <p className="text-slate-500 max-w-2xl text-sm md:text-base">
+              {profile?.field_of_study || user?.user_metadata?.field_of_study 
+                ? `Specializing in ${profile?.field_of_study || user?.user_metadata?.field_of_study}. ` 
+                : 'Passionate learner exploring new concepts and advancing education. '}
+              User ID: <span className="font-mono text-xs">{user?.id || '...'}</span>
+            </p>
+          </div>
+          
+          <button className="w-full mt-6 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-colors shadow-sm md:hidden">
+            Edit Profile
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 md:gap-8">
+        
+        {/* Left Column: Personal info & Education System */}
+        <div className="lg:col-span-1 space-y-6 md:space-y-8">
+          {/* Personal Information */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+            <h3 className="font-bold text-slate-900">Personal Information</h3>
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <Mail className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="truncate">{user?.email || 'Loading email...'}</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>{profile?.country || user?.user_metadata?.country || 'Edu AI Global Access'}</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <Building className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>{profile?.education_level || user?.user_metadata?.education_level || 'Online Learning Platform'}</span>
+              </div>
+              <div className="flex items-center gap-3 text-sm text-slate-600">
+                <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+                <span>Joined {user?.user_metadata?.join_date ? new Date(user.user_metadata.join_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Recently'}</span>
+              </div>
+              {user?.user_metadata?.dob && (
+                <div className="flex items-center gap-3 text-sm text-slate-600">
+                  <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                  <span>Born {new Date(user.user_metadata.dob).toLocaleDateString()}</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Education System */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+            <h3 className="font-bold text-slate-900">Education System</h3>
+            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
+              <div className="flex items-center justify-between mb-2">
+                <span className="font-semibold text-slate-900">
+                  {profile?.curriculum || user?.user_metadata?.curriculum ? 'Curriculum' : 'Study Path'}
+                </span>
+                <span className="text-xs font-semibold px-2 py-1 bg-indigo-100 text-indigo-700 rounded-md">
+                  {profile?.curriculum || user?.user_metadata?.curriculum || profile?.field_of_study || user?.user_metadata?.field_of_study || 'General'}
+                </span>
+              </div>
+              <p className="text-sm text-slate-500">
+                {profile?.curriculum || user?.user_metadata?.curriculum 
+                  ? `Following the ${profile?.curriculum || user?.user_metadata?.curriculum} academic framework.` 
+                  : `Focusing on ${profile?.field_of_study || user?.user_metadata?.field_of_study || 'comprehensive'} studies.`}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Subjects & Stats */}
+        <div className="lg:col-span-2 space-y-6 md:space-y-8">
+          {/* Subjects Intakes */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+            <div className="flex items-center justify-between">
+              <h3 className="font-bold text-slate-900">Subjects & Intakes</h3>
+              <button className="px-4 py-1.5 text-brand-600 text-sm font-medium hover:text-brand-700">Manage</button>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {(profile?.subjects || user?.user_metadata?.subjects) ? (
+                (profile?.subjects || user?.user_metadata?.subjects).split(',').map((subj: string, idx: number) => (
+                  <div key={idx} className="p-4 rounded-xl border border-slate-100 hover:border-slate-300 transition-colors">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-brand-50 text-brand-600`}>
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                      <span className="font-semibold text-slate-900 text-sm truncate">{subj.trim()}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                      <span>Course Progress</span>
+                      <span className="font-medium text-slate-900">0%</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-full bg-brand-500 rounded-full w-0" />
+                    </div>
+                  </div>
+                ))
+              ) : (
+                ['General Mathematics', 'Basic Science', 'Language Arts'].map((subj, idx) => (
+                  <div key={idx} className="p-4 rounded-xl border border-slate-100 hover:border-slate-300 transition-colors opacity-60">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-slate-100 text-slate-500`}>
+                        <BookOpen className="w-4 h-4" />
+                      </div>
+                      <span className="font-semibold text-slate-900 text-sm">{subj}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Learning Statistics */}
+          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+            <h3 className="font-bold text-slate-900">Learning Statistics</h3>
+            
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-1">
+                  <Award className="w-5 h-5" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">0</div>
+                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Certificates</div>
+              </div>
+              
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-1">
+                  <BookOpen className="w-5 h-5" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">0</div>
+                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Books Read</div>
+              </div>
+              
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-1">
+                  <Star className="w-5 h-5" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">0</div>
+                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Avg Quiz Score</div>
+              </div>
+              
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mb-1">
+                  <Clock className="w-5 h-5" />
+                </div>
+                <div className="text-2xl font-bold text-slate-900">0h</div>
+                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Study Time</div>
+              </div>
+            </div>
+            
+            {/* Extended Stats */}
+            <div className="p-5 border border-slate-100 rounded-xl flex flex-col sm:flex-row items-center gap-4">
+              <div className="p-3 bg-brand-50 text-brand-600 rounded-xl shrink-0">
+                <BarChart2 className="w-6 h-6" />
+              </div>
+              <div className="flex-1 text-center sm:text-left">
+                <h4 className="font-semibold text-slate-900">Start Your Journey!</h4>
+                <p className="text-sm text-slate-500 mt-1">You're ready to start learning. Pick a book or course to begin tracking your progress.</p>
+              </div>
+              <button className="text-sm font-medium text-brand-600 hover:text-brand-700 whitespace-nowrap bg-brand-50 px-4 py-2 rounded-lg">
+                View Library
+              </button>
+            </div>
+          </div>
+          
+        </div>
+      </div>
+      
+      {/* Sign Out Button */}
+      <div className="flex justify-end pt-4 border-t border-slate-200">
+        <button 
+          onClick={async () => {
+            const { supabase, clearStaleSupabaseTokens } = await import('../lib/supabase');
+            if (supabase) {
+              try {
+                await supabase.auth.signOut();
+              } catch (_) {}
+            }
+            clearStaleSupabaseTokens();
+          }}
+          className="flex items-center gap-2 px-5 py-2.5 text-red-600 hover:bg-red-50 rounded-xl font-medium transition-colors text-sm"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
+      </div>
+
+    </div>
+  );
+}

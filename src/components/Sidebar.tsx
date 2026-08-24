@@ -1,0 +1,148 @@
+import React, { useEffect, useState } from 'react';
+import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, Sparkles, X, Bell } from 'lucide-react';
+import { ViewState } from '../types';
+import { supabase } from '../lib/supabase';
+
+interface SidebarProps {
+  currentView: ViewState;
+  onChangeView: (view: ViewState) => void;
+  isOpen: boolean;
+  onClose: () => void;
+}
+
+export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarProps) {
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    if (supabase) {
+      supabase.auth.getUser()
+        .then((res) => {
+          setUser(res?.data?.user || null);
+        })
+        .catch(err => console.warn('Sidebar getUser error ignored:', err));
+
+      try {
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+          setUser(session?.user || null);
+        });
+        return () => {
+          data?.subscription?.unsubscribe();
+        };
+      } catch (err) {
+        console.warn('Sidebar onAuthStateChange error ignored:', err);
+      }
+    }
+  }, []);
+
+  const navItems: { id: ViewState; label: string; icon: React.ReactNode }[] = [
+    { id: 'progress', label: 'My Progress', icon: <LineChart className="w-5 h-5" /> },
+    { id: 'notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
+    { id: 'workspace', label: 'Workspace', icon: <FolderArchive className="w-5 h-5" /> },
+    { id: 'learning-path', label: 'Learning Path', icon: <Map className="w-5 h-5" /> },
+    { id: 'quizzes', label: 'Quizzes', icon: <FileQuestion className="w-5 h-5" /> },
+    { id: 'community', label: 'Community', icon: <Users className="w-5 h-5" /> },
+    { id: 'chat', label: 'Student Chat', icon: <MessageCircle className="w-5 h-5" /> },
+    { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
+    { id: 'support', label: 'Support', icon: <LifeBuoy className="w-5 h-5" /> },
+  ];
+
+  if (user?.email?.toLowerCase().endsWith('@admin.com')) {
+    navItems.push({ id: 'admin', label: 'Admin Platform', icon: <Code className="w-5 h-5" /> });
+  }
+
+  navItems.push({ id: 'developer', label: 'Developer', icon: <Code className="w-5 h-5" /> });
+
+  return (
+    <>
+      {/* Mobile overlay */}
+      {isOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-900/50 z-[10000] backdrop-blur-sm transition-opacity"
+          onClick={onClose}
+        />
+      )}
+
+      {/* Sidebar content */}
+      <aside className={`fixed top-0 left-0 h-screen w-72 max-w-[85vw] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-[10001] transition-transform duration-300 ease-out shadow-2xl ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+        {/* Brand Logo Header */}
+        <div className="p-5 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
+          <button 
+            onClick={() => onChangeView('library')}
+            className="flex items-center gap-3 group text-left cursor-pointer transition-transform active:scale-95"
+            title="Edu AI Home"
+          >
+            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-700 p-0.5 shadow-md shadow-indigo-500/25 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-all">
+              <div className="w-full h-full bg-gradient-to-br from-indigo-500 to-violet-700 rounded-[14px] flex items-center justify-center relative">
+                <BookOpen className="w-5 h-5 text-white stroke-[2.3]" />
+                <Sparkles className="w-2.5 h-2.5 text-amber-300 absolute top-1.5 right-1.5 animate-pulse" />
+              </div>
+            </div>
+            <div>
+              <div className="flex items-center gap-1.5">
+                <span className="text-lg font-display font-black tracking-tight text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                  Edu AI
+                </span>
+                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-full bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/60">
+                  Core
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Smart Reading & Study Suite</p>
+            </div>
+          </button>
+
+          <button
+            onClick={onClose}
+            className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+            title="Close menu"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Navigation items list */}
+        <nav className="flex-1 overflow-y-auto px-3.5 py-4 space-y-1.5">
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              onClick={() => onChangeView(item.id)}
+              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
+                currentView === item.id
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <div className={`p-1 rounded-lg ${currentView === item.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-400'}`}>
+                {item.icon}
+              </div>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+
+        {/* User profile footer */}
+        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800/80">
+          <button 
+            onClick={() => onChangeView('profile')}
+            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
+              currentView === 'profile'
+                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm">
+              {user?.email ? user.email.charAt(0).toUpperCase() : <User className="w-4 h-4 text-white" />}
+            </div>
+            <div className="text-left flex-1 min-w-0">
+              <p className="text-slate-900 dark:text-white font-medium text-xs sm:text-sm truncate">
+                {user?.user_metadata?.full_name || 'Edu AI Learner'}
+              </p>
+              <p className="text-slate-400 dark:text-slate-500 text-[11px] truncate">
+                {user?.email || 'Active Account'}
+              </p>
+            </div>
+          </button>
+        </div>
+      </aside>
+    </>
+  );
+}
