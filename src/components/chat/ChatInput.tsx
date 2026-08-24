@@ -119,12 +119,12 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Book Attachment Modal Picker */}
       {showBookPicker && (
-        <div className="absolute bottom-16 left-4 right-4 sm:right-auto sm:w-80 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-3 z-30 max-h-64 overflow-y-auto">
+        <div className="absolute bottom-16 left-2 right-2 sm:left-4 sm:right-auto sm:w-80 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-3 z-30 max-h-64 overflow-y-auto">
           <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-700 mb-2">
             <span className="text-xs font-bold text-slate-800 dark:text-white flex items-center gap-1">
               <BookOpen className="w-3.5 h-3.5 text-indigo-500" /> Share Textbook
             </span>
-            <button onClick={() => setShowBookPicker(false)} className="text-slate-400 hover:text-slate-600">
+            <button onClick={() => setShowBookPicker(false)} className="text-slate-400 hover:text-slate-600 p-1">
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
@@ -160,7 +160,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Emoji Picker Popover */}
       {showEmojiPicker && (
-        <div className="absolute bottom-16 left-12 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-2.5 z-30 flex items-center gap-1.5 flex-wrap max-w-xs">
+        <div className="absolute bottom-16 left-2 sm:left-12 max-w-[calc(100vw-24px)] sm:max-w-xs bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-2.5 z-30 flex items-center gap-1.5 flex-wrap">
           {emojis.map(emoji => (
             <button
               key={emoji}
@@ -168,7 +168,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
                 setText(prev => prev + emoji);
                 setShowEmojiPicker(false);
               }}
-              className="w-8 h-8 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-base hover:scale-110 transition-transform"
+              className="w-8 h-8 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center justify-center text-base hover:scale-110 transition-transform cursor-pointer"
             >
               {emoji}
             </button>
@@ -178,16 +178,16 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Attachment Options Menu */}
       {showAttachMenu && (
-        <div className="absolute bottom-16 left-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-2 z-30 space-y-1 w-52">
+        <div className="absolute bottom-16 left-2 sm:left-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-2 z-30 space-y-1 w-52 max-w-[calc(100vw-24px)]">
           <button
             onClick={() => {
               setShowBookPicker(true);
               setShowAttachMenu(false);
             }}
-            className="w-full px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700 text-left text-xs font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2.5 transition-colors"
+            className="w-full px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700 text-left text-xs font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2.5 transition-colors cursor-pointer"
           >
-            <BookOpen className="w-4 h-4 text-indigo-600" />
-            <span>Share Textbook Reference</span>
+            <BookOpen className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span className="truncate">Share Textbook</span>
           </button>
           <button
             onClick={() => {
@@ -199,10 +199,10 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               });
               setShowAttachMenu(false);
             }}
-            className="w-full px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700 text-left text-xs font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2.5 transition-colors"
+            className="w-full px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700 text-left text-xs font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2.5 transition-colors cursor-pointer"
           >
-            <Code className="w-4 h-4 text-emerald-600" />
-            <span>Code / Math Snippet</span>
+            <Code className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span className="truncate">Code / Math Snippet</span>
           </button>
           <button
             onClick={() => {
@@ -213,47 +213,47 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               });
               setShowAttachMenu(false);
             }}
-            className="w-full px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700 text-left text-xs font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2.5 transition-colors"
+            className="w-full px-3 py-2 rounded-xl hover:bg-indigo-50 dark:hover:bg-slate-700 text-left text-xs font-medium text-slate-800 dark:text-slate-200 flex items-center gap-2.5 transition-colors cursor-pointer"
           >
-            <Paperclip className="w-4 h-4 text-amber-600" />
-            <span>Attach Study Notes (PDF)</span>
+            <Paperclip className="w-4 h-4 text-amber-600 shrink-0" />
+            <span className="truncate">Attach Study Notes (PDF)</span>
           </button>
         </div>
       )}
 
       {/* Main Input Row */}
       {isRecording ? (
-        <div className="flex items-center justify-between bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-2xl px-4 py-2.5">
-          <div className="flex items-center gap-3">
-            <span className="w-3 h-3 bg-rose-500 rounded-full animate-ping" />
-            <span className="text-xs font-bold text-rose-600 dark:text-rose-400 font-mono">
-              Recording Voice Note: {recordingTime}s
+        <div className="flex items-center justify-between bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/60 rounded-2xl px-3 sm:px-4 py-2 sm:py-2.5 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+            <span className="w-2.5 h-2.5 sm:w-3 sm:h-3 bg-rose-500 rounded-full animate-ping shrink-0" />
+            <span className="text-xs font-bold text-rose-600 dark:text-rose-400 font-mono truncate">
+              Recording: {recordingTime}s
             </span>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             <button
               onClick={() => handleStopRecording(false)}
-              className="px-3 py-1 text-xs font-medium rounded-lg text-slate-600 dark:text-slate-300 hover:bg-rose-100 dark:hover:bg-rose-900/50"
+              className="px-2.5 py-1 text-xs font-medium rounded-lg text-slate-600 dark:text-slate-300 hover:bg-rose-100 dark:hover:bg-rose-900/50 cursor-pointer"
             >
               Cancel
             </button>
             <button
               onClick={() => handleStopRecording(true)}
-              className="px-3 py-1 text-xs font-bold rounded-lg bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1 shadow-xs"
+              className="px-2.5 py-1 text-xs font-bold rounded-lg bg-rose-600 hover:bg-rose-700 text-white flex items-center gap-1 shadow-xs cursor-pointer"
             >
-              <Send className="w-3.5 h-3.5" /> Send Voice Note
+              <Send className="w-3.5 h-3.5" /> <span className="hidden xs:inline">Send</span>
             </button>
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
           {/* Plus / Attach Action */}
           <button
             onClick={() => {
               setShowAttachMenu(prev => !prev);
               setShowEmojiPicker(false);
             }}
-            className={`w-9 h-9 rounded-full flex items-center justify-center transition-colors ${
+            className={`w-8 h-8 sm:w-9 sm:h-9 rounded-full flex items-center justify-center transition-colors shrink-0 cursor-pointer ${
               showAttachMenu 
                 ? 'bg-indigo-600 text-white' 
                 : 'hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400'
@@ -269,21 +269,21 @@ export const ChatInput: React.FC<ChatInputProps> = ({
               setShowEmojiPicker(prev => !prev);
               setShowAttachMenu(false);
             }}
-            className="w-9 h-9 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors"
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors shrink-0 cursor-pointer"
             title="Add Reaction / Emoji"
           >
             <Smile className="w-4 h-4" />
           </button>
 
           {/* Text Input */}
-          <div className="flex-1 relative">
+          <div className="flex-1 min-w-0 relative">
             <input
               type="text"
               value={text}
               onChange={(e) => setText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Message friend or study group... (Press Enter)"
-              className="w-full px-4 py-2.5 bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-indigo-500/50 focus:bg-white dark:focus:bg-slate-800/90 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none transition-all shadow-inner"
+              placeholder="Message..."
+              className="w-full px-3 sm:px-4 py-2 sm:py-2.5 bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-indigo-500/50 focus:bg-white dark:focus:bg-slate-800/90 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none transition-all shadow-inner"
             />
           </div>
 
@@ -291,19 +291,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
           {!text.trim() && !activeAttachment ? (
             <button
               onClick={handleStartRecording}
-              className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-600 dark:text-slate-300 hover:text-indigo-600 flex items-center justify-center transition-colors"
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-slate-100 dark:bg-slate-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-slate-600 dark:text-slate-300 hover:text-indigo-600 flex items-center justify-center transition-colors shrink-0 cursor-pointer"
               title="Record Voice Note"
             >
-              <Mic className="w-4.5 h-4.5" />
+              <Mic className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
             </button>
           ) : (
             /* Send Button */
             <button
               onClick={() => handleSend()}
-              className="w-10 h-10 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-md shadow-indigo-600/30 transition-all hover:scale-105 active:scale-95 shrink-0"
+              className="w-8 h-8 sm:w-9 sm:h-9 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-md shadow-indigo-600/30 transition-all hover:scale-105 active:scale-95 shrink-0 cursor-pointer"
               title="Send Message"
             >
-              <Send className="w-4 h-4" />
+              <Send className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
             </button>
           )}
         </div>

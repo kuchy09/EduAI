@@ -105,6 +105,9 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
     return INITIAL_CONVERSATIONS[0]?.id || 'conv-teacher-1';
   });
 
+  // Mobile View Toggle: 'list' (Inbox/Threads) | 'chat' (Active conversation)
+  const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
+
   // Modals and Drawers
   const [isFindFriendsOpen, setIsFindFriendsOpen] = useState(false);
   const [isInfoDrawerOpen, setIsInfoDrawerOpen] = useState(false);
@@ -192,6 +195,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   // Reset unread count when switching conversation
   const handleSelectConversation = (convId: string) => {
     setActiveConversationId(convId);
+    setMobileView('chat');
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, unreadCount: 0 } : c));
   };
 
@@ -375,6 +379,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
     let existing = conversations.find(c => c.type === 'direct' && c.participants.includes(targetUserId));
     if (existing) {
       setActiveConversationId(existing.id);
+      setMobileView('chat');
     } else {
       const targetUser = allUsers.find(u => u.id === targetUserId);
       const isBothTeachers = currentUser.role === 'teacher' && targetUser?.role === 'teacher';
@@ -391,6 +396,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
 
       setConversations(prev => [newConv, ...prev]);
       setActiveConversationId(newConv.id);
+      setMobileView('chat');
       setMessagesMap(prev => ({
         ...prev,
         [newConv.id]: []
@@ -417,42 +423,47 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   };
 
   return (
-    <div className="flex h-[calc(100vh-4.5rem)] w-full overflow-hidden bg-slate-50 dark:bg-slate-950">
-      {/* Left Sidebar: Conversations & Active Friends */}
-      <ChatSidebar
-        currentUser={currentUser}
-        conversations={conversations}
-        allUsers={allUsers}
-        activeConversationId={activeConversationId}
-        onSelectConversation={handleSelectConversation}
-        onOpenFindFriends={() => setIsFindFriendsOpen(true)}
-        onOpenNewGroupModal={() => setIsFindFriendsOpen(true)}
-        onToggleUserRole={handleToggleUserRole}
-        filterTab={filterTab}
-        setFilterTab={setFilterTab}
-      />
-
-      {/* Center Main Chat Window */}
-      {activeConversation ? (
-        <ChatWindow
+    <div className="flex h-[calc(100vh-3.5rem)] sm:h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-50 dark:bg-slate-950 relative">
+      {/* Left Sidebar: Conversations & Active Friends (Full width on mobile when in 'list' view, hidden on mobile when in 'chat' view) */}
+      <div className={`w-full md:w-80 lg:w-96 flex-col shrink-0 h-full ${mobileView === 'list' ? 'flex' : 'hidden md:flex'}`}>
+        <ChatSidebar
           currentUser={currentUser}
-          conversation={activeConversation}
-          partner={activePartner}
-          messages={activeMessages}
+          conversations={conversations}
           allUsers={allUsers}
-          onSendMessage={handleSendMessage}
-          onReactToMessage={handleReactToMessage}
-          onStartCall={handleStartCall}
-          onToggleInfoDrawer={() => setIsInfoDrawerOpen(prev => !prev)}
-          isInfoDrawerOpen={isInfoDrawerOpen}
-          onSendFriendRequest={handleSendFriendRequest}
-          isPartnerTyping={isPartnerTyping}
+          activeConversationId={activeConversationId}
+          onSelectConversation={handleSelectConversation}
+          onOpenFindFriends={() => setIsFindFriendsOpen(true)}
+          onOpenNewGroupModal={() => setIsFindFriendsOpen(true)}
+          onToggleUserRole={handleToggleUserRole}
+          filterTab={filterTab}
+          setFilterTab={setFilterTab}
         />
-      ) : (
-        <div className="flex-1 flex items-center justify-center text-slate-400">
-          Select a chat to begin messaging
-        </div>
-      )}
+      </div>
+
+      {/* Center Main Chat Window (Full width on mobile when in 'chat' view, hidden on mobile when in 'list' view) */}
+      <div className={`flex-1 flex-col h-full min-w-0 ${mobileView === 'chat' ? 'flex' : 'hidden md:flex'}`}>
+        {activeConversation ? (
+          <ChatWindow
+            currentUser={currentUser}
+            conversation={activeConversation}
+            partner={activePartner}
+            messages={activeMessages}
+            allUsers={allUsers}
+            onSendMessage={handleSendMessage}
+            onReactToMessage={handleReactToMessage}
+            onStartCall={handleStartCall}
+            onToggleInfoDrawer={() => setIsInfoDrawerOpen(prev => !prev)}
+            isInfoDrawerOpen={isInfoDrawerOpen}
+            onBackToList={() => setMobileView('list')}
+            onSendFriendRequest={handleSendFriendRequest}
+            isPartnerTyping={isPartnerTyping}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center text-slate-400 p-4 text-center">
+            Select a chat to begin messaging
+          </div>
+        )}
+      </div>
 
       {/* Right Drawer: Profile & Shared Content Info */}
       {activeConversation && isInfoDrawerOpen && (

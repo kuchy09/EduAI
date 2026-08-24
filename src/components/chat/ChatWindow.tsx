@@ -60,14 +60,15 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const reactionEmojis = ['👍', '❤️', '💡', '👏', '🔥', '😮'];
 
   return (
-    <div className="flex-1 flex flex-col h-full bg-slate-100/60 dark:bg-slate-950 min-w-0">
+    <div className="flex-1 flex flex-col h-full bg-slate-100/60 dark:bg-slate-950 min-w-0 w-full overflow-hidden">
       {/* Top Messenger Navigation Bar */}
-      <div className="px-4 py-3 bg-white dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between shrink-0 shadow-xs z-10">
-        <div className="flex items-center gap-3 min-w-0">
+      <div className="px-3 sm:px-4 py-2.5 sm:py-3 bg-white dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 flex items-center justify-between shrink-0 shadow-xs z-10 w-full min-w-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
           {onBackToList && (
             <button
               onClick={onBackToList}
-              className="md:hidden p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
+              className="md:hidden p-1.5 -ml-1 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer shrink-0"
+              title="Back to all chats"
             >
               <ArrowLeft className="w-5 h-5" />
             </button>
@@ -76,7 +77,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
           {/* Avatar with Status */}
           <div className="relative shrink-0">
             {isGroup ? (
-              <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-lg shadow-xs">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-2xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-base sm:text-lg shadow-xs">
                 {conversation.groupAvatar || '👥'}
               </div>
             ) : (
@@ -84,24 +85,24 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 <img 
                   src={partner?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'} 
                   alt={partner?.name} 
-                  className="w-10 h-10 rounded-full object-cover ring-2 ring-slate-200 dark:ring-slate-700" 
+                  className="w-9 h-9 sm:w-10 sm:h-10 rounded-full object-cover ring-2 ring-slate-200 dark:ring-slate-700" 
                 />
                 {partner?.status === 'online' && (
-                  <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900" />
+                  <span className="absolute bottom-0 right-0 w-2.5 h-2.5 sm:w-3 sm:h-3 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900" />
                 )}
               </>
             )}
           </div>
 
           {/* User / Group Title */}
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <h2 className="text-sm font-bold text-slate-900 dark:text-white truncate">
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-1.5">
+              <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
                 {isGroup ? conversation.name : partner?.name}
               </h2>
 
               {!isGroup && partner && (
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider shrink-0 ${
                   partner.role === 'teacher' 
                     ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700' 
                     : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
@@ -111,16 +112,20 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               )}
             </div>
 
-            <p className="text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1.5">
+            <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1.5">
               {isGroup ? (
-                <span>{conversation.participants.length} academic members • {conversation.groupRoleType === 'teacher-to-teacher' ? 'Teacher-to-Teacher' : 'Study Group'}</span>
+                <span>{conversation.participants.length} members • {conversation.groupRoleType === 'teacher-to-teacher' ? 'Faculty' : 'Study Group'}</span>
               ) : (
                 <>
                   <span className={partner?.status === 'online' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''}>
                     {isPartnerTyping ? 'Typing...' : partner?.status === 'online' ? 'Active now' : partner?.lastSeen || 'Offline'}
                   </span>
-                  <span>•</span>
-                  <span>{partner?.institution}</span>
+                  {partner?.institution && (
+                    <>
+                      <span>•</span>
+                      <span className="truncate">{partner.institution}</span>
+                    </>
+                  )}
                 </>
               )}
             </p>
@@ -128,39 +133,39 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
         </div>
 
         {/* Action Controls */}
-        <div className="flex items-center gap-1 sm:gap-2">
+        <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0 ml-1">
           {!isGroup && (
             <>
               <button
                 onClick={() => onStartCall('audio')}
                 disabled={!isFriends}
-                className="p-2 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 disabled:opacity-40 transition-colors"
+                className="p-1.5 sm:p-2 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 disabled:opacity-40 transition-colors cursor-pointer"
                 title="Start Audio Call"
               >
-                <Phone className="w-4.5 h-4.5" />
+                <Phone className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
               </button>
 
               <button
                 onClick={() => onStartCall('video')}
                 disabled={!isFriends}
-                className="p-2 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 disabled:opacity-40 transition-colors"
+                className="p-1.5 sm:p-2 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 disabled:opacity-40 transition-colors cursor-pointer"
                 title="Start Video Classroom Call"
               >
-                <Video className="w-4.5 h-4.5" />
+                <Video className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
               </button>
             </>
           )}
 
           <button
             onClick={onToggleInfoDrawer}
-            className={`p-2 rounded-xl transition-colors ${
+            className={`p-1.5 sm:p-2 rounded-xl transition-colors cursor-pointer ${
               isInfoDrawerOpen 
                 ? 'bg-indigo-50 dark:bg-indigo-950/80 text-indigo-600' 
                 : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
             }`}
             title="Profile & Conversation Info"
           >
-            <Info className="w-4.5 h-4.5" />
+            <Info className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
           </button>
         </div>
       </div>

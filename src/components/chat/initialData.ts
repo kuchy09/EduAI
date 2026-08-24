@@ -1,22 +1,141 @@
-import { ChatUser, Conversation, ChatMessage } from './types';
+import { ChatUser, Conversation, ChatMessage, UserNote } from './types';
 
 export const INITIAL_CURRENT_USER: ChatUser = {
   id: 'me',
-  name: 'Dickson Skello',
-  email: 'dicksonskello09@gmail.com',
+  name: 'wolter_kuch',
+  email: 'wolter.kuch@eduai.ac.ke',
   avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
   role: 'student',
   title: 'Senior High Student (Grade 12 CBC)',
-  institution: 'Nairobi Academic Senior Secondary',
+  institution: 'Alliance High Academic Hub',
   status: 'online',
   lastSeen: 'Active now',
   subjects: ['Physics', 'Mathematics', 'Computer Science'],
   friendStatus: 'friends',
   bio: 'Passionate STEM student preparing for university engineering pathways.',
-  location: 'Nairobi, Kenya'
+  location: 'Location off'
 };
 
+export const INITIAL_NOTES: UserNote[] = [
+  {
+    id: 'note-me',
+    userId: 'me',
+    userName: 'Your note',
+    userAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    bubbleText: 'Make this space yours...',
+    createdAt: 'Just now',
+    location: 'Location off'
+  },
+  {
+    id: 'note-1',
+    userId: 'user-itz-mulla',
+    userName: 'Itz mulla',
+    userAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    bubbleText: 'Amazing week ❤️',
+    musicOrSubject: 'Leavin',
+    audioTrack: 'Rod Wave',
+    createdAt: '2h ago',
+    location: 'Nairobi'
+  },
+  {
+    id: 'note-2',
+    userId: 'user-majak',
+    userName: 'Majak',
+    userAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    bubbleText: 'Physics past papers 💯',
+    musicOrSubject: 'Study Grind',
+    createdAt: '4h ago',
+    location: 'Nakuru'
+  },
+  {
+    id: 'note-3',
+    userId: 'user-awien',
+    userName: 'awien.diar',
+    userAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+    bubbleText: 'Reading Dirac Modern Physics 📚',
+    createdAt: '5h ago',
+    location: 'Mombasa'
+  }
+];
+
 export const INITIAL_USERS: ChatUser[] = [
+  // Contacts from screenshot
+  {
+    id: 'user-itz-mulla',
+    name: 'Itz mulla',
+    email: 'itz.mulla@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Grade 12 STEM & Computing Scholar',
+    institution: 'Alliance High Academic Hub',
+    status: 'online',
+    lastSeen: 'Active now',
+    subjects: ['Physics', 'Robotics', 'Computer Science'],
+    friendStatus: 'friends',
+    bio: 'Music enthusiast & avid physics problem solver.',
+    location: 'Nairobi, Kenya'
+  },
+  {
+    id: 'user-awien',
+    name: 'awien.diar',
+    email: 'awien.diar@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Senior High Biology & Chemistry',
+    institution: 'Moi Girls National Academy',
+    status: 'online',
+    lastSeen: 'Active 20m ago',
+    subjects: ['Biology', 'Chemistry'],
+    friendStatus: 'friends',
+    bio: 'Passionate about medicine & biochemistry.',
+    location: 'Eldoret, Kenya'
+  },
+  {
+    id: 'user-majak',
+    name: 'Majak',
+    email: 'majak@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Grade 12 Pure Mathematics Track',
+    institution: 'Nairobi Academic Senior Secondary',
+    status: 'offline',
+    lastSeen: 'Active 1d ago',
+    subjects: ['Mathematics', 'Physics', 'Algorithms'],
+    friendStatus: 'friends',
+    bio: 'Coding daily & mastering calculus.',
+    location: 'Nairobi, Kenya'
+  },
+  {
+    id: 'user-nba',
+    name: 'NEVER BROKE AGAIN',
+    email: 'nba@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Economics & Business Studies Scholar',
+    institution: 'Strathmore Secondary Hub',
+    status: 'away',
+    lastSeen: 'Active 3h ago',
+    subjects: ['Economics', 'Business Studies'],
+    friendStatus: 'friends',
+    bio: 'Future entrepreneur & financial analyst.',
+    location: 'Nairobi, Kenya'
+  },
+  {
+    id: 'user-mrw',
+    name: 'mrw_mb251',
+    email: 'mrw.mb251@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Creative Arts & Literature',
+    institution: 'St. Jude Academy',
+    status: 'offline',
+    lastSeen: 'Active 40w ago',
+    subjects: ['Literature', 'French', 'Art'],
+    friendStatus: 'friends',
+    bio: 'J\'aime follow please • French learner & artist.',
+    location: 'Mombasa, Kenya'
+  },
+
   // Teachers
   {
     id: 'teacher-1',
@@ -79,7 +198,7 @@ export const INITIAL_USERS: ChatUser[] = [
     location: 'Nairobi, Kenya'
   },
 
-  // Students
+  // Other Students
   {
     id: 'student-1',
     name: 'Elena Rodriguez',
@@ -121,7 +240,7 @@ export const INITIAL_USERS: ChatUser[] = [
     status: 'offline',
     lastSeen: 'Active 35m ago',
     subjects: ['Biology', 'Chemistry', 'Agriculture'],
-    friendStatus: 'friends',
+    friendStatus: 'pending_received',
     bio: 'Aiming for Biomedical Sciences. Dedicated note-taker and study group organizer.',
     location: 'Eldoret, Kenya'
   },
@@ -141,21 +260,6 @@ export const INITIAL_USERS: ChatUser[] = [
     location: 'Nairobi, Kenya'
   },
   {
-    id: 'student-5',
-    name: 'Zahra Omar',
-    email: 'zahra.omar@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Grade 10 CBC Learner',
-    institution: 'Coast Academy',
-    status: 'offline',
-    lastSeen: 'Active yesterday',
-    subjects: ['Integrated Science', 'ICT', 'French'],
-    friendStatus: 'none',
-    bio: 'Exploring junior high to senior transition topics and language learning.',
-    location: 'Mombasa, Kenya'
-  },
-  {
     id: 'student-6',
     name: 'Dut Nyok',
     email: 'dut.nyok@student.edu',
@@ -166,14 +270,130 @@ export const INITIAL_USERS: ChatUser[] = [
     status: 'online',
     lastSeen: 'Active now',
     subjects: ['Physics', 'Computer Science', 'Mathematics', 'Robotics'],
-    friendStatus: 'none',
-    bio: 'Passionate STEM scholar, competitive programmer, and avid physics reader on Edu AI. Exploring quantum mechanics and Python algorithms. Open to peer study sessions!',
+    friendStatus: 'friends',
+    bio: 'Passionate STEM scholar, competitive programmer, and avid physics reader on Edu AI.',
     location: 'Nairobi, Kenya'
   }
 ];
 
 export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
-  // Conversation 1: Teacher to Student (Dr. Sarah Mwangi <-> Dickson)
+  // Itz mulla
+  'conv-itz-mulla': [
+    {
+      id: 'm-itz-1',
+      conversationId: 'conv-itz-mulla',
+      senderId: 'user-itz-mulla',
+      senderName: 'Itz mulla',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+      content: 'Bro that physics theorem explanation on modern physics was super clean! 🔥',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 15).toISOString(),
+      status: 'read'
+    },
+    {
+      id: 'm-itz-2',
+      conversationId: 'conv-itz-mulla',
+      senderId: 'user-itz-mulla',
+      senderName: 'Itz mulla',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+      content: 'Reacted to your story: ❤️',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 15 + 1000 * 60).toISOString(),
+      status: 'read'
+    }
+  ],
+
+  // awien.diar
+  'conv-awien': [
+    {
+      id: 'm-awien-1',
+      conversationId: 'conv-awien',
+      senderId: 'user-awien',
+      senderName: 'awien.diar',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+      content: 'Hey! Are you studying for the biology mock exams?',
+      createdAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
+      status: 'read'
+    },
+    {
+      id: 'm-awien-2',
+      conversationId: 'conv-awien',
+      senderId: 'me',
+      senderName: 'wolter_kuch',
+      senderRole: 'student',
+      content: 'Yes, just finishing biochemistry summaries. Sent you the notes file!',
+      createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+      status: 'sent'
+    }
+  ],
+
+  // Majak
+  'conv-majak': [
+    {
+      id: 'm-majak-1',
+      conversationId: 'conv-majak',
+      senderId: 'user-majak',
+      senderName: 'Majak',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+      content: 'Let me know when you want to review the calculus derivatives problem set.',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+      status: 'read'
+    },
+    {
+      id: 'm-majak-2',
+      conversationId: 'conv-majak',
+      senderId: 'me',
+      senderName: 'wolter_kuch',
+      senderRole: 'student',
+      content: 'Seen',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 22).toISOString(),
+      status: 'read'
+    }
+  ],
+
+  // NEVER BROKE AGAIN
+  'conv-nba': [
+    {
+      id: 'm-nba-1',
+      conversationId: 'conv-nba',
+      senderId: 'user-nba',
+      senderName: 'NEVER BROKE AGAIN',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      content: 'Yo check out this business economics study doc when you get a chance.',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(),
+      status: 'read'
+    },
+    {
+      id: 'm-nba-2',
+      conversationId: 'conv-nba',
+      senderId: 'me',
+      senderName: 'wolter_kuch',
+      senderRole: 'student',
+      content: 'Sent',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 70).toISOString(),
+      status: 'sent'
+    }
+  ],
+
+  // mrw_mb251
+  'conv-mrw': [
+    {
+      id: 'm-mrw-1',
+      conversationId: 'conv-mrw',
+      senderId: 'user-mrw',
+      senderName: 'mrw_mb251',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
+      content: 'J\'aime o follow please',
+      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 40).toISOString(),
+      status: 'read'
+    }
+  ],
+
+  // Conversation 1: Teacher to Student (Dr. Sarah Mwangi <-> wolter_kuch)
   'conv-teacher-1': [
     {
       id: 'm1-1',
@@ -182,7 +402,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       senderName: 'Dr. Sarah Mwangi',
       senderRole: 'teacher',
       senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      content: 'Hello Dickson! I reviewed your submission on the Kinematics problem set in Dirac\'s Modern Physics.',
+      content: 'Hello! I reviewed your submission on the Kinematics problem set in Dirac\'s Modern Physics.',
       createdAt: new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString(),
       status: 'read',
       reactions: { '👏': ['me'] }
@@ -209,7 +429,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: 'm1-3',
       conversationId: 'conv-teacher-1',
       senderId: 'me',
-      senderName: 'Dickson Skello',
+      senderName: 'wolter_kuch',
       senderRole: 'student',
       content: 'Thank you Dr. Sarah! I had a quick question regarding question 4B on wave-particle duality. Should we apply de Broglie\'s relation directly?',
       createdAt: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
@@ -231,7 +451,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: 'm1-5',
       conversationId: 'conv-teacher-1',
       senderId: 'me',
-      senderName: 'Dickson Skello',
+      senderName: 'wolter_kuch',
       senderRole: 'student',
       content: 'Understood! I will finish the chapter exercises before office hours tomorrow. Thank you!',
       createdAt: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
@@ -239,7 +459,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
     }
   ],
 
-  // Conversation 2: Student to Student (Elena Rodriguez <-> Dickson)
+  // Conversation 2: Student to Student (Elena Rodriguez <-> wolter_kuch)
   'conv-student-1': [
     {
       id: 'm2-1',
@@ -248,7 +468,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       senderName: 'Elena Rodriguez',
       senderRole: 'student',
       senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      content: 'Hey Dickson! Are you joining the group study session for physics and algorithms tonight?',
+      content: 'Hey! Are you joining the group study session for physics and algorithms tonight?',
       createdAt: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
       status: 'read'
     },
@@ -256,7 +476,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: 'm2-2',
       conversationId: 'conv-student-1',
       senderId: 'me',
-      senderName: 'Dickson Skello',
+      senderName: 'wolter_kuch',
       senderRole: 'student',
       content: 'Hey Elena! Yes definitely, I have my summary notes ready on Binary Search and QuickSort.',
       createdAt: new Date(Date.now() - 1000 * 60 * 75).toISOString(),
@@ -300,7 +520,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
     }
   ],
 
-  // Conversation 3: Student to Student (Alex Chen <-> Dickson)
+  // Conversation 3: Student to Student (Alex Chen <-> wolter_kuch)
   'conv-student-2': [
     {
       id: 'm3-1',
@@ -317,7 +537,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: 'm3-2',
       conversationId: 'conv-student-2',
       senderId: 'me',
-      senderName: 'Dickson Skello',
+      senderName: 'wolter_kuch',
       senderRole: 'student',
       content: 'Yes! The interactive quizzes and AI explanations make studying way faster.',
       createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
@@ -420,7 +640,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       id: 'mg-4',
       conversationId: 'conv-group-1',
       senderId: 'me',
-      senderName: 'Dickson Skello',
+      senderName: 'wolter_kuch',
       senderRole: 'student',
       content: 'That would be super helpful Elena! Looking forward to today\'s review session.',
       createdAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
@@ -431,12 +651,57 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
 
 export const INITIAL_CONVERSATIONS: Conversation[] = [
   {
+    id: 'conv-itz-mulla',
+    type: 'direct',
+    participants: ['me', 'user-itz-mulla'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    isPinned: true,
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 15).toISOString(),
+    lastMessage: INITIAL_MESSAGES['conv-itz-mulla'][INITIAL_MESSAGES['conv-itz-mulla'].length - 1]
+  },
+  {
+    id: 'conv-awien',
+    type: 'direct',
+    participants: ['me', 'user-awien'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    updatedAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
+    lastMessage: INITIAL_MESSAGES['conv-awien'][INITIAL_MESSAGES['conv-awien'].length - 1]
+  },
+  {
+    id: 'conv-majak',
+    type: 'direct',
+    participants: ['me', 'user-majak'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 22).toISOString(),
+    lastMessage: INITIAL_MESSAGES['conv-majak'][INITIAL_MESSAGES['conv-majak'].length - 1]
+  },
+  {
+    id: 'conv-nba',
+    type: 'direct',
+    participants: ['me', 'user-nba'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 70).toISOString(),
+    lastMessage: INITIAL_MESSAGES['conv-nba'][INITIAL_MESSAGES['conv-nba'].length - 1]
+  },
+  {
+    id: 'conv-mrw',
+    type: 'direct',
+    participants: ['me', 'user-mrw'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 40).toISOString(),
+    lastMessage: INITIAL_MESSAGES['conv-mrw'][INITIAL_MESSAGES['conv-mrw'].length - 1]
+  },
+  {
     id: 'conv-teacher-1',
     type: 'direct',
     participants: ['me', 'teacher-1'],
     groupRoleType: 'teacher-to-student',
     unreadCount: 0,
-    isPinned: true,
     updatedAt: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
     lastMessage: INITIAL_MESSAGES['conv-teacher-1'][INITIAL_MESSAGES['conv-teacher-1'].length - 1]
   },
@@ -446,7 +711,6 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     participants: ['me', 'student-1'],
     groupRoleType: 'student-to-student',
     unreadCount: 1,
-    isPinned: true,
     updatedAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
     lastMessage: INITIAL_MESSAGES['conv-student-1'][INITIAL_MESSAGES['conv-student-1'].length - 1]
   },
@@ -461,26 +725,5 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     unreadCount: 0,
     updatedAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
     lastMessage: INITIAL_MESSAGES['conv-group-1'][INITIAL_MESSAGES['conv-group-1'].length - 1]
-  },
-  {
-    id: 'conv-student-2',
-    type: 'direct',
-    participants: ['me', 'student-2'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 50).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-student-2'][INITIAL_MESSAGES['conv-student-2'].length - 1]
-  },
-  {
-    id: 'conv-teacher-group',
-    type: 'group',
-    name: 'Faculty STEM & Curriculum Board',
-    groupAvatar: '🎓',
-    description: 'Teacher-to-Teacher collaboration for curriculum alignment, exam preparation, and CBC standardisation.',
-    participants: ['me', 'teacher-1', 'teacher-2'],
-    groupRoleType: 'teacher-to-teacher',
-    unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-teacher-group'][INITIAL_MESSAGES['conv-teacher-group'].length - 1]
   }
 ];

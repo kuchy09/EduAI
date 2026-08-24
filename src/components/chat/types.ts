@@ -19,6 +19,18 @@ export interface ChatUser {
   location?: string;
 }
 
+export interface UserNote {
+  id: string;
+  userId: string;
+  userName: string;
+  userAvatar: string;
+  bubbleText: string;
+  musicOrSubject?: string;
+  audioTrack?: string;
+  createdAt: string;
+  location?: string;
+}
+
 export type ConversationType = 'direct' | 'group';
 
 export type GroupRoleType = 'teacher-to-teacher' | 'teacher-to-student' | 'student-to-student' | 'study-group';

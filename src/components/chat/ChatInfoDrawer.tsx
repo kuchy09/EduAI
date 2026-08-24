@@ -34,19 +34,27 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
   const sharedFiles = messages.filter(m => m.attachment?.type === 'file' || m.attachment?.type === 'voice' || m.attachment?.type === 'code');
 
   return (
-    <div className="w-80 lg:w-88 border-l border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col h-full shrink-0 select-none overflow-y-auto animate-in slide-in-from-right duration-200">
-      {/* Header */}
-      <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
-        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-          {isGroup ? 'Group Information' : 'Profile & Academic Details'}
-        </h3>
-        <button
-          onClick={onClose}
-          className="w-7 h-7 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
-        >
-          <X className="w-4 h-4" />
-        </button>
-      </div>
+    <>
+      {/* Mobile Backdrop Overlay */}
+      <div 
+        onClick={onClose}
+        className="fixed inset-0 bg-black/40 z-40 md:hidden backdrop-blur-xs transition-opacity"
+      />
+
+      {/* Drawer Container */}
+      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-80 md:w-80 lg:w-88 md:static md:z-auto border-l border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col h-full shrink-0 select-none overflow-y-auto shadow-2xl md:shadow-none animate-in slide-in-from-right duration-200">
+        {/* Header */}
+        <div className="p-3.5 sm:p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs z-10">
+          <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+            {isGroup ? 'Group Information' : 'Profile & Academic Details'}
+          </h3>
+          <button
+            onClick={onClose}
+            className="w-8 h-8 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
 
       {/* Main Identity Banner */}
       <div className="p-6 flex flex-col items-center text-center border-b border-slate-100 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40">
@@ -232,5 +240,6 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
         </div>
       )}
     </div>
+  </>
   );
 };
