@@ -204,13 +204,30 @@ export function Header({
     function updatePosition() {
       if (showDropdown && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
-        setDropdownStyle({
-          position: 'fixed',
-          top: rect.bottom + 8,
-          left: rect.left,
-          width: rect.width,
-          zIndex: 9999
-        });
+        const isMobile = window.innerWidth < 640;
+        
+        if (isMobile) {
+          setDropdownStyle({
+            position: 'fixed',
+            top: rect.bottom + 6,
+            left: 8,
+            right: 8,
+            width: 'calc(100vw - 16px)',
+            maxWidth: 'calc(100vw - 16px)',
+            maxHeight: `calc(100vh - ${Math.min(rect.bottom + 20, window.innerHeight - 80)}px)`,
+            zIndex: 9999
+          });
+        } else {
+          setDropdownStyle({
+            position: 'fixed',
+            top: rect.bottom + 8,
+            left: rect.left,
+            width: Math.max(rect.width, 460),
+            maxWidth: `calc(100vw - ${rect.left + 16}px)`,
+            maxHeight: '480px',
+            zIndex: 9999
+          });
+        }
       }
     }
     
@@ -250,21 +267,21 @@ export function Header({
   };
 
   return (
-    <header className="h-16 liquid-glass-card border-b border-white/60 dark:border-white/10 flex items-center justify-between px-4 md:px-8 sticky top-0 z-[100] shadow-[0_4px_20px_-4px_rgba(0,0,0,0.06)]">
-      <div className="flex items-center flex-1 max-w-2xl relative gap-2.5 overflow-visible">
+    <header className="h-14 sm:h-16 liquid-glass-card border-b border-white/60 dark:border-white/10 flex items-center justify-between px-2.5 sm:px-4 md:px-8 sticky top-0 z-[100] shadow-[0_4px_20px_-4px_rgba(0,0,0,0.06)] w-full max-w-full overflow-visible">
+      <div className="flex items-center flex-1 max-w-2xl relative gap-1.5 sm:gap-2.5 min-w-0 overflow-visible">
         <button 
           onClick={() => {
             setIsFocused(false);
             onMenuClick();
           }} 
-          className="p-2 text-slate-700 dark:text-slate-200 liquid-glass-card hover:scale-105 active:scale-95 rounded-full shadow-sm hover:shadow-md transition-all shrink-0 cursor-pointer flex items-center justify-center group w-9 h-9 border border-white/60 dark:border-white/10"
+          className="p-1.5 sm:p-2 text-slate-700 dark:text-slate-200 liquid-glass-card hover:scale-105 active:scale-95 rounded-full shadow-sm hover:shadow-md transition-all shrink-0 cursor-pointer flex items-center justify-center group w-8.5 h-8.5 sm:w-9 sm:h-9 border border-white/60 dark:border-white/10"
           title="Open Navigation"
         >
-          <MoreHorizontal className="w-5 h-5 group-hover:scale-110 transition-transform" />
+          <MoreHorizontal className="w-4.5 h-4.5 sm:w-5 sm:h-5 group-hover:scale-110 transition-transform" />
         </button>
         
-        <div ref={containerRef} className="relative flex-1 overflow-visible">
-          <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+        <div ref={containerRef} className="relative flex-1 min-w-0 overflow-visible">
+          <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-2.5 sm:left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
           <input 
             type="text" 
             value={query}
@@ -277,15 +294,14 @@ export function Header({
                 setIsFocused(false);
               }
             }}
-            placeholder="Search books, authors, subjects, syllabus or check availability..." 
-            className="w-full max-w-[544px] h-[38px] pl-10 pr-10 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-sm outline-none transition-all placeholder:text-slate-400 shadow-inner backdrop-blur-md"
-            style={{ height: '38px', width: '544px', maxWidth: '100%' }}
+            placeholder="Search books, syllabus, topics..." 
+            className="w-full h-8.5 sm:h-[38px] pl-8 sm:pl-10 pr-7 sm:pr-9 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-xs sm:text-sm outline-none transition-all placeholder:text-slate-400 placeholder:truncate shadow-inner backdrop-blur-md min-w-0"
           />
 
           {query && (
             <button
               onClick={() => setQuery('')}
-              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition-colors"
+              className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition-colors"
               title="Clear search"
             >
               <X className="w-3.5 h-3.5" />
@@ -794,18 +810,18 @@ export function Header({
         </div>
       </div>
 
-      <div className="flex items-center gap-2.5 ml-4">
+      <div className="flex items-center gap-1.5 sm:gap-2.5 ml-1.5 sm:ml-4 shrink-0">
         {/* Student Chat & Study Discussion */}
         <button 
           onClick={() => {
             triggerCapsuleFeedback({ pitch: 620, volume: 0.18, hapticDuration: 12 });
             onNavigate('chat');
           }}
-          className="relative w-10 h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700"
+          className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 shrink-0"
           title="Student Chat & Study Groups"
         >
-          <MessageCircle className="w-4.5 h-4.5" />
-          <span className="absolute top-2 right-2.5 w-2 h-2 bg-indigo-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
+          <MessageCircle className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+          <span className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2.5 w-2 h-2 bg-indigo-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
         </button>
 
         {/* Notifications & Broadcasts */}
@@ -814,16 +830,16 @@ export function Header({
             triggerCapsuleFeedback({ pitch: 580, volume: 0.18, hapticDuration: 12 });
             onNavigate('notifications');
           }}
-          className="relative w-10 h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700"
+          className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 shrink-0"
           title="Notifications & Broadcasts Page"
         >
-          <Bell className="w-4.5 h-4.5" />
+          <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
           {unreadNotifCount > 0 ? (
-            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-gradient-to-r from-rose-500 to-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs animate-pulse">
+            <span className="absolute -top-1 -right-1 min-w-[16px] sm:min-w-[18px] h-4 sm:h-[18px] px-1 bg-gradient-to-r from-rose-500 to-indigo-600 text-white text-[9px] sm:text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs animate-pulse">
               {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
             </span>
           ) : (
-            <span className="absolute top-2 right-2.5 w-2 h-2 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
+            <span className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2.5 w-2 h-2 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
           )}
         </button>
       </div>
