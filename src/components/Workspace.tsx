@@ -46,34 +46,49 @@ export function Workspace() {
   const fetchData = async () => {
     try {
       setLoading(true);
-      if (!supabase) return;
+      const localFiles = localStorage.getItem('workspace_files_local');
+      const localFolders = localStorage.getItem('workspace_folders_local');
+
+      if (!supabase) {
+        if (localFiles) setFiles(JSON.parse(localFiles));
+        if (localFolders) setFolders(JSON.parse(localFolders));
+        return;
+      }
+
       const res = await supabase.auth.getUser();
       const user = res?.data?.user;
-      if (!user) return;
+      if (!user) {
+        if (localFiles) setFiles(JSON.parse(localFiles));
+        if (localFolders) setFolders(JSON.parse(localFolders));
+        return;
+      }
 
       const [filesData, foldersData] = await Promise.all([
         supabase.from('workspace_files').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
         supabase.from('workspace_folders').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
       ]);
 
-      if (filesData.error && filesData.error.code !== '42P01' && filesData.error.code !== 'PGRST205') {
-        console.error("Fetch files error:", filesData.error);
+      if (filesData.error) {
+        if (localFiles) {
+          setFiles(JSON.parse(localFiles));
+        }
       } else if (filesData.data) {
         setFiles(filesData.data);
+        localStorage.setItem('workspace_files_local', JSON.stringify(filesData.data));
       }
 
-      if (foldersData.error && (foldersData.error.code === '42P01' || foldersData.error.code === 'PGRST205')) {
-        const local = localStorage.getItem('workspace_folders_local');
-        if (local) {
-          setFolders(JSON.parse(local));
+      if (foldersData.error) {
+        if (localFolders) {
+          setFolders(JSON.parse(localFolders));
         }
-      } else if (foldersData.error) {
-        console.error("Fetch folders error:", foldersData.error);
       } else if (foldersData.data) {
         setFolders(foldersData.data);
+        localStorage.setItem('workspace_folders_local', JSON.stringify(foldersData.data));
       }
     } catch (err) {
-      console.error(err);
+      console.warn('Workspace fetch notice:', err);
+      const localFiles = localStorage.getItem('workspace_files_local');
+      if (localFiles) setFiles(JSON.parse(localFiles));
     } finally {
       setLoading(false);
     }
@@ -81,41 +96,49 @@ export function Workspace() {
 
   const handleCreateFolder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newFolderName.trim() || !supabase) return;
+    if (!newFolderName.trim()) return;
     
     setIsCreatingFolder(true);
+    const newFolder: WorkspaceFolder = {
+      id: crypto.randomUUID(),
+      name: newFolderName.trim(),
+      color: '#6366f1',
+      created_at: new Date().toISOString()
+    };
+
     try {
-      const res = await supabase.auth.getUser();
-      const user = res?.data?.user;
-      if (!user) return;
+      if (supabase) {
+        const res = await supabase.auth.getUser();
+        const user = res?.data?.user;
+        if (user) {
+          const { data, error } = await supabase.from('workspace_folders').insert({
+            user_id: user.id,
+            name: newFolderName.trim(),
+            color: '#6366f1'
+          }).select().single();
 
-      const { data, error } = await supabase.from('workspace_folders').insert({
-        user_id: user.id,
-        name: newFolderName,
-        color: '#6366f1'
-      }).select().single();
-
-      if (error && (error.code === '42P01' || error.code === 'PGRST205')) {
-        const newFolder = {
-          id: crypto.randomUUID(),
-          name: newFolderName,
-          color: '#6366f1',
-          created_at: new Date().toISOString()
-        };
-        const updatedFolders = [newFolder, ...folders];
-        setFolders(updatedFolders);
-        localStorage.setItem('workspace_folders_local', JSON.stringify(updatedFolders));
-        setIsCreateFolderModalOpen(false);
-        setNewFolderName('');
-      } else if (error) {
-        console.error("Error creating folder:", error);
-      } else if (data) {
-        setFolders([data, ...folders]);
-        setIsCreateFolderModalOpen(false);
-        setNewFolderName('');
+          if (!error && data) {
+            setFolders([data, ...folders]);
+            localStorage.setItem('workspace_folders_local', JSON.stringify([data, ...folders]));
+            setIsCreateFolderModalOpen(false);
+            setNewFolderName('');
+            return;
+          }
+        }
       }
+
+      const updatedFolders = [newFolder, ...folders];
+      setFolders(updatedFolders);
+      localStorage.setItem('workspace_folders_local', JSON.stringify(updatedFolders));
+      setIsCreateFolderModalOpen(false);
+      setNewFolderName('');
     } catch (err) {
-      console.error(err);
+      console.warn('Folder create error, saved locally:', err);
+      const updatedFolders = [newFolder, ...folders];
+      setFolders(updatedFolders);
+      localStorage.setItem('workspace_folders_local', JSON.stringify(updatedFolders));
+      setIsCreateFolderModalOpen(false);
+      setNewFolderName('');
     } finally {
       setIsCreatingFolder(false);
     }
@@ -126,26 +149,23 @@ export function Workspace() {
     if (!confirm('Are you sure you want to delete this folder? All files within might be orphaned.')) return;
     
     try {
-      if (!supabase) return;
-      const { error } = await supabase.from('workspace_folders').delete().eq('id', id);
+      if (supabase) {
+        await supabase.from('workspace_folders').delete().eq('id', id);
+      }
       
       const updatedFolders = folders.filter(f => f.id !== id);
       setFolders(updatedFolders);
-      
-      if (error && (error.code === '42P01' || error.code === 'PGRST205')) {
-        localStorage.setItem('workspace_folders_local', JSON.stringify(updatedFolders));
-      } else if (error) {
-        console.error("Error deleting folder:", error);
-      }
+      localStorage.setItem('workspace_folders_local', JSON.stringify(updatedFolders));
       
       if (currentFolder === id) {
         setCurrentFolder(null);
         setFilter('all');
       }
-      // Update local files to null folder
-      setFiles(files.map(f => f.folder_id === id ? { ...f, folder_id: null } : f));
+      const updatedFiles = files.map(f => f.folder_id === id ? { ...f, folder_id: null } : f);
+      setFiles(updatedFiles);
+      localStorage.setItem('workspace_files_local', JSON.stringify(updatedFiles));
     } catch (err) {
-      console.error(err);
+      console.warn('Folder delete notice:', err);
     }
   };
 
@@ -155,48 +175,94 @@ export function Workspace() {
 
     try {
       setIsUploading(true);
-      
-      const res = await fetch('/api/presigned-url', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          filename: file.name,
-          fileType: file.type,
-          operation: 'upload'
-        }),
-      });
-      
-      const { presignedUrl, fileKey } = await res.json();
-      if (!presignedUrl) throw new Error("Failed to get upload URL");
+      let fileKey = `workspace/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
 
-      await fetch(presignedUrl, {
-        method: 'PUT',
-        body: file,
-        headers: {
-          'Content-Type': file.type,
-        },
-      });
-
-      if (supabase) {
-        const res = await supabase.auth.getUser();
-        const user = res?.data?.user;
-        if (user) {
-          await supabase.from('workspace_files').insert({
-            user_id: user.id,
-            name: file.name,
-            type: file.type || 'application/octet-stream',
-            size: file.size,
-            s3_key: fileKey,
-            folder_id: currentFolder
+      // 1. Try unified direct upload endpoint
+      try {
+        const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}&prefix=workspace`, {
+          method: 'POST',
+          body: file,
+          headers: {
+            'Content-Type': file.type || 'application/octet-stream',
+          },
+        });
+        
+        if (uploadRes.ok) {
+          const resData = await uploadRes.json();
+          if (resData.key) {
+            fileKey = resData.key;
+          }
+        } else {
+          // Fallback: Presigned URL request
+          const presignRes = await fetch('/api/presigned-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              filename: file.name,
+              fileType: file.type || 'application/octet-stream',
+              prefix: 'workspace',
+              operation: 'upload'
+            }),
           });
-          await fetchData();
+          if (presignRes.ok) {
+            const { presignedUrl, fileKey: pKey } = await presignRes.json();
+            if (presignedUrl) {
+              const isDirect = presignedUrl.includes('/api/upload-direct');
+              await fetch(presignedUrl, {
+                method: isDirect ? 'POST' : 'PUT',
+                body: file,
+                headers: { 'Content-Type': file.type || 'application/octet-stream' },
+              });
+              if (pKey) fileKey = pKey;
+            }
+          }
         }
+      } catch (networkUploadErr) {
+        console.warn('Network upload notice (saving locally):', networkUploadErr);
+      }
+
+      const newLocalFile: WorkspaceFile = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        type: file.type || 'application/octet-stream',
+        size: file.size,
+        s3_key: fileKey,
+        folder_id: currentFolder,
+        created_at: new Date().toISOString()
+      };
+
+      // 2. Persist metadata to Supabase if authenticated, or localStorage as instant fallback
+      let savedToDb = false;
+      if (supabase) {
+        try {
+          const res = await supabase.auth.getUser();
+          const user = res?.data?.user;
+          if (user) {
+            const { error: insertError } = await supabase.from('workspace_files').insert({
+              user_id: user.id,
+              name: file.name,
+              type: file.type || 'application/octet-stream',
+              size: file.size,
+              s3_key: fileKey,
+              folder_id: currentFolder
+            });
+            if (!insertError) {
+              savedToDb = true;
+              await fetchData();
+            }
+          }
+        } catch (dbErr) {
+          console.warn('Database record insert notice:', dbErr);
+        }
+      }
+
+      if (!savedToDb) {
+        const updated = [newLocalFile, ...files.filter(f => f.id !== newLocalFile.id)];
+        setFiles(updated);
+        localStorage.setItem('workspace_files_local', JSON.stringify(updated));
       }
     } catch (error) {
       console.error('Error uploading file:', error);
-      alert('Failed to upload file');
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -217,11 +283,17 @@ export function Workspace() {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to delete this file?')) return;
     try {
-      if (!supabase) return;
-      await supabase.from('workspace_files').delete().eq('id', id);
-      setFiles(files.filter(f => f.id !== id));
+      if (supabase) {
+        await supabase.from('workspace_files').delete().eq('id', id);
+      }
+      const updated = files.filter(f => f.id !== id);
+      setFiles(updated);
+      localStorage.setItem('workspace_files_local', JSON.stringify(updated));
     } catch (err) {
       console.error(err);
+      const updated = files.filter(f => f.id !== id);
+      setFiles(updated);
+      localStorage.setItem('workspace_files_local', JSON.stringify(updated));
     }
   };
 

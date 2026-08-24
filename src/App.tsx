@@ -19,6 +19,7 @@ import { Profile } from './components/Profile';
 import { Workspace } from './components/Workspace';
 import { Admin } from './components/Admin';
 import { Chat } from './components/Chat';
+import { UserPortal } from './components/UserPortal';
 import { Progress } from './components/Progress';
 import { BookStore } from './components/BookStore';
 import { Audiobooks } from './components/Audiobooks';
@@ -29,6 +30,7 @@ import { mockBooks, categories as initialCategories } from './data';
 import { ViewState, Book, Bookmark } from './types';
 import { OfflineBanner } from './components/OfflineBanner';
 import { BottomTabBar } from './components/BottomTabBar';
+import { getAllReadingProgressLocal } from './lib/offlineManager';
 
 
 export default function App() {
@@ -142,6 +144,42 @@ export default function App() {
     setBooks(prev => prev.map(b => b.id === bookId ? { ...b, readProgress: progress } : b));
     setActiveBook(prev => prev && prev.id === bookId ? { ...prev, readProgress: progress } : prev);
   }, []);
+
+  // Hydrate reading progress from IndexedDB on startup & listen for live storage sync
+  useEffect(() => {
+    let isMounted = true;
+    async function loadAllProgressFromIndexedDB() {
+      try {
+        const idbProgress = await getAllReadingProgressLocal();
+        if (isMounted && Object.keys(idbProgress).length > 0) {
+          setBooks(prev =>
+            prev.map(b => {
+              if (idbProgress[b.id] && typeof idbProgress[b.id].progress === 'number') {
+                return { ...b, readProgress: idbProgress[b.id].progress };
+              }
+              return b;
+            })
+          );
+        }
+      } catch (err) {
+        console.warn('[App] Error loading progress from IndexedDB:', err);
+      }
+    }
+
+    loadAllProgressFromIndexedDB();
+
+    const handleProgressEvent = (e: any) => {
+      if (e.detail && e.detail.bookId) {
+        handleUpdateProgress(e.detail.bookId, e.detail.progress);
+      }
+    };
+
+    window.addEventListener('edu-ai-progress-updated', handleProgressEvent);
+    return () => {
+      isMounted = false;
+      window.removeEventListener('edu-ai-progress-updated', handleProgressEvent);
+    };
+  }, [handleUpdateProgress]);
 
   useEffect(() => {
     // Register Service Worker for offline asset caching
@@ -437,7 +475,8 @@ export default function App() {
                   {currentView === 'ai-tutor' && <AiTutor user={session?.user} />}
                   {currentView === 'quizzes' && <Quizzes user={session?.user} books={books} />}
                   {currentView === 'community' && <Community />}
-                  {currentView === 'chat' && <Chat />}
+                  {currentView === 'users-portal' && <UserPortal user={session?.user} profile={profile} onStartChat={(userId) => changeView('chat')} onNavigate={(view) => changeView(view as any)} />}
+                  {currentView === 'chat' && <Chat user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} />}
                   {currentView === 'settings' && <Settings />}
                   {currentView === 'support' && <Support />}
                   {currentView === 'developer' && <Developer />}

@@ -1,6 +1,6 @@
 // React Hook for Offline Status, Book Caching, and Storage Synchronization
 import { useState, useEffect, useCallback } from 'react';
-import { Book } from '../types';
+import { Book, Bookmark, Highlight } from '../types';
 import {
   isAppOnline,
   getCachedBookIds,
@@ -9,7 +9,21 @@ import {
   clearAllOfflineCache,
   getOfflineStorageStats,
   syncOfflineQueue,
-  registerServiceWorker
+  registerServiceWorker,
+  saveReadingProgressLocal,
+  getReadingProgressLocal,
+  getAllReadingProgressLocal,
+  saveBookContentLocal,
+  getBookContentLocal,
+  saveHighlightLocal,
+  getHighlightsLocal,
+  deleteHighlightLocal,
+  saveBookmarkLocal,
+  getBookmarksLocal,
+  deleteBookmarkLocal,
+  OfflineStorageStats,
+  ReadingProgressRecord,
+  BookContentRecord
 } from './offlineManager';
 
 export function useOffline() {
@@ -18,9 +32,14 @@ export function useOffline() {
   const [downloadProgress, setDownloadProgress] = useState<Record<string, number>>({});
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
   const [lastSyncResult, setLastSyncResult] = useState<{ count: number; time: number } | null>(null);
-  const [storageStats, setStorageStats] = useState<{ count: number; formattedSize: string }>({
+  const [storageStats, setStorageStats] = useState<OfflineStorageStats>({
     count: 0,
-    formattedSize: '0 MB'
+    totalSizeBytes: 0,
+    formattedSize: '0 MB',
+    progressCount: 0,
+    highlightsCount: 0,
+    bookmarksCount: 0,
+    contentCount: 0
   });
 
   // Refresh cached books set and storage stats
@@ -29,7 +48,7 @@ export function useOffline() {
       const ids = await getCachedBookIds();
       setCachedBookIds(ids);
       const stats = await getOfflineStorageStats();
-      setStorageStats({ count: stats.count, formattedSize: stats.formattedSize });
+      setStorageStats(stats);
     } catch (err) {
       console.warn('[useOffline] Failed to refresh offline state:', err);
     }
@@ -42,7 +61,7 @@ export function useOffline() {
     // Initial load
     refreshOfflineState();
 
-    // Event Listeners for Online / Offline
+    // Event Listeners for Online / Offline / Storage Updates
     const handleOnline = () => {
       setIsOnline(true);
       refreshOfflineState();
@@ -53,6 +72,10 @@ export function useOffline() {
     };
 
     const handleCacheChanged = () => {
+      refreshOfflineState();
+    };
+
+    const handleProgressUpdated = () => {
       refreshOfflineState();
     };
 
@@ -74,6 +97,7 @@ export function useOffline() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
     window.addEventListener('edu-ai-offline-changed', handleCacheChanged);
+    window.addEventListener('edu-ai-progress-updated', handleProgressUpdated);
     window.addEventListener('edu-ai-sync-start', handleSyncStart);
     window.addEventListener('edu-ai-sync-completed', handleSyncEnd);
 
@@ -81,6 +105,7 @@ export function useOffline() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
       window.removeEventListener('edu-ai-offline-changed', handleCacheChanged);
+      window.removeEventListener('edu-ai-progress-updated', handleProgressUpdated);
       window.removeEventListener('edu-ai-sync-start', handleSyncStart);
       window.removeEventListener('edu-ai-sync-completed', handleSyncEnd);
     };
@@ -141,6 +166,64 @@ export function useOffline() {
     }
   }, [refreshOfflineState]);
 
+  // Save reading progress to IndexedDB
+  const saveProgress = useCallback(
+    async (bookId: string, progress: number, currentPage?: number, totalPages?: number, scrollPct?: number) => {
+      await saveReadingProgressLocal(bookId, progress, currentPage, totalPages, scrollPct);
+      await refreshOfflineState();
+    },
+    [refreshOfflineState]
+  );
+
+  // Get reading progress for a book
+  const getProgress = useCallback(async (bookId: string): Promise<ReadingProgressRecord | null> => {
+    return await getReadingProgressLocal(bookId);
+  }, []);
+
+  // Get all reading progress
+  const getAllProgress = useCallback(async (): Promise<Record<string, ReadingProgressRecord>> => {
+    return await getAllReadingProgressLocal();
+  }, []);
+
+  // Save book text / chapter content
+  const cacheBookContent = useCallback(
+    async (bookId: string, data: Partial<BookContentRecord>) => {
+      await saveBookContentLocal(bookId, data);
+      await refreshOfflineState();
+    },
+    [refreshOfflineState]
+  );
+
+  // Get book text / chapter content
+  const getCachedContent = useCallback(async (bookId: string): Promise<BookContentRecord | null> => {
+    return await getBookContentLocal(bookId);
+  }, []);
+
+  // Highlights and bookmarks local operations
+  const saveHighlight = useCallback(async (highlight: Highlight) => {
+    await saveHighlightLocal(highlight);
+  }, []);
+
+  const getHighlights = useCallback(async (bookId?: string) => {
+    return await getHighlightsLocal(bookId);
+  }, []);
+
+  const deleteHighlight = useCallback(async (id: string, bookId?: string) => {
+    await deleteHighlightLocal(id, bookId);
+  }, []);
+
+  const saveBookmark = useCallback(async (bookmark: Bookmark) => {
+    await saveBookmarkLocal(bookmark);
+  }, []);
+
+  const getBookmarks = useCallback(async (bookId?: string) => {
+    return await getBookmarksLocal(bookId);
+  }, []);
+
+  const deleteBookmark = useCallback(async (id: string) => {
+    await deleteBookmarkLocal(id);
+  }, []);
+
   return {
     isOnline,
     isBookCached: (bookId: string) => cachedBookIds.has(bookId),
@@ -154,6 +237,17 @@ export function useOffline() {
     lastSyncResult,
     storageStats,
     triggerSync,
-    refreshOfflineState
+    refreshOfflineState,
+    saveProgress,
+    getProgress,
+    getAllProgress,
+    cacheBookContent,
+    getCachedContent,
+    saveHighlight,
+    getHighlights,
+    deleteHighlight,
+    saveBookmark,
+    getBookmarks,
+    deleteBookmark
   };
 }

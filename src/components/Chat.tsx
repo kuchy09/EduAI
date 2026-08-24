@@ -1,165 +1,493 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, User as UserIcon, MessageCircle } from 'lucide-react';
+import { 
+  ChatUser, Conversation, ChatMessage, 
+  ChatAttachment, CallSession, UserRole 
+} from './chat/types';
+import { 
+  INITIAL_CURRENT_USER, INITIAL_USERS, 
+  INITIAL_CONVERSATIONS, INITIAL_MESSAGES 
+} from './chat/initialData';
+import { ChatSidebar } from './chat/ChatSidebar';
+import { ChatWindow } from './chat/ChatWindow';
+import { ChatInfoDrawer } from './chat/ChatInfoDrawer';
+import { FindFriendsModal } from './chat/FindFriendsModal';
+import { CallModal } from './chat/CallModal';
 import { supabase } from '../lib/supabase';
+import { 
+  fetchSearchableUsersFromSupabase, 
+  sendSupabaseFriendRequest, 
+  respondToSupabaseFriendRequest, 
+  cancelOrRemoveSupabaseFriendship,
+  syncCurrentUserToSupabase
+} from '../lib/userDirectoryService';
 
-interface ChatMessage {
-  id: string;
-  email: string;
-  content: string;
-  created_at: string;
+interface ChatProps {
+  user?: any;
+  profile?: any;
+  onNavigate?: (view: string) => void;
 }
 
-const ROOM_NAME = 'global-student-chat';
+export function Chat({ user, profile, onNavigate }: ChatProps) {
+  // 1. Current User State
+  const [currentUser, setCurrentUser] = useState<ChatUser>(() => {
+    const saved = localStorage.getItem('eduai_chat_current_user');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    const detectedRole: UserRole = (profile?.role || user?.user_metadata?.role || 'student') as UserRole;
+    return {
+      ...INITIAL_CURRENT_USER,
+      id: user?.id || INITIAL_CURRENT_USER.id,
+      name: profile?.full_name || user?.user_metadata?.full_name || INITIAL_CURRENT_USER.name,
+      email: user?.email || INITIAL_CURRENT_USER.email,
+      role: detectedRole === 'teacher' ? 'teacher' : 'student',
+      title: detectedRole === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)'
+    };
+  });
 
-export function Chat() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [newMessage, setNewMessage] = useState('');
-  const [user, setUser] = useState<any>(null);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  // 2. All Users (Teachers & Students)
+  const [allUsers, setAllUsers] = useState<ChatUser[]>(() => {
+    const saved = localStorage.getItem('eduai_chat_users');
+    let list = INITIAL_USERS;
+    if (saved) {
+      try {
+        const parsed: ChatUser[] = JSON.parse(saved);
+        const parsedNames = new Set(parsed.map(u => u.name.toLowerCase()));
+        const missing = INITIAL_USERS.filter(u => !parsedNames.has(u.name.toLowerCase()));
+        list = [...parsed, ...missing];
+      } catch (e) {}
+    }
+    return list;
+  });
+
+  // Initial load from Supabase directory
+  useEffect(() => {
+    const loadDirectory = async () => {
+      if (user?.id) {
+        await syncCurrentUserToSupabase(user, {
+          name: currentUser.name,
+          role: currentUser.role,
+          title: currentUser.title,
+          institution: currentUser.institution,
+          subjects: currentUser.subjects,
+          bio: currentUser.bio,
+          avatar: currentUser.avatar,
+          location: currentUser.location
+        });
+      }
+      const res = await fetchSearchableUsersFromSupabase(currentUser.id);
+      if (res.users && res.users.length > 0) {
+        setAllUsers(res.users);
+      }
+    };
+    loadDirectory();
+  }, [user?.id, currentUser.role]);
+
+  // 3. Conversations List
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    const saved = localStorage.getItem('eduai_chat_conversations');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    return INITIAL_CONVERSATIONS;
+  });
+
+  // 4. Messages grouped by conversation ID
+  const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>(() => {
+    const saved = localStorage.getItem('eduai_chat_messages');
+    if (saved) {
+      try { return JSON.parse(saved); } catch (e) {}
+    }
+    return INITIAL_MESSAGES;
+  });
+
+  const [activeConversationId, setActiveConversationId] = useState<string>(() => {
+    return INITIAL_CONVERSATIONS[0]?.id || 'conv-teacher-1';
+  });
+
+  // Modals and Drawers
+  const [isFindFriendsOpen, setIsFindFriendsOpen] = useState(false);
+  const [isInfoDrawerOpen, setIsInfoDrawerOpen] = useState(false);
+  const [filterTab, setFilterTab] = useState<'all' | 'direct' | 'teachers' | 'students' | 'groups'>('all');
+  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+
+  // Call Session State
+  const [callSession, setCallSession] = useState<CallSession>({
+    isActive: false,
+    type: 'audio',
+    partner: null,
+    startTime: 0,
+    isMuted: false,
+    isVideoOff: false,
+    status: 'connected'
+  });
+
+  // Sync to localStorage
+  useEffect(() => {
+    localStorage.setItem('eduai_chat_current_user', JSON.stringify(currentUser));
+  }, [currentUser]);
 
   useEffect(() => {
+    localStorage.setItem('eduai_chat_users', JSON.stringify(allUsers));
+  }, [allUsers]);
+
+  useEffect(() => {
+    localStorage.setItem('eduai_chat_conversations', JSON.stringify(conversations));
+  }, [conversations]);
+
+  useEffect(() => {
+    localStorage.setItem('eduai_chat_messages', JSON.stringify(messagesMap));
+  }, [messagesMap]);
+
+  // Realtime Supabase Broadcast setup
+  useEffect(() => {
     if (!supabase) return;
-
-    // Get current user safely
-    supabase.auth.getUser()
-      .then((res) => {
-        setUser(res?.data?.user || null);
-      })
-      .catch(err => console.warn('Chat getUser error ignored:', err));
-
-    // Mock initial messages
-    setMessages([
-      { id: '1', email: 'elena.rodriguez@student.edu', content: 'Anyone studying for the upcoming physics finals?', created_at: new Date(Date.now() - 3600000).toISOString() },
-      { id: '2', email: 'alex.chen@student.edu', content: 'Yes! I am reviewing kinematics and dynamics today. Do you want to review together?', created_at: new Date(Date.now() - 3000000).toISOString() },
-    ]);
-
     try {
-      // Setup Realtime Broadcast
-      const channel = supabase.channel(ROOM_NAME, {
-        config: {
-          broadcast: {
-            ack: false,
-            self: true
-          }
-        }
+      const channel = supabase.channel('eduai-messenger-network', {
+        config: { broadcast: { ack: false, self: false } }
       });
 
-    channel
-      .on(
-        'broadcast',
-        { event: 'new_message' },
-        (payload) => {
-          setMessages((prev) => {
-            // Avoid duplicates just in case
-            if (prev.some(m => m.id === payload.payload.id)) return prev;
-            return [...prev, payload.payload as ChatMessage];
-          });
-        }
-      )
-      .subscribe();
+      channel.on('broadcast', { event: 'new_chat_message' }, (payload) => {
+        const incoming: ChatMessage = payload.payload;
+        if (!incoming || !incoming.conversationId) return;
+
+        setMessagesMap(prev => {
+          const currentList = prev[incoming.conversationId] || [];
+          if (currentList.some(m => m.id === incoming.id)) return prev;
+          return {
+            ...prev,
+            [incoming.conversationId]: [...currentList, incoming]
+          };
+        });
+
+        setConversations(prev => prev.map(c => {
+          if (c.id === incoming.conversationId) {
+            return {
+              ...c,
+              lastMessage: incoming,
+              updatedAt: incoming.createdAt,
+              unreadCount: c.id === activeConversationId ? 0 : c.unreadCount + 1
+            };
+          }
+          return c;
+        }));
+      }).subscribe();
 
       return () => {
         if (supabase) supabase.removeChannel(channel);
       };
-    } catch (e) {
-      console.warn('Realtime channel setup error:', e);
+    } catch (err) {
+      console.warn('Realtime chat channel notice:', err);
     }
-  }, []);
+  }, [activeConversationId]);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  // Active Conversation & Partner
+  const activeConversation = conversations.find(c => c.id === activeConversationId) || conversations[0];
+  const partnerId = activeConversation?.type === 'direct' 
+    ? activeConversation.participants.find(p => p !== currentUser.id) 
+    : undefined;
+  const activePartner = allUsers.find(u => u.id === partnerId);
+  const activeMessages = activeConversation ? (messagesMap[activeConversation.id] || []) : [];
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newMessage.trim() || !user) return;
+  // Reset unread count when switching conversation
+  const handleSelectConversation = (convId: string) => {
+    setActiveConversationId(convId);
+    setConversations(prev => prev.map(c => c.id === convId ? { ...c, unreadCount: 0 } : c));
+  };
 
-    const message: ChatMessage = {
+  // Toggle user role perspective (e.g. Test as Student or Teacher)
+  const handleToggleUserRole = (newRole: UserRole) => {
+    setCurrentUser(prev => ({
+      ...prev,
+      role: newRole,
+      title: newRole === 'teacher' 
+        ? 'Senior STEM Faculty & CBC Curriculum Lead' 
+        : 'Senior High Student (Grade 12 CBC)'
+    }));
+  };
+
+  // Send message
+  const handleSendMessage = (content: string, attachment?: ChatAttachment) => {
+    if (!activeConversation) return;
+
+    const newMessage: ChatMessage = {
       id: crypto.randomUUID(),
-      email: user.email || 'Anonymous',
-      content: newMessage.trim(),
-      created_at: new Date().toISOString(),
+      conversationId: activeConversation.id,
+      senderId: currentUser.id,
+      senderName: currentUser.name,
+      senderRole: currentUser.role,
+      senderAvatar: currentUser.avatar,
+      content,
+      createdAt: new Date().toISOString(),
+      status: 'sent',
+      attachment
     };
 
-    setMessages(prev => [...prev, message]);
-    setNewMessage('');
+    // Update messages
+    setMessagesMap(prev => ({
+      ...prev,
+      [activeConversation.id]: [...(prev[activeConversation.id] || []), newMessage]
+    }));
 
-    // Broadcast message to channel
-    const channel = supabase.channel(ROOM_NAME);
-    await channel.send({
-      type: 'broadcast',
-      event: 'new_message',
-      payload: message,
+    // Update conversation metadata
+    setConversations(prev => prev.map(c => {
+      if (c.id === activeConversation.id) {
+        return {
+          ...c,
+          lastMessage: newMessage,
+          updatedAt: newMessage.createdAt
+        };
+      }
+      return c;
+    }));
+
+    // Broadcast message
+    if (supabase) {
+      try {
+        const channel = supabase.channel('eduai-messenger-network');
+        channel.send({
+          type: 'broadcast',
+          event: 'new_chat_message',
+          payload: newMessage
+        });
+      } catch (e) {}
+    }
+
+    // Interactive Teacher / Peer auto-reply simulation for responsive UX
+    if (activeConversation.type === 'direct' && activePartner && activePartner.friendStatus === 'friends') {
+      setIsPartnerTyping(true);
+      setTimeout(() => {
+        setIsPartnerTyping(false);
+        const replyText = generateContextualReply(content, activePartner, currentUser);
+        const partnerReply: ChatMessage = {
+          id: crypto.randomUUID(),
+          conversationId: activeConversation.id,
+          senderId: activePartner.id,
+          senderName: activePartner.name,
+          senderRole: activePartner.role,
+          senderAvatar: activePartner.avatar,
+          content: replyText,
+          createdAt: new Date().toISOString(),
+          status: 'read'
+        };
+
+        setMessagesMap(prev => ({
+          ...prev,
+          [activeConversation.id]: [...(prev[activeConversation.id] || []), partnerReply]
+        }));
+
+        setConversations(prev => prev.map(c => {
+          if (c.id === activeConversation.id) {
+            return {
+              ...c,
+              lastMessage: partnerReply,
+              updatedAt: partnerReply.createdAt
+            };
+          }
+          return c;
+        }));
+      }, 1400);
+    }
+  };
+
+  // Helper: Generates realistic academic replies
+  const generateContextualReply = (userPrompt: string, partner: ChatUser, me: ChatUser): string => {
+    const prompt = userPrompt.toLowerCase();
+    
+    if (partner.role === 'teacher') {
+      if (me.role === 'teacher') {
+        // Teacher to Teacher response
+        if (prompt.includes('syllabus') || prompt.includes('cbc') || prompt.includes('exam')) {
+          return `I completely agree. I've updated the practical rubric to emphasize critical thinking and laboratory competencies for our upcoming assessments.`;
+        }
+        return `Thanks for sharing this, Colleague. Let's review the academic department goals during tomorrow's faculty briefing.`;
+      } else {
+        // Teacher to Student response
+        if (prompt.includes('help') || prompt.includes('question') || prompt.includes('problem')) {
+          return `Good question! Review the core theorems in Chapter 2. Make sure to clearly state your given variables and conversion factors before substituting.`;
+        }
+        if (prompt.includes('book') || prompt.includes('read') || prompt.includes('notes')) {
+          return `Excellent initiative! That textbook gives great real-world applications. Try the diagnostic questions at the end of section 3.`;
+        }
+        return `Well noted! Keep up the consistent study effort. Feel free to reach out anytime if you hit a roadblock in your exercises. 🎓✨`;
+      }
+    } else {
+      // Student to Student response
+      if (prompt.includes('study') || prompt.includes('call') || prompt.includes('review')) {
+        return `Sounds great! I'll open my study notes and flashcards. Let me know when you want to start reviewing together! 📚`;
+      }
+      if (prompt.includes('quiz') || prompt.includes('algorithm') || prompt.includes('physics')) {
+        return `Nice! I just finished that problem set on Edu AI. The step-by-step solutions made it much clearer.`;
+      }
+      return `Got it! Thanks for sharing. Let's keep pushing for the top scores this semester! 🔥🚀`;
+    }
+  };
+
+  // React to message
+  const handleReactToMessage = (messageId: string, emoji: string) => {
+    if (!activeConversation) return;
+    setMessagesMap(prev => {
+      const list = prev[activeConversation.id] || [];
+      const updated = list.map(m => {
+        if (m.id === messageId) {
+          const reactions = { ...(m.reactions || {}) };
+          const usersForEmoji = reactions[emoji] || [];
+          if (usersForEmoji.includes(currentUser.id)) {
+            // Remove reaction
+            reactions[emoji] = usersForEmoji.filter(u => u !== currentUser.id);
+            if (reactions[emoji].length === 0) delete reactions[emoji];
+          } else {
+            // Add reaction
+            reactions[emoji] = [...usersForEmoji, currentUser.id];
+          }
+          return { ...m, reactions };
+        }
+        return m;
+      });
+      return { ...prev, [activeConversation.id]: updated };
     });
   };
 
+  // Friend Request Actions
+  const handleSendFriendRequest = async (targetUserId: string) => {
+    setAllUsers(prev => prev.map(u => u.id === targetUserId ? { ...u, friendStatus: 'pending_sent' } : u));
+    await sendSupabaseFriendRequest(targetUserId, currentUser.id);
+  };
+
+  const handleAcceptFriendRequest = async (targetUserId: string) => {
+    setAllUsers(prev => prev.map(u => u.id === targetUserId ? { ...u, friendStatus: 'friends' } : u));
+    await respondToSupabaseFriendRequest(targetUserId, currentUser.id, 'accepted');
+    handleStartDirectChat(targetUserId);
+  };
+
+  const handleDeclineFriendRequest = async (targetUserId: string) => {
+    setAllUsers(prev => prev.map(u => u.id === targetUserId ? { ...u, friendStatus: 'none' } : u));
+    await respondToSupabaseFriendRequest(targetUserId, currentUser.id, 'declined');
+  };
+
+  const handleUnfriend = async (targetUserId: string) => {
+    setAllUsers(prev => prev.map(u => u.id === targetUserId ? { ...u, friendStatus: 'none' } : u));
+    await cancelOrRemoveSupabaseFriendship(targetUserId, currentUser.id);
+  };
+
+  // Start or jump to direct chat
+  const handleStartDirectChat = (targetUserId: string) => {
+    let existing = conversations.find(c => c.type === 'direct' && c.participants.includes(targetUserId));
+    if (existing) {
+      setActiveConversationId(existing.id);
+    } else {
+      const targetUser = allUsers.find(u => u.id === targetUserId);
+      const isBothTeachers = currentUser.role === 'teacher' && targetUser?.role === 'teacher';
+      const isTeacherStudent = (currentUser.role === 'teacher' && targetUser?.role === 'student') || (currentUser.role === 'student' && targetUser?.role === 'teacher');
+      
+      const newConv: Conversation = {
+        id: `conv-direct-${Date.now()}`,
+        type: 'direct',
+        participants: [currentUser.id, targetUserId],
+        groupRoleType: isBothTeachers ? 'teacher-to-teacher' : isTeacherStudent ? 'teacher-to-student' : 'student-to-student',
+        unreadCount: 0,
+        updatedAt: new Date().toISOString()
+      };
+
+      setConversations(prev => [newConv, ...prev]);
+      setActiveConversationId(newConv.id);
+      setMessagesMap(prev => ({
+        ...prev,
+        [newConv.id]: []
+      }));
+    }
+  };
+
+  // Call Handlers
+  const handleStartCall = (type: 'audio' | 'video') => {
+    if (!activePartner) return;
+    setCallSession({
+      isActive: true,
+      type,
+      partner: activePartner,
+      startTime: Date.now(),
+      isMuted: false,
+      isVideoOff: false,
+      status: 'connected'
+    });
+  };
+
+  const handleEndCall = () => {
+    setCallSession(prev => ({ ...prev, isActive: false, partner: null }));
+  };
+
   return (
-    <div className="flex flex-col h-full bg-slate-50">
-      {/* Header */}
-      <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center gap-3 shrink-0">
-        <div className="bg-brand-100 p-2 rounded-xl text-brand-600">
-          <MessageCircle className="w-6 h-6" />
-        </div>
-        <div>
-          <h2 className="text-xl font-bold text-slate-900 font-display">Global Student Chat</h2>
-          <p className="text-sm text-slate-500">Live discussion with peers</p>
-        </div>
-      </div>
+    <div className="flex h-[calc(100vh-4.5rem)] w-full overflow-hidden bg-slate-50 dark:bg-slate-950">
+      {/* Left Sidebar: Conversations & Active Friends */}
+      <ChatSidebar
+        currentUser={currentUser}
+        conversations={conversations}
+        allUsers={allUsers}
+        activeConversationId={activeConversationId}
+        onSelectConversation={handleSelectConversation}
+        onOpenFindFriends={() => setIsFindFriendsOpen(true)}
+        onOpenNewGroupModal={() => setIsFindFriendsOpen(true)}
+        onToggleUserRole={handleToggleUserRole}
+        filterTab={filterTab}
+        setFilterTab={setFilterTab}
+      />
 
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4">
-        {messages.map((msg, index) => {
-          const isMe = user && msg.email === user.email;
-          return (
-            <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} animate-in fade-in slide-in-from-bottom-2 duration-300`}>
-              <div className="flex items-center gap-2 mb-1">
-                {!isMe && (
-                  <div className="w-6 h-6 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 shrink-0">
-                    <UserIcon className="w-3 h-3" />
-                  </div>
-                )}
-                <span className="text-xs text-slate-500 font-medium">
-                  {isMe ? 'You' : msg.email.split('@')[0]}
-                </span>
-                <span className="text-[10px] text-slate-400">
-                  {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-              <div 
-                className={`max-w-[85%] sm:max-w-[75%] px-4 py-2.5 rounded-2xl text-[15px] leading-relaxed shadow-sm ${
-                  isMe 
-                    ? 'bg-brand-600 text-white rounded-tr-sm' 
-                    : 'bg-white text-slate-800 border border-slate-100 rounded-tl-sm'
-                }`}
-              >
-                {msg.content}
-              </div>
-            </div>
-          );
-        })}
-        <div ref={messagesEndRef} />
-      </div>
+      {/* Center Main Chat Window */}
+      {activeConversation ? (
+        <ChatWindow
+          currentUser={currentUser}
+          conversation={activeConversation}
+          partner={activePartner}
+          messages={activeMessages}
+          allUsers={allUsers}
+          onSendMessage={handleSendMessage}
+          onReactToMessage={handleReactToMessage}
+          onStartCall={handleStartCall}
+          onToggleInfoDrawer={() => setIsInfoDrawerOpen(prev => !prev)}
+          isInfoDrawerOpen={isInfoDrawerOpen}
+          onSendFriendRequest={handleSendFriendRequest}
+          isPartnerTyping={isPartnerTyping}
+        />
+      ) : (
+        <div className="flex-1 flex items-center justify-center text-slate-400">
+          Select a chat to begin messaging
+        </div>
+      )}
 
-      {/* Input */}
-      <div className="bg-white border-t border-slate-200 p-4 shrink-0">
-        <form onSubmit={handleSendMessage} className="max-w-4xl mx-auto flex gap-3">
-          <input
-            type="text"
-            value={newMessage}
-            onChange={(e) => setNewMessage(e.target.value)}
-            placeholder={user ? "Type a message..." : "Please sign in to chat..."}
-            disabled={!user}
-            className="flex-1 bg-slate-100 border-transparent focus:bg-white focus:border-brand-500 rounded-xl px-4 py-3 outline-none transition-all"
-          />
-          <button
-            type="submit"
-            disabled={!newMessage.trim() || !user}
-            className="bg-brand-600 text-white p-3 rounded-xl hover:bg-brand-700 disabled:opacity-50 disabled:hover:bg-brand-600 transition-colors flex items-center justify-center shrink-0"
-          >
-            <Send className="w-5 h-5" />
-          </button>
-        </form>
-      </div>
+      {/* Right Drawer: Profile & Shared Content Info */}
+      {activeConversation && isInfoDrawerOpen && (
+        <ChatInfoDrawer
+          isOpen={isInfoDrawerOpen}
+          onClose={() => setIsInfoDrawerOpen(false)}
+          conversation={activeConversation}
+          partner={activePartner}
+          messages={activeMessages}
+          onStartCall={handleStartCall}
+          onUnfriend={activePartner ? handleUnfriend : undefined}
+        />
+      )}
+
+      {/* Directory & Friendship Modal */}
+      <FindFriendsModal
+        isOpen={isFindFriendsOpen}
+        onClose={() => setIsFindFriendsOpen(false)}
+        currentUser={currentUser}
+        users={allUsers}
+        onSendFriendRequest={handleSendFriendRequest}
+        onAcceptFriendRequest={handleAcceptFriendRequest}
+        onDeclineFriendRequest={handleDeclineFriendRequest}
+        onStartDirectChat={handleStartDirectChat}
+      />
+
+      {/* Audio / Video Classroom Calling Modal */}
+      {callSession.isActive && (
+        <CallModal
+          callSession={callSession}
+          onEndCall={handleEndCall}
+          onToggleMute={() => setCallSession(prev => ({ ...prev, isMuted: !prev.isMuted }))}
+          onToggleVideo={() => setCallSession(prev => ({ ...prev, isVideoOff: !prev.isVideoOff }))}
+        />
+      )}
     </div>
   );
 }

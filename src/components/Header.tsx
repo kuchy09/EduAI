@@ -1,7 +1,8 @@
 import { 
   Search, Bell, MoreHorizontal, Book as BookIcon, Map, FileQuestion, 
   Headphones, ShoppingBag, X, CheckCircle2, Sparkles, ArrowRight,
-  BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp
+  BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp,
+  MessageCircle
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -277,7 +278,8 @@ export function Header({
               }
             }}
             placeholder="Search books, authors, subjects, syllabus or check availability..." 
-            className="w-full pl-10 pr-10 py-2 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-sm outline-none transition-all placeholder:text-slate-400 shadow-inner backdrop-blur-md"
+            className="w-full max-w-[544px] h-[38px] pl-10 pr-10 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-sm outline-none transition-all placeholder:text-slate-400 shadow-inner backdrop-blur-md"
+            style={{ height: '38px', width: '544px', maxWidth: '100%' }}
           />
 
           {query && (
@@ -792,7 +794,21 @@ export function Header({
         </div>
       </div>
 
-      <div className="flex items-center gap-3 ml-4">
+      <div className="flex items-center gap-2.5 ml-4">
+        {/* Student Chat & Study Discussion */}
+        <button 
+          onClick={() => {
+            triggerCapsuleFeedback({ pitch: 620, volume: 0.18, hapticDuration: 12 });
+            onNavigate('chat');
+          }}
+          className="relative w-10 h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700"
+          title="Student Chat & Study Groups"
+        >
+          <MessageCircle className="w-4.5 h-4.5" />
+          <span className="absolute top-2 right-2.5 w-2 h-2 bg-indigo-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
+        </button>
+
+        {/* Notifications & Broadcasts */}
         <button 
           onClick={() => {
             triggerCapsuleFeedback({ pitch: 580, volume: 0.18, hapticDuration: 12 });

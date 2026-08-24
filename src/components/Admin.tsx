@@ -572,15 +572,13 @@ export function Admin({ appBooks, onUpdateBook }: AdminProps) {
                                 <span>Edit Cover</span>
                               </button>
 
-                              {!mockBooks.some(m => m.id === b.id) && (
-                                <button 
-                                  onClick={() => requestDeleteBook(b.id)} 
-                                  className="text-rose-500 hover:text-rose-700 p-1.5 hover:bg-rose-50 rounded-lg transition-colors"
-                                  title="Delete Book"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+                              <button 
+                                onClick={() => requestDeleteBook(b.id)} 
+                                className="text-rose-500 hover:text-rose-700 p-1.5 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                title="Delete Book"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
                           </td>
                         </tr>

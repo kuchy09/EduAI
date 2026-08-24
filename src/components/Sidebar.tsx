@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, Sparkles, X, Bell } from 'lucide-react';
+import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, X, Bell, UserPlus } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase } from '../lib/supabase';
 
@@ -41,6 +41,7 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
     { id: 'learning-path', label: 'Learning Path', icon: <Map className="w-5 h-5" /> },
     { id: 'quizzes', label: 'Quizzes', icon: <FileQuestion className="w-5 h-5" /> },
     { id: 'community', label: 'Community', icon: <Users className="w-5 h-5" /> },
+    { id: 'users-portal', label: 'Find Members & Friends', icon: <UserPlus className="w-5 h-5" /> },
     { id: 'chat', label: 'Student Chat', icon: <MessageCircle className="w-5 h-5" /> },
     { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
     { id: 'support', label: 'Support', icon: <LifeBuoy className="w-5 h-5" /> },
@@ -66,20 +67,15 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
       <aside className={`fixed top-0 left-0 h-screen w-72 max-w-[85vw] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col z-[10001] transition-transform duration-300 ease-out shadow-2xl ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {/* Brand Logo Header */}
         <div className="p-5 border-b border-slate-100 dark:border-slate-800/80 flex items-center justify-between">
-          <button 
-            onClick={() => onChangeView('library')}
-            className="flex items-center gap-3 group text-left cursor-pointer transition-transform active:scale-95"
-            title="Edu AI Home"
-          >
-            <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-700 p-0.5 shadow-md shadow-indigo-500/25 flex items-center justify-center relative overflow-hidden group-hover:scale-105 transition-all">
-              <div className="w-full h-full bg-gradient-to-br from-indigo-500 to-violet-700 rounded-[14px] flex items-center justify-center relative">
-                <BookOpen className="w-5 h-5 text-white stroke-[2.3]" />
-                <Sparkles className="w-2.5 h-2.5 text-amber-300 absolute top-1.5 right-1.5 animate-pulse" />
+          <div className="flex items-center gap-3 text-left select-none">
+            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-700 p-0.5 shadow-sm shadow-indigo-500/20 flex items-center justify-center relative overflow-hidden">
+              <div className="w-full h-full bg-gradient-to-br from-indigo-500 to-violet-700 rounded-[10px] flex items-center justify-center relative">
+                <BookOpen className="w-5 h-5 text-white stroke-[2.2]" />
               </div>
             </div>
             <div>
               <div className="flex items-center gap-1.5">
-                <span className="text-lg font-display font-black tracking-tight text-slate-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                <span className="text-lg font-display font-black tracking-tight text-slate-900 dark:text-white">
                   Edu AI
                 </span>
                 <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-full bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/60">
@@ -88,7 +84,7 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
               </div>
               <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Smart Reading & Study Suite</p>
             </div>
-          </button>
+          </div>
 
           <button
             onClick={onClose}

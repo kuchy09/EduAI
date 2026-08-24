@@ -6,7 +6,17 @@ import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { logReadingProgress } from '../lib/readingGoal';
 import { useOffline } from '../lib/useOffline';
-import { getCachedBookBlobUrl, queueOfflineAction } from '../lib/offlineManager';
+import {
+  getCachedBookBlobUrl,
+  queueOfflineAction,
+  saveReadingProgressLocal,
+  getReadingProgressLocal,
+  saveBookContentLocal,
+  saveHighlightLocal,
+  getHighlightsLocal,
+  deleteHighlightLocal,
+  saveBookmarkLocal
+} from '../lib/offlineManager';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { QuoteCardModal } from './QuoteCardModal';
 import { QuickDictionaryPopover } from './QuickDictionaryPopover';
@@ -241,15 +251,54 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     return saved ? parseInt(saved, 10) : 0;
   });
 
+  // Auto-cache book metadata & content in IndexedDB
+  useEffect(() => {
+    saveBookContentLocal(book.id, {
+      title: book.title,
+      author: book.author,
+      category: book.category,
+      keyConcepts: book.aiInsights,
+      summary: book.description,
+      chapters: [
+        {
+          chapterNumber: 1,
+          title: 'Chapter 1: The Foundations',
+          content: `The principles of ${book.category} explored in ${book.title} represent a cornerstone of modern educational frameworks.`
+        }
+      ]
+    });
+  }, [book]);
+
+  // Load progress and last read page from IndexedDB
+  useEffect(() => {
+    let isMounted = true;
+    async function loadSavedProgress() {
+      try {
+        const record = await getReadingProgressLocal(book.id);
+        if (record && isMounted) {
+          if (typeof record.progress === 'number' && record.progress > 0) {
+            setReadingProgress(record.progress);
+          }
+          if (typeof record.currentPage === 'number' && record.currentPage > 1) {
+            setPageNumber(record.currentPage);
+          }
+        }
+      } catch (e) {
+        console.warn('[Reader] Failed to load progress from IndexedDB:', e);
+      }
+    }
+    loadSavedProgress();
+    return () => {
+      isMounted = false;
+    };
+  }, [book.id]);
+
   useEffect(() => {
     if (book.fileUrl && numPages) {
       const currentProgress = Math.min(100, Math.round((pageNumber / numPages) * 100));
       if (currentProgress !== readingProgress) {
         setReadingProgress(currentProgress);
-        localStorage.setItem(`book_progress_${book.id}`, currentProgress.toString());
-        if (!navigator.onLine) {
-          queueOfflineAction('progress', { bookId: book.id, progress: currentProgress });
-        }
+        saveReadingProgressLocal(book.id, currentProgress, pageNumber, numPages);
         const timer = setTimeout(() => {
           onUpdateProgress?.(book.id, currentProgress);
         }, 0);
@@ -269,10 +318,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
       setReadingProgress(prev => {
         if (pct !== prev) {
           setTimeout(() => {
-            localStorage.setItem(`book_progress_${book.id}`, pct.toString());
-            if (!navigator.onLine) {
-              queueOfflineAction('progress', { bookId: book.id, progress: pct });
-            }
+            saveReadingProgressLocal(book.id, pct, undefined, undefined, pct);
             onUpdateProgress?.(book.id, pct);
           }, 0);
           return pct;
@@ -310,20 +356,33 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     return () => clearInterval(timer);
   }, []);
 
-  // Load highlights from database
+  // Load highlights from IndexedDB and cloud database
   useEffect(() => {
     let active = true;
     
-    // Always try to load from localStorage first as a reliable fallback
-    const localHighlightsKey = `highlights_${book.id}_${user?.id || 'guest'}`;
-    const localHighlights = localStorage.getItem(localHighlightsKey);
-    if (localHighlights) {
+    // Always try to load from IndexedDB and localStorage first for instant offline reading
+    async function loadOfflineHighlights() {
       try {
-        setHighlights(JSON.parse(localHighlights));
-      } catch (e) {
-        console.error('Failed to parse local highlights', e);
+        const idbHighlights = await getHighlightsLocal(book.id);
+        if (idbHighlights && idbHighlights.length > 0 && active) {
+          setHighlights(idbHighlights);
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+
+      const localHighlightsKey = `highlights_${book.id}_${user?.id || 'guest'}`;
+      const localHighlights = localStorage.getItem(localHighlightsKey);
+      if (localHighlights && active) {
+        try {
+          setHighlights(JSON.parse(localHighlights));
+        } catch (e) {
+          console.error('Failed to parse local highlights', e);
+        }
       }
     }
+    loadOfflineHighlights();
 
     async function fetchHighlights() {
       if (!supabase || !user) return;
@@ -335,7 +394,6 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           .eq('user_id', user.id);
           
         if (error) {
-          // Suppress error in console if table doesn't exist, we fallback to localStorage
           return;
         }
         
@@ -350,7 +408,10 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
             createdAt: item.created_at
           }));
           setHighlights(loadedHighlights);
+          const localHighlightsKey = `highlights_${book.id}_${user?.id || 'guest'}`;
           localStorage.setItem(localHighlightsKey, JSON.stringify(loadedHighlights));
+          // Save to IndexedDB
+          loadedHighlights.forEach(hl => saveHighlightLocal(hl));
         }
       } catch (err) {
         // Suppress network errors
@@ -397,6 +458,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
       timestamp: Date.now(),
     };
     onAddBookmark(newBookmark);
+    saveBookmarkLocal(newBookmark);
     
     if (!navigator.onLine) {
       queueOfflineAction('bookmark', {
@@ -409,14 +471,14 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
       });
     }
 
-    setToastMessage(!navigator.onLine ? 'Bookmark saved locally (Offline)' : 'Bookmark saved');
+    setToastMessage(!navigator.onLine ? 'Bookmark saved locally (IndexedDB Offline)' : 'Bookmark saved');
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
   };
 
   const isBookmarked = bookmarks.some(b => b.chapter === 'Chapter 1: The Foundations');
 
-  // Save new highlight to DB & Local State
+  // Save new highlight to IndexedDB, DB & Local State
   const addHighlight = async (selectedText: string, color: string) => {
     const tempId = crypto.randomUUID();
     const newHighlightObj: Highlight = {
@@ -433,7 +495,8 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     const updatedHighlights = [...highlights, newHighlightObj];
     setHighlights(updatedHighlights);
     
-    // Save to localStorage as fallback
+    // Save to IndexedDB and localStorage
+    saveHighlightLocal(newHighlightObj);
     const localHighlightsKey = `highlights_${book.id}_${user?.id || 'guest'}`;
     localStorage.setItem(localHighlightsKey, JSON.stringify(updatedHighlights));
 
@@ -449,7 +512,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
       });
     }
 
-    setToastMessage(!navigator.onLine ? 'Highlighted & saved to offline queue' : 'Passage highlighted!');
+    setToastMessage(!navigator.onLine ? 'Highlighted & saved to local cache' : 'Passage highlighted!');
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3500);
 
@@ -479,6 +542,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     const updatedHighlights = highlights.filter(h => h.id !== id);
     setHighlights(updatedHighlights);
     
+    deleteHighlightLocal(id, book.id);
     const localHighlightsKey = `highlights_${book.id}_${user?.id || 'guest'}`;
     localStorage.setItem(localHighlightsKey, JSON.stringify(updatedHighlights));
     

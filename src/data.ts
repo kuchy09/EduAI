@@ -56,22 +56,6 @@ export const mockBooks: Book[] = [
     country: ['Kenya']
   },
   {
-    id: '10b',
-    title: 'KLB Secondary Physics Book 1',
-    author: 'Kenya Literature Bureau (KLB)',
-    coverImage: '',
-    category: 'Natural Sciences, Mathematics, and Statistics',
-    rating: 4.9,
-    description: 'Comprehensive Kenya Literature Bureau (KLB) Form 1 / Grade 9 Physics textbook approved by KICD, covering Introduction to Physics, Measurement I, Force, Pressure, Particulate Nature of Matter, Thermal Expansion, Heat Transfer, Light, Electrostatics I, and Cells & Simple Circuits.',
-    readProgress: 0,
-    aiInsights: ['Complete Kenyan CBC & 8-4-4 Form 1 syllabus content', 'Includes 10 standard chapters, worked formulas, SI unit tables, and KCSE review problems'],
-    level: 'School',
-    curriculum: ['CBC', '8-4-4', 'KCSE'],
-    subjects: ['Physics', 'Science', 'KLB', 'Natural Sciences'],
-    country: ['Kenya'],
-    fileUrl: 'klb_book_1_physics.pdf'
-  },
-  {
     id: 'cbc-g9-agri',
     title: 'CBC Grade 9 Agriculture & Nutrition',
     author: 'Kenya Literature Bureau (KLB)',
@@ -84,6 +68,21 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['Agriculture', 'Nutrition'],
+    country: ['Kenya']
+  },
+  {
+    id: 'cbc-g9-socialstudies',
+    title: 'CBC Grade 9 Social Studies & Civics',
+    author: 'Longhorn Publishers',
+    coverImage: '',
+    category: 'Social Sciences',
+    rating: 4.5,
+    description: 'A comprehensive Kenyan citizenship, history, and geography study textbook focusing on regional ecology, governance structures, and communal rights.',
+    readProgress: 0,
+    aiInsights: ['Covers administrative structures of Kenyan Counties', 'Includes active civic engagement projects'],
+    level: 'School',
+    curriculum: ['CBC'],
+    subjects: ['Social Studies', 'History', 'Geography'],
     country: ['Kenya']
   },
   {
@@ -129,21 +128,6 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['Kiswahili', 'Fasihi'],
-    country: ['Kenya']
-  },
-  {
-    id: 'cbc-g9-socialstudies',
-    title: 'CBC Grade 9 Social Studies & Civics',
-    author: 'Longhorn Publishers',
-    coverImage: '',
-    category: 'Social Sciences',
-    rating: 4.5,
-    description: 'A comprehensive Kenyan citizenship, history, and geography study textbook focusing on regional ecology, governance structures, and communal rights.',
-    readProgress: 0,
-    aiInsights: ['Covers administrative structures of Kenyan Counties', 'Includes active civic engagement projects'],
-    level: 'School',
-    curriculum: ['CBC'],
-    subjects: ['Social Studies', 'History', 'Geography'],
     country: ['Kenya']
   },
   {

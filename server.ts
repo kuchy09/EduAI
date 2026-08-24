@@ -529,23 +529,34 @@ async function startServer() {
 
   app.use(express.json());
 
-  // API Routes
-  app.post("/api/upload-direct", express.raw({ type: '*/*', limit: '50mb' }), async (req, res) => {
+  // API Routes - Unified Direct Upload & Presigned Storage Flow
+  const handleDirectUpload = async (req: express.Request, res: express.Response) => {
     try {
       const filename = (req.query.filename as string) || `file-${Date.now()}`;
+      const prefix = (req.query.prefix as string) || 'uploads';
+      const customKey = (req.query.key as string);
       const headerContentType = (req.headers['content-type'] as string) || '';
       const contentType = headerContentType.split(';')[0] || getMimeType(filename);
       
       const sanitizedFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      const key = `avatars/${Date.now()}-${sanitizedFilename}`;
+      const key = customKey || `${prefix}/${Date.now()}-${sanitizedFilename}`;
 
-      // 1. Always store to local disk first for guaranteed availability and immediate latency
+      // 1. Always store to local persistent disk for guaranteed instant access
       const localFilePath = path.join(UPLOADS_DIR, key);
       const localDir = path.dirname(localFilePath);
       if (!fs.existsSync(localDir)) {
         fs.mkdirSync(localDir, { recursive: true });
       }
-      fs.writeFileSync(localFilePath, req.body);
+
+      // Check if body is a Buffer or stream
+      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+        fs.writeFileSync(localFilePath, req.body);
+      } else if (typeof req.body === 'string') {
+        fs.writeFileSync(localFilePath, Buffer.from(req.body));
+      } else {
+        // Empty body or stream fallback
+        fs.writeFileSync(localFilePath, Buffer.from(''));
+      }
 
       // 2. Opportunistically sync with Backblaze B2 cloud storage
       const isB2Configured = process.env.B2_ACCESS_KEY_ID && 
@@ -555,17 +566,16 @@ async function startServer() {
 
       if (isB2Configured) {
         try {
+          const fileBuffer = fs.readFileSync(localFilePath);
           const command = new PutObjectCommand({
             Bucket: B2_BUCKET_NAME,
             Key: key,
             ContentType: contentType,
-            Body: req.body,
+            Body: fileBuffer,
           });
           await s3Client.send(command);
           console.log(`[Storage] Successfully synced ${key} to B2 bucket ${B2_BUCKET_NAME}`);
         } catch (b2Err: any) {
-          // B2 cluster restrictions (e.g., storage class limit or quota) won't block the user;
-          // the file is securely available from local high-speed persistence.
           console.warn(`[Storage] B2 cloud sync notice for ${key}:`, b2Err.message || b2Err);
         }
       }
@@ -579,16 +589,21 @@ async function startServer() {
       console.error("Error direct upload:", error);
       res.status(500).json({ error: "Failed to process upload: " + (error.message || "Unknown error") });
     }
-  });
+  };
+
+  app.post("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+  app.put("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+  app.post("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+  app.put("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
 
   app.post("/api/presigned-url", async (req, res) => {
     try {
-      const { filename, fileType, operation } = req.body;
+      const { filename, fileType, operation, prefix = 'uploads' } = req.body;
       if (!filename || !fileType) {
         return res.status(400).json({ error: "filename and fileType are required" });
       }
 
-      const key = `${Date.now()}-${filename.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+      const key = `${prefix}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
 
       const isB2Configured = process.env.B2_ACCESS_KEY_ID && 
                              !process.env.B2_ACCESS_KEY_ID.startsWith('your_') && 
@@ -597,7 +612,7 @@ async function startServer() {
 
       if (!isB2Configured) {
         return res.json({ 
-          presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}`, 
+          presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
           fileKey: key,
           directFallback: true 
         });
@@ -623,7 +638,7 @@ async function startServer() {
       } catch (signErr) {
         console.warn("[Storage] S3 presign warning, falling back to direct upload route:", signErr);
         res.json({ 
-          presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}`, 
+          presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
           fileKey: key,
           directFallback: true 
         });

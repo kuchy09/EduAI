@@ -49,4 +49,4 @@ export interface Highlight {
   createdAt: string;
 }
 
-export type ViewState = 'dashboard' | 'library' | 'learning-path' | 'ai-tutor' | 'quizzes' | 'community' | 'chat' | 'settings' | 'support' | 'developer' | 'reader' | 'profile' | 'workspace' | 'admin' | 'progress' | 'book-store' | 'audiobooks' | 'notifications';
+export type ViewState = 'dashboard' | 'library' | 'learning-path' | 'ai-tutor' | 'quizzes' | 'community' | 'chat' | 'users-portal' | 'settings' | 'support' | 'developer' | 'reader' | 'profile' | 'workspace' | 'admin' | 'progress' | 'book-store' | 'audiobooks' | 'notifications';
