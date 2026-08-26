@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, X, Bell, UserPlus } from 'lucide-react';
+import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, X, Bell, UserPlus, Moon, Sun } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase } from '../lib/supabase';
+import { triggerCapsuleFeedback } from '../lib/feedback';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -12,6 +13,30 @@ interface SidebarProps {
 
 export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarProps) {
   const [user, setUser] = useState<any>(null);
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('theme') || 'system';
+      return saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
+    }
+    return false;
+  });
+
+  const toggleTheme = () => {
+    const nextDark = !isDark;
+    setIsDark(nextDark);
+    localStorage.setItem('theme', nextDark ? 'dark' : 'light');
+    document.documentElement.classList.toggle('dark', nextDark);
+    triggerCapsuleFeedback({ pitch: nextDark ? 480 : 720, volume: 0.16, hapticDuration: 12 });
+    window.dispatchEvent(new Event('theme_changed'));
+  };
+
+  useEffect(() => {
+    const handleThemeSync = () => {
+      setIsDark(document.documentElement.classList.contains('dark'));
+    };
+    window.addEventListener('theme_changed', handleThemeSync);
+    return () => window.removeEventListener('theme_changed', handleThemeSync);
+  }, []);
 
   useEffect(() => {
     if (supabase) {
@@ -115,8 +140,22 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
           ))}
         </nav>
 
-        {/* User profile footer */}
-        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800/80">
+        {/* User profile & Theme footer */}
+        <div className="p-3.5 border-t border-slate-100 dark:border-slate-800/80 space-y-2">
+          <button
+            onClick={toggleTheme}
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-700/60 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-all cursor-pointer text-xs font-medium"
+            title="Toggle theme"
+          >
+            <div className="flex items-center gap-2">
+              {isDark ? <Moon className="w-4 h-4 text-indigo-400" /> : <Sun className="w-4 h-4 text-amber-500" />}
+              <span>{isDark ? 'Obsidian Dark' : 'Light Mode'}</span>
+            </div>
+            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-200/60 dark:border-slate-700/60 text-slate-500 dark:text-slate-400">
+              {isDark ? 'Dark (Chat)' : 'Light'}
+            </span>
+          </button>
+
           <button 
             onClick={() => onChangeView('profile')}
             className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${

@@ -12,24 +12,49 @@
 }
 
 html.dark {
-  --color-white: #0f172a;
-  --color-slate-50: #1e293b;
-  --color-slate-100: #334155;
-  --color-slate-200: #475569;
-  --color-slate-300: #64748b;
-  --color-slate-400: #94a3b8;
-  --color-slate-500: #cbd5e1;
-  --color-slate-600: #e2e8f0;
-  --color-slate-700: #f1f5f9;
-  --color-slate-800: #f8fafc;
+  /* Match the deep sleek obsidian dark theme of the Chat Page (#0b0d13) */
+  --color-white: #11141d;
+  --color-slate-50: #0b0d13;
+  --color-slate-100: #161922;
+  --color-slate-200: #1e222d;
+  --color-slate-300: #2c3242;
+  --color-slate-400: #64748b;
+  --color-slate-500: #94a3b8;
+  --color-slate-600: #cbd5e1;
+  --color-slate-700: #e2e8f0;
+  --color-slate-800: #f1f5f9;
   --color-slate-900: #ffffff;
   
-  --color-brand-50: #2e1065;
-  --color-brand-100: #4c1d95;
-  --color-brand-500: #a78bfa;
-  --color-brand-600: #c4b5fd;
-  --color-brand-700: #ddd6fe;
-  --color-brand-900: #ede9fe;
+  --color-zinc-950: #06070a;
+  --color-zinc-900: #0b0d13;
+  --color-zinc-800: #161922;
+  --color-zinc-700: #1e222d;
+  --color-zinc-600: #2c3242;
+  --color-zinc-500: #64748b;
+  --color-zinc-400: #94a3b8;
+  --color-zinc-300: #cbd5e1;
+  --color-zinc-200: #e2e8f0;
+  --color-zinc-100: #f1f5f9;
+  --color-zinc-50: #ffffff;
+  
+  --color-gray-950: #06070a;
+  --color-gray-900: #0b0d13;
+  --color-gray-800: #161922;
+  --color-gray-700: #1e222d;
+  --color-gray-600: #2c3242;
+  --color-gray-500: #64748b;
+  --color-gray-400: #94a3b8;
+  --color-gray-300: #cbd5e1;
+  --color-gray-200: #e2e8f0;
+  --color-gray-100: #f1f5f9;
+  --color-gray-50: #ffffff;
+
+  --color-brand-50: #1e1b4b;
+  --color-brand-100: #312e81;
+  --color-brand-500: #818cf8;
+  --color-brand-600: #6366f1;
+  --color-brand-700: #a5b4fc;
+  --color-brand-900: #e0e7ff;
 }
 
 /* Liquid Glass System Utilities */
@@ -56,13 +81,15 @@ html.dark {
 }
 
 html.dark .liquid-glass-dock {
-  background: rgba(15, 23, 42, 0.75);
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(11, 13, 19, 0.88);
+  backdrop-filter: blur(28px) saturate(180%);
+  -webkit-backdrop-filter: blur(28px) saturate(180%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 
-    0 20px 48px -8px rgba(0, 0, 0, 0.6),
-    0 4px 16px -2px rgba(0, 0, 0, 0.4),
-    inset 0 1px 2px 0 rgba(255, 255, 255, 0.2),
-    inset 0 -1px 2px 0 rgba(0, 0, 0, 0.4);
+    0 20px 48px -8px rgba(0, 0, 0, 0.8),
+    0 4px 16px -2px rgba(0, 0, 0, 0.6),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.12),
+    inset 0 -1px 2px 0 rgba(0, 0, 0, 0.6);
 }
 
 .liquid-glass-pill {
@@ -77,12 +104,12 @@ html.dark .liquid-glass-dock {
 }
 
 html.dark .liquid-glass-pill {
-  background: linear-gradient(135deg, rgba(76, 29, 149, 0.55) 0%, rgba(46, 16, 101, 0.7) 100%);
-  border: 1px solid rgba(167, 139, 250, 0.4);
+  background: linear-gradient(135deg, rgba(30, 27, 75, 0.85) 0%, rgba(17, 20, 29, 0.9) 100%);
+  border: 1px solid rgba(129, 140, 248, 0.35);
   box-shadow: 
-    0 4px 16px 0 rgba(124, 58, 237, 0.3),
-    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.25),
-    inset 0 -1px 1px 0 rgba(0, 0, 0, 0.5);
+    0 4px 16px 0 rgba(99, 102, 241, 0.25),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.15),
+    inset 0 -1px 1px 0 rgba(0, 0, 0, 0.6);
 }
 
 .liquid-glass-card {
@@ -96,11 +123,13 @@ html.dark .liquid-glass-pill {
 }
 
 html.dark .liquid-glass-card {
-  background: rgba(30, 41, 59, 0.65);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(17, 20, 29, 0.82);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   box-shadow: 
-    0 12px 36px -6px rgba(0, 0, 0, 0.4),
-    inset 0 1px 1px 0 rgba(255, 255, 255, 0.1);
+    0 12px 36px -6px rgba(0, 0, 0, 0.6),
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.06);
 }
 
 .liquid-glass-specular {
@@ -143,11 +172,16 @@ html.dark .gemini-markdown ol {
   color: #cbd5e1;
 }
 
-html.dark .gemini-markdown code,
-html.dark .gemini-markdown pre {
-  background-color: #1e293b;
+html.dark .gemini-markdown code {
+  background-color: #161922;
   color: #cbd5e1;
-  border-color: #334155;
+  border-color: #1e222d;
+}
+
+html.dark .gemini-markdown pre {
+  background-color: #161922;
+  color: #cbd5e1;
+  border-color: #1e222d;
 }
 
 html,

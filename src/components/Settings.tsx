@@ -46,6 +46,7 @@ export function Settings() {
       'dark',
       theme === 'dark' || (theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
     );
+    window.dispatchEvent(new Event('theme_changed'));
   }, [theme]);
 
   useEffect(() => {
@@ -122,48 +123,49 @@ export function Settings() {
         <div className="md:col-span-2 space-y-6">
           {activeTab === 'appearance' && (
             <>
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                 <h3 className="text-lg font-bold text-slate-900 mb-4">Theme</h3>
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+                 <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-2">Theme & Appearance</h3>
+                 <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Choose your preferred reading and interface mode. Dark theme uses obsidian styling matching the Chat interface.</p>
                  <div className="grid grid-cols-3 gap-4">
                    <button 
                      onClick={() => setTheme('light')}
-                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors ${theme === 'light' ? 'border-brand-500 bg-brand-50' : 'border-slate-100 bg-white hover:border-slate-200'}`}
+                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'light' ? 'border-brand-500 bg-brand-50 dark:bg-brand-950/40' : 'border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900/60 hover:border-slate-200 dark:hover:border-slate-700'}`}
                    >
-                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'light' ? 'bg-brand-100 text-brand-700' : 'bg-slate-100 text-slate-600'}`}><User className="w-4 h-4" /></div>
-                     <span className={`text-sm font-medium ${theme === 'light' ? 'text-brand-700' : 'text-slate-700'}`}>Light</span>
+                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'light' ? 'bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300' : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400'}`}><User className="w-4 h-4" /></div>
+                     <span className={`text-sm font-medium ${theme === 'light' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-slate-300'}`}>Light</span>
                    </button>
                    <button 
                      onClick={() => setTheme('dark')}
-                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors ${theme === 'dark' ? 'border-brand-500 bg-brand-50' : 'border-slate-100 bg-white hover:border-slate-200'}`}
+                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'dark' ? 'border-brand-500 bg-brand-50 dark:bg-brand-950/40' : 'border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900/60 hover:border-slate-200 dark:hover:border-slate-700'}`}
                    >
-                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'dark' ? 'bg-slate-800 text-white' : 'bg-slate-800 text-white'}`}><Moon className="w-4 h-4" /></div>
-                     <span className={`text-sm font-medium ${theme === 'dark' ? 'text-brand-700' : 'text-slate-700'}`}>Dark</span>
+                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-slate-800 text-white'}`}><Moon className="w-4 h-4" /></div>
+                     <span className={`text-sm font-medium ${theme === 'dark' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-slate-300'}`}>Dark (Chat)</span>
                    </button>
                    <button 
                      onClick={() => setTheme('system')}
-                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors ${theme === 'system' ? 'border-brand-500 bg-brand-50' : 'border-slate-100 bg-white hover:border-slate-200'}`}
+                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'system' ? 'border-brand-500 bg-brand-50 dark:bg-brand-950/40' : 'border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900/60 hover:border-slate-200 dark:hover:border-slate-700'}`}
                    >
-                     <div className="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center text-slate-600 shrink-0"><Smartphone className="w-4 h-4" /></div>
-                     <span className={`text-sm font-medium ${theme === 'system' ? 'text-brand-700' : 'text-slate-700'}`}>System</span>
+                     <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-400 shrink-0"><Smartphone className="w-4 h-4" /></div>
+                     <span className={`text-sm font-medium ${theme === 'system' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-slate-300'}`}>System</span>
                    </button>
                  </div>
               </div>
 
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-sm">
-                 <h3 className="text-lg font-bold text-slate-900 mb-4">Reading Preferences</h3>
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 shadow-sm">
+                 <h3 className="text-lg font-bold text-slate-900 dark:text-white mb-4">Reading Preferences</h3>
                  <div className="space-y-4">
-                   <div className="flex items-center justify-between p-4 border border-slate-100 rounded-xl">
+                   <div className="flex items-center justify-between p-4 border border-slate-100 dark:border-slate-800 rounded-xl">
                       <div className="flex items-center gap-3">
                         <Type className="w-5 h-5 text-slate-400" />
                         <div>
-                          <div className="font-medium text-slate-900">Font Size</div>
-                          <div className="text-sm text-slate-500">Adjust the default text size for the reader</div>
+                          <div className="font-medium text-slate-900 dark:text-white">Font Size</div>
+                          <div className="text-sm text-slate-500 dark:text-slate-400">Adjust the default text size for the reader</div>
                         </div>
                       </div>
                       <select 
                         value={fontSize} 
                         onChange={(e) => setFontSize(e.target.value)}
-                        className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 outline-none focus:border-brand-500"
+                        className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 dark:text-slate-200 outline-none focus:border-brand-500"
                       >
                         <option>Small</option>
                         <option>Medium</option>

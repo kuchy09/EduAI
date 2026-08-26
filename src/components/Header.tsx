@@ -2,7 +2,7 @@ import {
   Search, Bell, MoreHorizontal, Book as BookIcon, Map, FileQuestion, 
   Headphones, ShoppingBag, X, CheckCircle2, Sparkles, ArrowRight,
   BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp,
-  MessageCircle
+  MessageCircle, Moon, Sun
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -14,6 +14,7 @@ import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 
 interface HeaderProps {
+  currentView?: ViewState;
   onMenuClick: () => void;
   onBookSelect: (book: Book) => void;
   onNavigate: (view: ViewState) => void;
@@ -24,7 +25,28 @@ interface HeaderProps {
 
 export type SearchTabFilter = 'all' | 'library' | 'store' | 'related' | 'audiobooks' | 'paths' | 'quizzes';
 
+const VIEW_TITLES: Record<string, { title: string; subtitle?: string; icon?: any }> = {
+  'ai-tutor': { title: 'Sage AI Tutor', subtitle: 'Interactive Study Engine', icon: Sparkles },
+  'audiobooks': { title: 'Audiobooks', subtitle: 'Immersive Audio Player & Library', icon: Headphones },
+  'library': { title: 'My Library', subtitle: 'Saved Books & Reading List', icon: BookIcon },
+  'book-store': { title: 'Bookstore', subtitle: 'Explore Catalog & Downloads', icon: ShoppingBag },
+  'learning-path': { title: 'Learning Path', subtitle: 'Step-by-step Mastery', icon: Map },
+  'quizzes': { title: 'Quizzes & Assessments', subtitle: 'Test Your Knowledge', icon: FileQuestion },
+  'progress': { title: 'Learning Analytics', subtitle: 'Reading Stats & Milestones', icon: TrendingUp },
+  'community': { title: 'Community', subtitle: 'Study Groups & Discussions', icon: BookmarkCheck },
+  'chat': { title: 'Student Chat', subtitle: 'Direct Messages & Study Rooms', icon: MessageCircle },
+  'users-portal': { title: 'Find Members & Friends', subtitle: 'Connect with Learners', icon: Compass },
+  'notifications': { title: 'Notifications', subtitle: 'Activity & Updates', icon: Bell },
+  'workspace': { title: 'Study Workspace', subtitle: 'Notes, Highlights & Flashcards', icon: BookmarkCheck },
+  'settings': { title: 'Settings', subtitle: 'Preferences & Configurations', icon: MoreHorizontal },
+  'support': { title: 'Support & Help', subtitle: 'FAQs and Assistance', icon: HelpCircle },
+  'developer': { title: 'Developer Portal', subtitle: 'API & Developer Tools', icon: HardDriveDownload },
+  'profile': { title: 'User Profile', subtitle: 'Account & Learning Track', icon: Compass },
+  'admin': { title: 'Admin Platform', subtitle: 'System & Catalog Management', icon: MoreHorizontal },
+};
+
 export function Header({ 
+  currentView = 'dashboard',
   onMenuClick, 
   onBookSelect, 
   onNavigate, 
@@ -40,10 +62,35 @@ export function Header({
   const [unreadNotifCount, setUnreadNotifCount] = useState(() => {
     return getStoredNotifications().filter(n => !n.isRead).length;
   });
+  const [isDarkTheme, setIsDarkTheme] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('theme') || 'system';
+      return saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
+    }
+    return false;
+  });
 
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const { cachedBookIds } = useOffline();
+
+  const handleToggleTheme = () => {
+    const nextIsDark = !isDarkTheme;
+    setIsDarkTheme(nextIsDark);
+    localStorage.setItem('theme', nextIsDark ? 'dark' : 'light');
+    document.documentElement.classList.toggle('dark', nextIsDark);
+    triggerCapsuleFeedback({ pitch: nextIsDark ? 480 : 720, volume: 0.16, hapticDuration: 12 });
+    window.dispatchEvent(new Event('theme_changed'));
+  };
+
+  useEffect(() => {
+    const handleThemeSync = () => {
+      const isDark = document.documentElement.classList.contains('dark');
+      setIsDarkTheme(isDark);
+    };
+    window.addEventListener('theme_changed', handleThemeSync);
+    return () => window.removeEventListener('theme_changed', handleThemeSync);
+  }, []);
 
   // Keep unread count in sync
   useEffect(() => {
@@ -266,6 +313,9 @@ export function Header({
     setQuery('');
   };
 
+  const isHomePage = currentView === 'dashboard';
+  const currentViewInfo = VIEW_TITLES[currentView] || null;
+
   return (
     <header className="h-14 sm:h-16 liquid-glass-card border-b border-white/60 dark:border-white/10 flex items-center justify-between px-2.5 sm:px-4 md:px-8 sticky top-0 z-[100] shadow-[0_4px_20px_-4px_rgba(0,0,0,0.06)] w-full max-w-full overflow-visible">
       <div className="flex items-center flex-1 max-w-2xl relative gap-1.5 sm:gap-2.5 min-w-0 overflow-visible">
@@ -280,23 +330,25 @@ export function Header({
           <MoreHorizontal className="w-4.5 h-4.5 sm:w-5 sm:h-5 group-hover:scale-110 transition-transform" />
         </button>
         
-        <div ref={containerRef} className="relative flex-1 min-w-0 overflow-visible">
-          <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-2.5 sm:left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-          <input 
-            type="text" 
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onFocus={() => setIsFocused(true)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && query.trim()) {
-                localStorage.setItem('edu_search_prefill', query);
-                onNavigate('library');
-                setIsFocused(false);
-              }
-            }}
-            placeholder="Search books, syllabus, topics..." 
-            className="w-full h-8.5 sm:h-[38px] pl-8 sm:pl-10 pr-7 sm:pr-9 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-xs sm:text-sm outline-none transition-all placeholder:text-slate-400 placeholder:truncate shadow-inner backdrop-blur-md min-w-0"
-          />
+        {/* Search bar is ONLY displayed on the Home page (dashboard) */}
+        {isHomePage ? (
+          <div ref={containerRef} className="relative flex-1 min-w-0 overflow-visible">
+            <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-2.5 sm:left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input 
+              type="text" 
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onFocus={() => setIsFocused(true)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && query.trim()) {
+                  localStorage.setItem('edu_search_prefill', query);
+                  onNavigate('library');
+                  setIsFocused(false);
+                }
+              }}
+              placeholder="Search books, syllabus, topics..." 
+              className="w-full h-8.5 sm:h-[38px] pl-8 sm:pl-10 pr-7 sm:pr-9 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-xs sm:text-sm outline-none transition-all placeholder:text-slate-400 placeholder:truncate shadow-inner backdrop-blur-md min-w-0"
+            />
 
           {query && (
             <button
@@ -808,40 +860,89 @@ export function Header({
             document.body
           )}
         </div>
+        ) : (
+          /* Contextual View Title & Badge for Non-Home Pages (Sage, Audiobooks, Library, etc.) */
+          <div className="flex items-center gap-2.5 min-w-0 py-0.5 ml-1">
+            {currentViewInfo?.icon && (
+              <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0 shadow-xs">
+                <currentViewInfo.icon className="w-4 h-4" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate tracking-tight">
+                  {currentViewInfo?.title || 'Edu AI'}
+                </h1>
+                {currentView === 'ai-tutor' && (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-gradient-to-r from-indigo-500/10 to-purple-500/10 dark:from-indigo-500/20 dark:to-purple-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-700/60 shrink-0">
+                    AI Engine
+                  </span>
+                )}
+                {currentView === 'audiobooks' && (
+                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 border border-purple-200/60 dark:border-purple-800/60 shrink-0">
+                    Audio Sync
+                  </span>
+                )}
+              </div>
+              {currentViewInfo?.subtitle && (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate hidden sm:block">
+                  {currentViewInfo.subtitle}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2.5 ml-1.5 sm:ml-4 shrink-0">
-        {/* Student Chat & Study Discussion */}
+        {/* Dark / Light Theme Quick Toggle (Always Available) */}
         <button 
-          onClick={() => {
-            triggerCapsuleFeedback({ pitch: 620, volume: 0.18, hapticDuration: 12 });
-            onNavigate('chat');
-          }}
-          className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 shrink-0"
-          title="Student Chat & Study Groups"
+          onClick={handleToggleTheme}
+          className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-amber-500 dark:hover:text-amber-400 hover:border-amber-300 dark:hover:border-amber-700/60 shrink-0"
+          title={isDarkTheme ? "Switch to Light Mode" : "Switch to Dark Mode (Chat Style)"}
         >
-          <MessageCircle className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
-          <span className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2.5 w-2 h-2 bg-indigo-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
-        </button>
-
-        {/* Notifications & Broadcasts */}
-        <button 
-          onClick={() => {
-            triggerCapsuleFeedback({ pitch: 580, volume: 0.18, hapticDuration: 12 });
-            onNavigate('notifications');
-          }}
-          className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 shrink-0"
-          title="Notifications & Broadcasts Page"
-        >
-          <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
-          {unreadNotifCount > 0 ? (
-            <span className="absolute -top-1 -right-1 min-w-[16px] sm:min-w-[18px] h-4 sm:h-[18px] px-1 bg-gradient-to-r from-rose-500 to-indigo-600 text-white text-[9px] sm:text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs animate-pulse">
-              {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
-            </span>
+          {isDarkTheme ? (
+            <Sun className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 transition-transform duration-300" />
           ) : (
-            <span className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2.5 w-2 h-2 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
+            <Moon className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 dark:text-slate-300 transition-transform duration-300" />
           )}
         </button>
+
+        {/* Student Chat & Study Discussion - ONLY on Home Page */}
+        {isHomePage && (
+          <button 
+            onClick={() => {
+              triggerCapsuleFeedback({ pitch: 620, volume: 0.18, hapticDuration: 12 });
+              onNavigate('chat');
+            }}
+            className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 shrink-0"
+            title="Student Chat & Study Groups"
+          >
+            <MessageCircle className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+            <span className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2.5 w-2 h-2 bg-indigo-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
+          </button>
+        )}
+
+        {/* Notifications & Broadcasts - ONLY on Home Page */}
+        {isHomePage && (
+          <button 
+            onClick={() => {
+              triggerCapsuleFeedback({ pitch: 580, volume: 0.18, hapticDuration: 12 });
+              onNavigate('notifications');
+            }}
+            className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-indigo-600 dark:hover:text-indigo-400 hover:border-indigo-300 dark:hover:border-indigo-700 shrink-0"
+            title="Notifications & Broadcasts Page"
+          >
+            <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+            {unreadNotifCount > 0 ? (
+              <span className="absolute -top-1 -right-1 min-w-[16px] sm:min-w-[18px] h-4 sm:h-[18px] px-1 bg-gradient-to-r from-rose-500 to-indigo-600 text-white text-[9px] sm:text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs animate-pulse">
+                {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
+              </span>
+            ) : (
+              <span className="absolute top-1.5 right-1.5 sm:top-2 sm:right-2.5 w-2 h-2 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900"></span>
+            )}
+          </button>
+        )}
       </div>
     </header>
   );

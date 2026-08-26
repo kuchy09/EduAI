@@ -377,6 +377,7 @@ export default function App() {
           
           <main className="flex-1 flex flex-col min-w-0 max-w-full w-full relative overflow-x-hidden">
             <Header 
+              currentView={currentView}
               onMenuClick={() => setIsSidebarOpen(true)} 
               onBookSelect={(book) => { setActiveBook(book); }}
               onNavigate={(view) => changeView(view)}
