@@ -1,7 +1,27 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+// Resolve Supabase Project URL (supports Vite & Next.js conventions)
+const supabaseUrl = 
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL) ||
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_URL) ||
+  (typeof process !== 'undefined' && (process.env?.NEXT_PUBLIC_SUPABASE_URL || process.env?.VITE_SUPABASE_URL || process.env?.SUPABASE_URL)) ||
+  '';
+
+// Resolve Supabase API Key (supports updated Publishable Key interface as well as legacy Anon Key)
+const supabaseApiKey = 
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY) ||
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) ||
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) ||
+  (typeof import.meta !== 'undefined' && (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_ANON_KEY) ||
+  (typeof process !== 'undefined' && (
+    process.env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env?.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    process.env?.SUPABASE_PUBLISHABLE_KEY ||
+    process.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env?.VITE_SUPABASE_ANON_KEY ||
+    process.env?.SUPABASE_ANON_KEY
+  )) ||
+  '';
 
 const isRealUrl = Boolean(
   supabaseUrl && 
@@ -12,10 +32,10 @@ const isRealUrl = Boolean(
 );
 
 const isRealKey = Boolean(
-  supabaseAnonKey && 
-  !supabaseAnonKey.includes('placeholder') && 
-  !supabaseAnonKey.includes('your-key') &&
-  !supabaseAnonKey.includes('your_')
+  supabaseApiKey && 
+  !supabaseApiKey.includes('placeholder') && 
+  !supabaseApiKey.includes('your-key') &&
+  !supabaseApiKey.includes('your_')
 );
 
 export function clearStaleSupabaseTokens() {
@@ -24,7 +44,14 @@ export function clearStaleSupabaseTokens() {
     const keysToRemove: string[] = [];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
-      if (key && (key.startsWith('sb-') || key.includes('supabase.auth.token') || key.includes('sb_edu_ai_token'))) {
+      if (
+        key && (
+          key.startsWith('sb-') || 
+          key.startsWith('sb_') ||
+          key.includes('supabase.auth.token') || 
+          key.includes('sb_edu_ai_token')
+        )
+      ) {
         keysToRemove.push(key);
       }
     }
@@ -56,9 +83,9 @@ if (typeof window !== 'undefined') {
   });
 }
 
-// Only create the client if valid credentials exist, preventing network crashes if unconfigured
+// Initialize Supabase Client with updated interface and robust session caching
 export const supabase = (isRealUrl && isRealKey)
-  ? createClient(supabaseUrl, supabaseAnonKey, {
+  ? createClient(supabaseUrl, supabaseApiKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -66,5 +93,3 @@ export const supabase = (isRealUrl && isRealKey)
       }
     }) 
   : null;
-
-

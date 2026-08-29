@@ -41,6 +41,9 @@ export function Admin({ appBooks, onUpdateBook }: AdminProps) {
   const [curriculum, setCurriculum] = useState('General');
   const [location, setLocation] = useState('');
   const [subjects, setSubjects] = useState('');
+  const [publisher, setPublisher] = useState('');
+  const [isbn, setIsbn] = useState('');
+  const [isKicdApproved, setIsKicdApproved] = useState(false);
   const [coverImage, setCoverImage] = useState('');
   const [file, setFile] = useState<File | null>(null);
   
@@ -205,6 +208,9 @@ export function Admin({ appBooks, onUpdateBook }: AdminProps) {
           subjects,
           cover_image: coverImage || '',
           file_url: fileKey,
+          publisher: publisher || null,
+          is_kicd_approved: isKicdApproved,
+          isbn: isbn || null
         }
       ]).select();
 
@@ -408,16 +414,42 @@ export function Admin({ appBooks, onUpdateBook }: AdminProps) {
               </div>
 
               {educationLevel === 'School' && (
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Curriculum</label>
-                    <input type="text" placeholder="e.g. CBC, K-12" value={curriculum} onChange={e => setCurriculum(e.target.value)} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                <>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Curriculum</label>
+                      <input type="text" placeholder="e.g. CBC, K-12" value={curriculum} onChange={e => setCurriculum(e.target.value)} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Location</label>
+                      <input type="text" placeholder="e.g. Kenya, UK" value={location} onChange={e => setLocation(e.target.value)} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-600 mb-1">Location</label>
-                    <input type="text" placeholder="e.g. Kenya, UK" value={location} onChange={e => setLocation(e.target.value)} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                  
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">Publisher</label>
+                      <input type="text" placeholder="e.g. KLB, Oxford" value={publisher} onChange={e => setPublisher(e.target.value)} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-600 mb-1">ISBN (Optional)</label>
+                      <input type="text" placeholder="e.g. 978-9966..." value={isbn} onChange={e => setIsbn(e.target.value)} className="w-full px-3 py-1.5 border border-slate-200 rounded-lg text-xs" />
+                    </div>
                   </div>
-                </div>
+                  
+                  <div className="flex items-center gap-2 mt-1">
+                    <input 
+                      type="checkbox" 
+                      id="kicdApproved" 
+                      checked={isKicdApproved} 
+                      onChange={e => setIsKicdApproved(e.target.checked)}
+                      className="rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                    />
+                    <label htmlFor="kicdApproved" className="text-xs font-medium text-slate-700">
+                      Official KICD Approved Course Material
+                    </label>
+                  </div>
+                </>
               )}
 
               <div>

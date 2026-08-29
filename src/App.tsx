@@ -28,9 +28,15 @@ import { AppleBooksLibrary, AppleBooksAudiobooks, AppleBooksBookStore, AppleBook
 import { Sparkles, ShoppingBag, Users, BookOpen } from 'lucide-react';
 import { mockBooks, categories as initialCategories } from './data';
 import { ViewState, Book, Bookmark } from './types';
+import { getCurriculumBooks } from './lib/kenyaCurriculumService';
 import { OfflineBanner } from './components/OfflineBanner';
 import { BottomTabBar } from './components/BottomTabBar';
 import { getAllReadingProgressLocal } from './lib/offlineManager';
+import { 
+  syncUserReadingProgressFromSupabase, 
+  syncUserDailyGoalFromSupabase, 
+  setupHomeRealtimeSubscriptions 
+} from './lib/userHomeDataService';
 
 
 export default function App() {
@@ -251,9 +257,32 @@ export default function App() {
     const fetchBooks = async () => {
       if (!supabase) return;
       try {
-        const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
-        if (!error && data && Array.isArray(data) && data.length > 0) {
-          const apiBooks = data.map(b => ({
+        const [genericBooksRes, curriculumBooksRes] = await Promise.all([
+          supabase.from('books').select('*').order('created_at', { ascending: false }),
+          getCurriculumBooks()
+        ]);
+        
+        const genericBooks = (genericBooksRes.data && Array.isArray(genericBooksRes.data)) ? genericBooksRes.data : [];
+        const curriculumBooks = curriculumBooksRes || [];
+
+        let allBooks: Book[] = [];
+
+        // Map generic books
+        const mappedGeneric = genericBooks.map(b => {
+          // Detect publisher/kicd for existing KLB books if not explicit
+          let inferredPublisher = b.publisher || '';
+          let kicd = b.isKicdApproved || false;
+          
+          if (!inferredPublisher && (
+              b.author?.toLowerCase().includes('klb') || 
+              b.title?.toLowerCase().includes('klb') ||
+              b.author?.toLowerCase().includes('kenya literature bureau')
+            )) {
+            inferredPublisher = 'Kenya Literature Bureau (KLB)';
+            kicd = true;
+          }
+
+          return {
             id: b.id,
             title: b.title,
             author: b.author || 'Unknown',
@@ -265,13 +294,37 @@ export default function App() {
             curriculum: b.curriculum ? [b.curriculum] : undefined,
             subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
             country: b.description && b.description.includes('Location: ') ? [b.description.split('Location: ')[1].trim()] : undefined,
-            fileUrl: b.file_url 
-          }));
-          
-          setBooks(getPersistedBooks([...apiBooks, ...mockBooks]));
+            fileUrl: b.file_url,
+            publisher: inferredPublisher,
+            isKicdApproved: kicd
+          };
+        });
+
+        // Map curriculum books
+        const mappedCurriculum = curriculumBooks.map(cb => ({
+          id: cb.id,
+          title: cb.title,
+          author: cb.publisher,
+          publisher: cb.publisher,
+          isKicdApproved: cb.isKicdApproved,
+          coverImage: cb.coverImageUrl || '',
+          category: cb.category,
+          rating: 5.0,
+          description: cb.description || '',
+          level: cb.gradeLevel?.levelCategory || 'School',
+          curriculum: cb.gradeLevel?.curriculum?.name ? [cb.gradeLevel.curriculum.name] : ['CBC'],
+          subjects: cb.subject?.name ? [cb.subject.name] : undefined,
+          country: ['Kenya'],
+          fileUrl: cb.pdfFileUrl
+        }));
+
+        allBooks = [...mappedGeneric, ...mappedCurriculum];
+
+        if (allBooks.length > 0) {
+          setBooks(getPersistedBooks([...allBooks, ...mockBooks]));
           
           // update categories to include dynamic ones
-          const dbCategories = Array.from(new Set(data.map(b => b.category))).filter(Boolean);
+          const dbCategories = Array.from(new Set(allBooks.map(b => b.category))).filter(Boolean);
           if (dbCategories.length > 0) {
              setCategories(Array.from(new Set(['All', ...initialCategories, ...dbCategories])));
           }
@@ -315,6 +368,85 @@ export default function App() {
 
     return () => unsubscribe();
   }, []);
+
+  // Real-time synchronization for user reading progress & goals
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+
+    let isMounted = true;
+
+    // 1. Initial Cloud Sync on login / load
+    const syncUserData = async () => {
+      try {
+        const [progressMap] = await Promise.all([
+          syncUserReadingProgressFromSupabase(userId),
+          syncUserDailyGoalFromSupabase(userId)
+        ]);
+
+        if (isMounted && Object.keys(progressMap).length > 0) {
+          setBooks(prev =>
+            prev.map(book => {
+              if (progressMap[book.id] !== undefined) {
+                return { ...book, readProgress: progressMap[book.id] };
+              }
+              return book;
+            })
+          );
+        }
+      } catch (err) {
+        console.warn('[App] Realtime initial sync notice:', err);
+      }
+    };
+
+    syncUserData();
+
+    // 2. Realtime WebSocket subscriptions via Supabase Channels
+    const cleanupSubscriptions = setupHomeRealtimeSubscriptions(userId, {
+      onProgressChange: (bookId, progress) => {
+        setBooks(prev =>
+          prev.map(book => {
+            if (book.id === bookId) {
+              return { ...book, readProgress: progress };
+            }
+            return book;
+          })
+        );
+      },
+      onProfileChange: (newProfile) => {
+        setProfile(newProfile);
+      },
+      onBooksChange: () => {
+        if (!supabase) return;
+        supabase.from('books').select('*').order('created_at', { ascending: false }).then(({ data, error }) => {
+          if (!error && data && Array.isArray(data)) {
+            const apiBooks = data.map(b => ({
+              id: b.id,
+              title: b.title,
+              author: b.author || 'Unknown',
+              coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
+              category: b.category || 'General',
+              rating: 4.5,
+              description: b.description || '',
+              level: b.education_level,
+              curriculum: b.curriculum ? [b.curriculum] : undefined,
+              subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
+              country: b.description && b.description.includes('Location: ') ? [b.description.split('Location: ')[1].trim()] : undefined,
+              fileUrl: b.file_url 
+            }));
+            setBooks(getPersistedBooks([...apiBooks, ...mockBooks]));
+          }
+        }).catch(err => {
+          console.warn('[App] Realtime books sync error:', err);
+        });
+      }
+    });
+
+    return () => {
+      isMounted = false;
+      cleanupSubscriptions();
+    };
+  }, [session?.user?.id]);
 
   const handleAddBookmark = (bookmark: Bookmark) => {
     setBookmarks(prev => [bookmark, ...prev]);

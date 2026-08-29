@@ -9,6 +9,7 @@ import {
 } from './chat/initialData';
 import { ChatSidebar } from './chat/ChatSidebar';
 import { ChatWindow } from './chat/ChatWindow';
+import { ChatEmptyState } from './chat/ChatEmptyState';
 import { ChatInfoDrawer } from './chat/ChatInfoDrawer';
 import { FindFriendsModal } from './chat/FindFriendsModal';
 import { CallModal } from './chat/CallModal';
@@ -87,7 +88,15 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     const saved = localStorage.getItem('eduai_chat_conversations');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try { 
+        const parsed: Conversation[] = JSON.parse(saved);
+        const parsedIds = new Set(parsed.map(c => c.id));
+        const missing = INITIAL_CONVERSATIONS.filter(c => !parsedIds.has(c.id));
+        if (missing.length > 0) {
+          return [...INITIAL_CONVERSATIONS, ...parsed.filter(p => !INITIAL_CONVERSATIONS.some(ic => ic.id === p.id))];
+        }
+        return parsed;
+      } catch (e) {}
     }
     return INITIAL_CONVERSATIONS;
   });
@@ -96,14 +105,16 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>(() => {
     const saved = localStorage.getItem('eduai_chat_messages');
     if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
+      try { 
+        const parsed: Record<string, ChatMessage[]> = JSON.parse(saved);
+        return { ...INITIAL_MESSAGES, ...parsed };
+      } catch (e) {}
     }
     return INITIAL_MESSAGES;
   });
 
-  const [activeConversationId, setActiveConversationId] = useState<string>(() => {
-    return INITIAL_CONVERSATIONS[0]?.id || 'conv-teacher-1';
-  });
+  // Empty string initially so the right side displays the screenshot's empty state
+  const [activeConversationId, setActiveConversationId] = useState<string>('');
 
   // Mobile View Toggle: 'list' (Inbox/Threads) | 'chat' (Active conversation)
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
@@ -425,7 +436,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   return (
     <div className="flex h-[calc(100vh-3.5rem)] sm:h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-50 dark:bg-slate-950 relative">
       {/* Left Sidebar: Conversations & Active Friends (Full width on mobile when in 'list' view, hidden on mobile when in 'chat' view) */}
-      <div className={`w-full md:w-80 lg:w-96 flex-col shrink-0 h-full ${mobileView === 'list' ? 'flex' : 'hidden md:flex'}`}>
+      <div className={`w-full md:w-[380px] lg:w-[420px] xl:w-[440px] flex-col shrink-0 h-full ${mobileView === 'list' ? 'flex' : 'hidden md:flex'}`}>
         <ChatSidebar
           currentUser={currentUser}
           conversations={conversations}
@@ -454,14 +465,24 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
             onStartCall={handleStartCall}
             onToggleInfoDrawer={() => setIsInfoDrawerOpen(prev => !prev)}
             isInfoDrawerOpen={isInfoDrawerOpen}
-            onBackToList={() => setMobileView('list')}
+            onBackToList={() => {
+              setActiveConversationId('');
+              setMobileView('list');
+            }}
             onSendFriendRequest={handleSendFriendRequest}
             isPartnerTyping={isPartnerTyping}
           />
         ) : (
-          <div className="flex-1 flex items-center justify-center text-slate-400 p-4 text-center">
-            Select a chat to begin messaging
-          </div>
+          <ChatEmptyState
+            onOpenFindContacts={() => setIsFindFriendsOpen(true)}
+            onOpenAIHelp={() => {
+              if (onNavigate) {
+                onNavigate('sage');
+              } else {
+                handleSelectConversation('conv-meta-ai');
+              }
+            }}
+          />
         )}
       </div>
 

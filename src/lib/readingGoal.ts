@@ -1,3 +1,5 @@
+import { supabase } from './supabase';
+
 export type GoalType = 'time' | 'pages';
 
 export interface DayHistoryRecord {
@@ -141,7 +143,7 @@ export function getDailyGoal(): DailyReadingGoal {
   }
 }
 
-export function saveDailyGoal(goal: DailyReadingGoal): void {
+export function saveDailyGoal(goal: DailyReadingGoal, syncCloud = true): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(goal));
     if (typeof window !== 'undefined') {
@@ -149,6 +151,36 @@ export function saveDailyGoal(goal: DailyReadingGoal): void {
     }
   } catch (err) {
     console.error('Failed to save daily goal:', err);
+  }
+
+  // Push to Supabase asynchronously
+  if (syncCloud && supabase) {
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const userId = data?.user?.id;
+        if (userId) {
+          const { error } = await supabase
+            .from('user_reading_goals')
+            .upsert({
+              user_id: userId,
+              goal_type: goal.type,
+              target: goal.target,
+              current_minutes: goal.currentMinutes,
+              current_pages: goal.currentPages,
+              streak: goal.streak,
+              last_completed_date: goal.lastCompletedDate || null,
+              history: goal.history || {},
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'user_id'
+            });
+          if (error) console.warn('[readingGoal] Cloud sync notice:', error.message);
+        }
+      } catch (err) {
+        console.warn('[readingGoal] Cloud sync error:', err);
+      }
+    })();
   }
 }
 

@@ -199,7 +199,7 @@ export async function saveReadingProgressLocal(
     // Ignore storage quota limits on localStorage
   }
 
-  // 3. If offline, queue for cloud synchronization
+  // 3. Cloud synchronization
   if (!isAppOnline()) {
     queueOfflineAction('progress', {
       bookId,
@@ -207,6 +207,33 @@ export async function saveReadingProgressLocal(
       currentPage,
       totalPages
     });
+  } else if (supabase) {
+    // Push directly to Supabase reading_progress table
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const userId = data?.user?.id;
+        if (userId) {
+          const { error } = await supabase
+            .from('reading_progress')
+            .upsert({
+              user_id: userId,
+              book_id: bookId,
+              progress: boundedProgress,
+              current_page: currentPage || null,
+              total_pages: totalPages || null,
+              scroll_pct: typeof scrollPct === 'number' ? Math.round(scrollPct) : null,
+              last_read_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            }, {
+              onConflict: 'user_id,book_id'
+            });
+          if (error) console.warn('[offlineManager] Cloud progress sync notice:', error.message);
+        }
+      } catch (e) {
+        console.warn('[offlineManager] Cloud progress sync error:', e);
+      }
+    })();
   }
 
   // 4. Dispatch notification event

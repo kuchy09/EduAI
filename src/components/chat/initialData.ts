@@ -13,7 +13,7 @@ export const INITIAL_CURRENT_USER: ChatUser = {
   subjects: ['Physics', 'Mathematics', 'Computer Science'],
   friendStatus: 'friends',
   bio: 'Passionate STEM student preparing for university engineering pathways.',
-  location: 'Location off'
+  location: 'Nairobi, Kenya'
 };
 
 export const INITIAL_NOTES: UserNote[] = [
@@ -25,61 +25,32 @@ export const INITIAL_NOTES: UserNote[] = [
     bubbleText: 'Make this space yours...',
     createdAt: 'Just now',
     location: 'Location off'
-  },
-  {
-    id: 'note-1',
-    userId: 'user-itz-mulla',
-    userName: 'Itz mulla',
-    userAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-    bubbleText: 'Amazing week ❤️',
-    musicOrSubject: 'Leavin',
-    audioTrack: 'Rod Wave',
-    createdAt: '2h ago',
-    location: 'Nairobi'
-  },
-  {
-    id: 'note-2',
-    userId: 'user-majak',
-    userName: 'Majak',
-    userAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    bubbleText: 'Physics past papers 💯',
-    musicOrSubject: 'Study Grind',
-    createdAt: '4h ago',
-    location: 'Nakuru'
-  },
-  {
-    id: 'note-3',
-    userId: 'user-awien',
-    userName: 'awien.diar',
-    userAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    bubbleText: 'Reading Dirac Modern Physics 📚',
-    createdAt: '5h ago',
-    location: 'Mombasa'
   }
 ];
 
 export const INITIAL_USERS: ChatUser[] = [
-  // Contacts from screenshot
+  // 1. Marop Majok (from screenshot)
   {
-    id: 'user-itz-mulla',
-    name: 'Itz mulla',
-    email: 'itz.mulla@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    id: 'user-marop',
+    name: 'Marop Majok',
+    email: 'marop.majok@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
     role: 'student',
-    title: 'Grade 12 STEM & Computing Scholar',
+    title: 'Senior Secondary STEM Scholar',
     institution: 'Alliance High Academic Hub',
     status: 'online',
     lastSeen: 'Active now',
-    subjects: ['Physics', 'Robotics', 'Computer Science'],
+    subjects: ['Physics', 'Mathematics'],
     friendStatus: 'friends',
-    bio: 'Music enthusiast & avid physics problem solver.',
+    bio: 'Focused on CBC STEM preparation and university engineering admissions.',
     location: 'Nairobi, Kenya'
   },
+  // 2. Ifrah (from screenshot)
   {
-    id: 'user-awien',
-    name: 'awien.diar',
-    email: 'awien.diar@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+    id: 'user-ifrah',
+    name: 'Ifrah',
+    email: 'ifrah@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
     role: 'student',
     title: 'Senior High Biology & Chemistry',
     institution: 'Moi Girls National Academy',
@@ -87,55 +58,105 @@ export const INITIAL_USERS: ChatUser[] = [
     lastSeen: 'Active 20m ago',
     subjects: ['Biology', 'Chemistry'],
     friendStatus: 'friends',
-    bio: 'Passionate about medicine & biochemistry.',
+    bio: 'Biochemistry student. Loving the Edu AI reader highlights.',
     location: 'Eldoret, Kenya'
   },
+  // 3. Saphira (from screenshot)
   {
-    id: 'user-majak',
-    name: 'Majak',
-    email: 'majak@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Grade 12 Pure Mathematics Track',
-    institution: 'Nairobi Academic Senior Secondary',
-    status: 'offline',
-    lastSeen: 'Active 1d ago',
-    subjects: ['Mathematics', 'Physics', 'Algorithms'],
-    friendStatus: 'friends',
-    bio: 'Coding daily & mastering calculus.',
-    location: 'Nairobi, Kenya'
-  },
-  {
-    id: 'user-nba',
-    name: 'NEVER BROKE AGAIN',
-    email: 'nba@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Economics & Business Studies Scholar',
-    institution: 'Strathmore Secondary Hub',
-    status: 'away',
-    lastSeen: 'Active 3h ago',
-    subjects: ['Economics', 'Business Studies'],
-    friendStatus: 'friends',
-    bio: 'Future entrepreneur & financial analyst.',
-    location: 'Nairobi, Kenya'
-  },
-  {
-    id: 'user-mrw',
-    name: 'mrw_mb251',
-    email: 'mrw.mb251@student.edu',
+    id: 'user-saphira',
+    name: 'Saphira',
+    email: 'saphira@student.edu',
     avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
     role: 'student',
-    title: 'Creative Arts & Literature',
+    title: 'Literature & Social Sciences',
     institution: 'St. Jude Academy',
     status: 'offline',
-    lastSeen: 'Active 40w ago',
-    subjects: ['Literature', 'French', 'Art'],
+    lastSeen: 'Active Monday',
+    subjects: ['Literature', 'History', 'English'],
     friendStatus: 'friends',
-    bio: 'J\'aime follow please • French learner & artist.',
+    bio: 'Avid book lover and essayist.',
     location: 'Mombasa, Kenya'
   },
-
+  // 4. Mðøssŷ Qħøm (from screenshot)
+  {
+    id: 'user-moossy',
+    name: 'Mðøssŷ Qħøm',
+    email: 'moossy.qhom@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Pure Mathematics & Logic Track',
+    institution: 'Nairobi Academic Senior Secondary',
+    status: 'away',
+    lastSeen: 'Active Monday',
+    subjects: ['Mathematics', 'Computer Science'],
+    friendStatus: 'friends',
+    bio: 'Coding daily & mastering pure algorithms.',
+    location: 'Nairobi, Kenya'
+  },
+  // 5. Jabra (from screenshot)
+  {
+    id: 'user-jabra',
+    name: 'Jabra',
+    email: 'jabra@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Economics & Computing Track',
+    institution: 'Strathmore Secondary Hub',
+    status: 'online',
+    lastSeen: 'Active Sunday',
+    subjects: ['Economics', 'ICT', 'Business'],
+    friendStatus: 'friends',
+    bio: 'Tech enthusiast & future fintech developer.',
+    location: 'Nairobi, Kenya'
+  },
+  // 6. Maggy (from screenshot)
+  {
+    id: 'user-maggy',
+    name: 'Maggy',
+    email: 'maggy@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Creative Arts & Literature Track',
+    institution: 'Kenya National Academy',
+    status: 'online',
+    lastSeen: 'Active Sunday',
+    subjects: ['Art', 'French', 'Literature'],
+    friendStatus: 'friends',
+    bio: 'Art and design enthusiast. Active in study circles.',
+    location: 'Nakuru, Kenya'
+  },
+  // 7. Ibrahim Talu (from screenshot)
+  {
+    id: 'user-ibrahim',
+    name: 'Ibrahim Talu',
+    email: 'ibrahim.talu@student.edu',
+    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    role: 'student',
+    title: 'Physics & Natural Sciences Track',
+    institution: 'Alliance High Academic Hub',
+    status: 'away',
+    lastSeen: 'Active Sunday',
+    subjects: ['Physics', 'Chemistry', 'Mathematics'],
+    friendStatus: 'friends',
+    bio: 'Preparing for national engineering competitions.',
+    location: 'Nairobi, Kenya'
+  },
+  // Meta / Edu AI Assistant
+  {
+    id: 'user-meta-ai',
+    name: 'Edu AI Assistant',
+    email: 'ai.tutor@eduai.ac.ke',
+    avatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
+    role: 'teacher',
+    title: '24/7 Intelligent Academic Mentor',
+    institution: 'Edu AI Cognitive Cloud',
+    status: 'online',
+    lastSeen: 'Always active',
+    subjects: ['All CBC Subjects', 'Exam Prep', 'Research Summaries'],
+    friendStatus: 'friends',
+    bio: 'Ask me anything about your textbooks, math formulas, or study notes!',
+    location: 'Cloud AI'
+  },
   // Teachers
   {
     id: 'teacher-1',
@@ -166,234 +187,204 @@ export const INITIAL_USERS: ChatUser[] = [
     friendStatus: 'friends',
     bio: 'Specialist in pure mathematics, algorithmic proofs, and CBC Kenya exam prep.',
     location: 'Nakuru, Kenya'
-  },
-  {
-    id: 'teacher-3',
-    name: 'Prof. Grace Wanjiru',
-    email: 'grace.wanjiru@eduai.ac.ke',
-    avatar: 'https://images.unsplash.com/photo-1580894732444-8ecded7900cd?w=150&auto=format&fit=crop&q=80',
-    role: 'teacher',
-    title: 'Senior Literature & Linguistics Teacher',
-    institution: 'St. Jude Academy',
-    status: 'offline',
-    lastSeen: 'Active 2h ago',
-    subjects: ['Literature', 'English', 'Communication'],
-    friendStatus: 'pending_received',
-    bio: 'Guiding students through critical literary essays, drama analysis, and creative writing.',
-    location: 'Mombasa, Kenya'
-  },
-  {
-    id: 'teacher-4',
-    name: 'Mr. Patrick Mutua',
-    email: 'patrick.mutua@eduai.ac.ke',
-    avatar: 'https://images.unsplash.com/photo-1537368910025-700350fe46c7?w=150&auto=format&fit=crop&q=80',
-    role: 'teacher',
-    title: 'Computer Studies & ICT Faculty Lead',
-    institution: 'Strathmore Secondary Hub',
-    status: 'online',
-    lastSeen: 'Active now',
-    subjects: ['Computer Science', 'Cybersecurity', 'ICT'],
-    friendStatus: 'none',
-    bio: 'Passionate about coding bootcamps, algorithms, and cybersecurity fundamentals.',
-    location: 'Nairobi, Kenya'
-  },
-
-  // Other Students
-  {
-    id: 'student-1',
-    name: 'Elena Rodriguez',
-    email: 'elena.rodriguez@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Grade 12 STEM Scholar',
-    institution: 'Nairobi Academic Senior Secondary',
-    status: 'online',
-    lastSeen: 'Active now',
-    subjects: ['Physics', 'Chemistry', 'Calculus'],
-    friendStatus: 'friends',
-    bio: 'Study buddy for STEM subjects. Working through Paul Dirac Modern Physics.',
-    location: 'Nairobi, Kenya'
-  },
-  {
-    id: 'student-2',
-    name: 'Alex Chen',
-    email: 'alex.chen@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Computer Science Major Track',
-    institution: 'Nairobi Academic Senior Secondary',
-    status: 'online',
-    lastSeen: 'Active now',
-    subjects: ['Algorithms', 'Software Engineering', 'Math'],
-    friendStatus: 'friends',
-    bio: 'Coding daily in TypeScript & Python. Love solving algorithmic problems.',
-    location: 'Nairobi, Kenya'
-  },
-  {
-    id: 'student-3',
-    name: 'Faith Kiprono',
-    email: 'faith.kiprono@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Grade 11 Senior Secondary Student',
-    institution: 'Moi Girls National Academy',
-    status: 'offline',
-    lastSeen: 'Active 35m ago',
-    subjects: ['Biology', 'Chemistry', 'Agriculture'],
-    friendStatus: 'pending_received',
-    bio: 'Aiming for Biomedical Sciences. Dedicated note-taker and study group organizer.',
-    location: 'Eldoret, Kenya'
-  },
-  {
-    id: 'student-4',
-    name: 'Samuel Wanjala',
-    email: 'samuel.wanjala@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Grade 12 Pure Science Student',
-    institution: 'Lenana High School',
-    status: 'away',
-    lastSeen: 'Active 1h ago',
-    subjects: ['Physics', 'Mathematics', 'Geography'],
-    friendStatus: 'pending_sent',
-    bio: 'Pre-engineering student. Keen on kinematics and vector mathematics.',
-    location: 'Nairobi, Kenya'
-  },
-  {
-    id: 'student-6',
-    name: 'Dut Nyok',
-    email: 'dut.nyok@student.edu',
-    avatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-    role: 'student',
-    title: 'Grade 12 STEM & Computing Scholar',
-    institution: 'Alliance High Academic Hub',
-    status: 'online',
-    lastSeen: 'Active now',
-    subjects: ['Physics', 'Computer Science', 'Mathematics', 'Robotics'],
-    friendStatus: 'friends',
-    bio: 'Passionate STEM scholar, competitive programmer, and avid physics reader on Edu AI.',
-    location: 'Nairobi, Kenya'
   }
 ];
 
 export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
-  // Itz mulla
-  'conv-itz-mulla': [
+  // 1. Marop Majok
+  'conv-marop': [
     {
-      id: 'm-itz-1',
-      conversationId: 'conv-itz-mulla',
-      senderId: 'user-itz-mulla',
-      senderName: 'Itz mulla',
+      id: 'm-marop-1',
+      conversationId: 'conv-marop',
+      senderId: 'user-marop',
+      senderName: 'Marop Majok',
       senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-      content: 'Bro that physics theorem explanation on modern physics was super clean! 🔥',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 15).toISOString(),
-      status: 'read'
+      senderAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+      content: 'Hey Wolter, are you free this afternoon?',
+      createdAt: '12:34 PM',
+      status: 'delivered'
     },
     {
-      id: 'm-itz-2',
-      conversationId: 'conv-itz-mulla',
-      senderId: 'user-itz-mulla',
-      senderName: 'Itz mulla',
+      id: 'm-marop-2',
+      conversationId: 'conv-marop',
+      senderId: 'user-marop',
+      senderName: 'Marop Majok',
       senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
-      content: 'Reacted to your story: ❤️',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 15 + 1000 * 60).toISOString(),
-      status: 'read'
+      senderAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+      content: 'Bro have you started process',
+      createdAt: '12:36 PM',
+      status: 'delivered'
     }
   ],
 
-  // awien.diar
-  'conv-awien': [
+  // 2. Ifrah
+  'conv-ifrah': [
     {
-      id: 'm-awien-1',
-      conversationId: 'conv-awien',
-      senderId: 'user-awien',
-      senderName: 'awien.diar',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      content: 'Hey! Are you studying for the biology mock exams?',
-      createdAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm-awien-2',
-      conversationId: 'conv-awien',
+      id: 'm-ifrah-1',
+      conversationId: 'conv-ifrah',
       senderId: 'me',
       senderName: 'wolter_kuch',
       senderRole: 'student',
-      content: 'Yes, just finishing biochemistry summaries. Sent you the notes file!',
-      createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-      status: 'sent'
-    }
-  ],
-
-  // Majak
-  'conv-majak': [
-    {
-      id: 'm-majak-1',
-      conversationId: 'conv-majak',
-      senderId: 'user-majak',
-      senderName: 'Majak',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      content: 'Let me know when you want to review the calculus derivatives problem set.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24).toISOString(),
+      content: 'Did you get the revised biology study guide?',
+      createdAt: 'Yesterday 4:15 PM',
       status: 'read'
     },
     {
-      id: 'm-majak-2',
-      conversationId: 'conv-majak',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
+      id: 'm-ifrah-2',
+      conversationId: 'conv-ifrah',
+      senderId: 'user-ifrah',
+      senderName: 'Ifrah',
       senderRole: 'student',
-      content: 'Seen',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 22).toISOString(),
-      status: 'read'
+      senderAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
+      content: 'Yes',
+      createdAt: 'Yesterday',
+      status: 'delivered'
     }
   ],
 
-  // NEVER BROKE AGAIN
-  'conv-nba': [
+  // 3. Saphira
+  'conv-saphira': [
     {
-      id: 'm-nba-1',
-      conversationId: 'conv-nba',
-      senderId: 'user-nba',
-      senderName: 'NEVER BROKE AGAIN',
+      id: 'm-saphira-1',
+      conversationId: 'conv-saphira',
+      senderId: 'me',
+      senderName: 'wolter_kuch',
       senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-      content: 'Yo check out this business economics study doc when you get a chance.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 72).toISOString(),
+      content: 'Sorry for the late reply on the essay feedback!',
+      createdAt: 'Monday 2:10 PM',
       status: 'read'
     },
     {
-      id: 'm-nba-2',
-      conversationId: 'conv-nba',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
-      senderRole: 'student',
-      content: 'Sent',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 70).toISOString(),
-      status: 'sent'
-    }
-  ],
-
-  // mrw_mb251
-  'conv-mrw': [
-    {
-      id: 'm-mrw-1',
-      conversationId: 'conv-mrw',
-      senderId: 'user-mrw',
-      senderName: 'mrw_mb251',
+      id: 'm-saphira-2',
+      conversationId: 'conv-saphira',
+      senderId: 'user-saphira',
+      senderName: 'Saphira',
       senderRole: 'student',
       senderAvatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-      content: 'J\'aime o follow please',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 40).toISOString(),
+      content: "It's okay",
+      createdAt: 'Monday',
       status: 'read'
     }
   ],
 
-  // Conversation 1: Teacher to Student (Dr. Sarah Mwangi <-> wolter_kuch)
+  // 4. Mðøssŷ Qħøm
+  'conv-moossy': [
+    {
+      id: 'm-moossy-1',
+      conversationId: 'conv-moossy',
+      senderId: 'me',
+      senderName: 'wolter_kuch',
+      senderRole: 'student',
+      content: 'Brody',
+      createdAt: 'Monday',
+      status: 'delivered'
+    }
+  ],
+
+  // 5. Jabra
+  'conv-jabra': [
+    {
+      id: 'm-jabra-1',
+      conversationId: 'conv-jabra',
+      senderId: 'user-jabra',
+      senderName: 'Jabra',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+      content: 'Check out the new textbook chapters on macroeconomics!',
+      createdAt: 'Sunday 6:30 PM',
+      status: 'delivered'
+    },
+    {
+      id: 'm-jabra-2',
+      conversationId: 'conv-jabra',
+      senderId: 'user-jabra',
+      senderName: 'Jabra',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=150&auto=format&fit=crop&q=80',
+      content: '😍',
+      createdAt: 'Sunday',
+      status: 'delivered'
+    }
+  ],
+
+  // 6. Maggy
+  'conv-maggy': [
+    {
+      id: 'm-maggy-1',
+      conversationId: 'conv-maggy',
+      senderId: 'me',
+      senderName: 'wolter_kuch',
+      senderRole: 'student',
+      content: 'Can you join the study group call now?',
+      createdAt: 'Sunday 8:12 PM',
+      status: 'read'
+    },
+    {
+      id: 'm-maggy-2',
+      conversationId: 'conv-maggy',
+      senderId: 'user-maggy',
+      senderName: 'Maggy',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
+      content: 'Nah niko in hurry',
+      createdAt: 'Sunday',
+      status: 'delivered'
+    }
+  ],
+
+  // 7. Ibrahim Talu
+  'conv-ibrahim': [
+    {
+      id: 'm-ibrahim-1',
+      conversationId: 'conv-ibrahim',
+      senderId: 'user-ibrahim',
+      senderName: 'Ibrahim Talu',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+      content: 'Thanks for sending over the calculus formulas.',
+      createdAt: 'Sunday 9:45 PM',
+      status: 'delivered'
+    },
+    {
+      id: 'm-ibrahim-2',
+      conversationId: 'conv-ibrahim',
+      senderId: 'user-ibrahim',
+      senderName: 'Ibrahim Talu',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+      content: 'Will review them first thing in the morning.',
+      createdAt: 'Sunday 9:46 PM',
+      status: 'delivered'
+    },
+    {
+      id: 'm-ibrahim-3',
+      conversationId: 'conv-ibrahim',
+      senderId: 'user-ibrahim',
+      senderName: 'Ibrahim Talu',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+      content: 'Have a blessed night',
+      createdAt: 'Sunday',
+      status: 'delivered'
+    }
+  ],
+
+  // Meta / Edu AI
+  'conv-meta-ai': [
+    {
+      id: 'm-meta-1',
+      conversationId: 'conv-meta-ai',
+      senderId: 'user-meta-ai',
+      senderName: 'Edu AI Assistant',
+      senderRole: 'teacher',
+      senderAvatar: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=150&auto=format&fit=crop&q=80',
+      content: 'Hello Wolter! 👋 How can I help with your studies today? You can ask for textbook summaries, quiz practice, or concept explanations.',
+      createdAt: 'Just now',
+      status: 'read'
+    }
+  ],
+
+  // Teacher Dr. Sarah Mwangi
   'conv-teacher-1': [
     {
       id: 'm1-1',
@@ -402,328 +393,102 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       senderName: 'Dr. Sarah Mwangi',
       senderRole: 'teacher',
       senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      content: 'Hello! I reviewed your submission on the Kinematics problem set in Dirac\'s Modern Physics.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 4).toISOString(),
-      status: 'read',
-      reactions: { '👏': ['me'] }
-    },
-    {
-      id: 'm1-2',
-      conversationId: 'conv-teacher-1',
-      senderId: 'teacher-1',
-      senderName: 'Dr. Sarah Mwangi',
-      senderRole: 'teacher',
-      senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      content: 'Your mathematical derivation of relativistic momentum was spot-on! Take a look at Chapter 3 summary for next Tuesday.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 60 * 3.8).toISOString(),
-      status: 'read',
-      attachment: {
-        type: 'book',
-        bookId: '1',
-        bookTitle: 'Advanced Science: Modern Physics',
-        bookAuthor: 'Paul Dirac',
-        bookCover: 'https://images.unsplash.com/photo-1635070041078-e363dbe005cb?w=300&auto=format&fit=crop&q=80'
-      }
-    },
-    {
-      id: 'm1-3',
-      conversationId: 'conv-teacher-1',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
-      senderRole: 'student',
-      content: 'Thank you Dr. Sarah! I had a quick question regarding question 4B on wave-particle duality. Should we apply de Broglie\'s relation directly?',
-      createdAt: new Date(Date.now() - 1000 * 60 * 35).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm1-4',
-      conversationId: 'conv-teacher-1',
-      senderId: 'teacher-1',
-      senderName: 'Dr. Sarah Mwangi',
-      senderRole: 'teacher',
-      senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      content: 'Yes! First compute the momentum p = h/λ, and make sure to convert velocity to SI units before calculating kinetic energy.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 12).toISOString(),
-      status: 'read',
-      reactions: { '💡': ['me'] }
-    },
-    {
-      id: 'm1-5',
-      conversationId: 'conv-teacher-1',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
-      senderRole: 'student',
-      content: 'Understood! I will finish the chapter exercises before office hours tomorrow. Thank you!',
-      createdAt: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
-      status: 'delivered'
-    }
-  ],
-
-  // Conversation 2: Student to Student (Elena Rodriguez <-> wolter_kuch)
-  'conv-student-1': [
-    {
-      id: 'm2-1',
-      conversationId: 'conv-student-1',
-      senderId: 'student-1',
-      senderName: 'Elena Rodriguez',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      content: 'Hey! Are you joining the group study session for physics and algorithms tonight?',
-      createdAt: new Date(Date.now() - 1000 * 60 * 90).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm2-2',
-      conversationId: 'conv-student-1',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
-      senderRole: 'student',
-      content: 'Hey Elena! Yes definitely, I have my summary notes ready on Binary Search and QuickSort.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 75).toISOString(),
-      status: 'read',
-      attachment: {
-        type: 'book',
-        bookId: '2',
-        bookTitle: 'Algorithms & Data Structures',
-        bookAuthor: 'Thomas H. Cormen',
-        bookCover: 'https://images.unsplash.com/photo-1516116211227-bbc1562b322a?w=300&auto=format&fit=crop&q=80'
-      }
-    },
-    {
-      id: 'm2-3',
-      conversationId: 'conv-student-1',
-      senderId: 'student-1',
-      senderName: 'Elena Rodriguez',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      content: 'Awesome! I recorded a brief 45-second explanation on the divide-and-conquer recurrence relation theorem.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 40).toISOString(),
-      status: 'read',
-      attachment: {
-        type: 'voice',
-        name: 'Recurrence_Theorem_Overview.m4a',
-        duration: 45,
-        url: '#'
-      }
-    },
-    {
-      id: 'm2-4',
-      conversationId: 'conv-student-1',
-      senderId: 'student-1',
-      senderName: 'Elena Rodriguez',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      content: 'Let\'s start the audio call around 7:00 PM if that works for you! 📚✨',
-      createdAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-      status: 'read',
-      reactions: { '👍': ['me'], '❤️': ['me'] }
-    }
-  ],
-
-  // Conversation 3: Student to Student (Alex Chen <-> wolter_kuch)
-  'conv-student-2': [
-    {
-      id: 'm3-1',
-      conversationId: 'conv-student-2',
-      senderId: 'student-2',
-      senderName: 'Alex Chen',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      content: 'Hey man! Did you check out the new Kenyan CBC Grade 9 curriculum module in Edu AI?',
-      createdAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm3-2',
-      conversationId: 'conv-student-2',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
-      senderRole: 'student',
-      content: 'Yes! The interactive quizzes and AI explanations make studying way faster.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm3-3',
-      conversationId: 'conv-student-2',
-      senderId: 'student-2',
-      senderName: 'Alex Chen',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
-      content: 'Check this algorithm snippet for calculating Big-O tree depth in O(log n):',
-      createdAt: new Date(Date.now() - 1000 * 60 * 50).toISOString(),
-      status: 'read',
-      attachment: {
-        type: 'code',
-        language: 'typescript',
-        name: 'binary_tree_depth.ts',
-        codeSnippet: `function maxDepth(root: TreeNode | null): number {\n  if (!root) return 0;\n  return 1 + Math.max(maxDepth(root.left), maxDepth(root.right));\n}`
-      }
-    }
-  ],
-
-  // Conversation 4: Teacher to Teacher (Dr. Sarah Mwangi & Mr. David Ochieng)
-  'conv-teacher-group': [
-    {
-      id: 'm4-1',
-      conversationId: 'conv-teacher-group',
-      senderId: 'teacher-2',
-      senderName: 'Mr. David Ochieng',
-      senderRole: 'teacher',
-      senderAvatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=150&auto=format&fit=crop&q=80',
-      content: 'Dr. Sarah, have you finalized the midterm exam rubric for the STEM Senior Secondary stream?',
-      createdAt: new Date(Date.now() - 1000 * 60 * 300).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm4-2',
-      conversationId: 'conv-teacher-group',
-      senderId: 'teacher-1',
-      senderName: 'Dr. Sarah Mwangi',
-      senderRole: 'teacher',
-      senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      content: 'Yes David! I aligned 40% of the questions with CBC practical competencies and problem solving.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 240).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'm4-3',
-      conversationId: 'conv-teacher-group',
-      senderId: 'teacher-2',
-      senderName: 'Mr. David Ochieng',
-      senderRole: 'teacher',
-      senderAvatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=150&auto=format&fit=crop&q=80',
-      content: 'Excellent. The students have shown great engagement in the Edu AI interactive quizzes this term.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 95).toISOString(),
-      status: 'read',
-      reactions: { '👏': ['teacher-1'] }
-    }
-  ],
-
-  // Conversation 5: Multi-User Group / Study Classroom (CBC Senior STEM Study Circle)
-  'conv-group-1': [
-    {
-      id: 'mg-1',
-      conversationId: 'conv-group-1',
-      senderId: 'teacher-1',
-      senderName: 'Dr. Sarah Mwangi',
-      senderRole: 'teacher',
-      senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
-      content: 'Welcome everyone to the Senior STEM Academic Group! Feel free to post study questions and share textbook references.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 500).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'mg-2',
-      conversationId: 'conv-group-1',
-      senderId: 'student-3',
-      senderName: 'Faith Kiprono',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80',
-      content: 'Thank you Dr. Sarah! We are currently working on Chapter 4 review exercises.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 420).toISOString(),
-      status: 'read'
-    },
-    {
-      id: 'mg-3',
-      conversationId: 'conv-group-1',
-      senderId: 'student-1',
-      senderName: 'Elena Rodriguez',
-      senderRole: 'student',
-      senderAvatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=150&auto=format&fit=crop&q=80',
-      content: 'I created a shared mind-map for organic chemistry reactions if anyone wants to check it out!',
-      createdAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-      status: 'read',
-      reactions: { '❤️': ['me', 'student-3'], '🔥': ['me'] }
-    },
-    {
-      id: 'mg-4',
-      conversationId: 'conv-group-1',
-      senderId: 'me',
-      senderName: 'wolter_kuch',
-      senderRole: 'student',
-      content: 'That would be super helpful Elena! Looking forward to today\'s review session.',
-      createdAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
+      content: 'Hello Wolter! Outstanding work on your Physics Chapter 3 mechanics test.',
+      createdAt: 'Yesterday',
       status: 'read'
     }
   ]
 };
 
 export const INITIAL_CONVERSATIONS: Conversation[] = [
+  // 1. Marop Majok (12:36 PM, Unread 2)
   {
-    id: 'conv-itz-mulla',
+    id: 'conv-marop',
     type: 'direct',
-    participants: ['me', 'user-itz-mulla'],
+    participants: ['me', 'user-marop'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 2,
+    updatedAt: '12:36 PM',
+    lastMessage: INITIAL_MESSAGES['conv-marop'][INITIAL_MESSAGES['conv-marop'].length - 1]
+  },
+  // 2. Ifrah (Yesterday, Unread 1)
+  {
+    id: 'conv-ifrah',
+    type: 'direct',
+    participants: ['me', 'user-ifrah'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 1,
+    updatedAt: 'Yesterday',
+    lastMessage: INITIAL_MESSAGES['conv-ifrah'][INITIAL_MESSAGES['conv-ifrah'].length - 1]
+  },
+  // 3. Saphira (Monday)
+  {
+    id: 'conv-saphira',
+    type: 'direct',
+    participants: ['me', 'user-saphira'],
     groupRoleType: 'student-to-student',
     unreadCount: 0,
-    isPinned: true,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 15).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-itz-mulla'][INITIAL_MESSAGES['conv-itz-mulla'].length - 1]
+    updatedAt: 'Monday',
+    lastMessage: INITIAL_MESSAGES['conv-saphira'][INITIAL_MESSAGES['conv-saphira'].length - 1]
   },
+  // 4. Mðøssŷ Qħøm (Monday, Sent by me: ✓ Brody)
   {
-    id: 'conv-awien',
+    id: 'conv-moossy',
     type: 'direct',
-    participants: ['me', 'user-awien'],
+    participants: ['me', 'user-moossy'],
     groupRoleType: 'student-to-student',
     unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 120).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-awien'][INITIAL_MESSAGES['conv-awien'].length - 1]
+    updatedAt: 'Monday',
+    lastMessage: INITIAL_MESSAGES['conv-moossy'][INITIAL_MESSAGES['conv-moossy'].length - 1]
   },
+  // 5. Jabra (Sunday, Unread 2)
   {
-    id: 'conv-majak',
+    id: 'conv-jabra',
     type: 'direct',
-    participants: ['me', 'user-majak'],
+    participants: ['me', 'user-jabra'],
     groupRoleType: 'student-to-student',
-    unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 22).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-majak'][INITIAL_MESSAGES['conv-majak'].length - 1]
+    unreadCount: 2,
+    updatedAt: 'Sunday',
+    lastMessage: INITIAL_MESSAGES['conv-jabra'][INITIAL_MESSAGES['conv-jabra'].length - 1]
   },
+  // 6. Maggy (Sunday, Unread 1)
   {
-    id: 'conv-nba',
+    id: 'conv-maggy',
     type: 'direct',
-    participants: ['me', 'user-nba'],
+    participants: ['me', 'user-maggy'],
     groupRoleType: 'student-to-student',
-    unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 70).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-nba'][INITIAL_MESSAGES['conv-nba'].length - 1]
+    unreadCount: 1,
+    updatedAt: 'Sunday',
+    lastMessage: INITIAL_MESSAGES['conv-maggy'][INITIAL_MESSAGES['conv-maggy'].length - 1]
   },
+  // 7. Ibrahim Talu (Sunday, Unread 3)
   {
-    id: 'conv-mrw',
+    id: 'conv-ibrahim',
     type: 'direct',
-    participants: ['me', 'user-mrw'],
+    participants: ['me', 'user-ibrahim'],
     groupRoleType: 'student-to-student',
-    unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 60 * 24 * 7 * 40).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-mrw'][INITIAL_MESSAGES['conv-mrw'].length - 1]
+    unreadCount: 3,
+    updatedAt: 'Sunday',
+    lastMessage: INITIAL_MESSAGES['conv-ibrahim'][INITIAL_MESSAGES['conv-ibrahim'].length - 1]
   },
+  // 8. Edu AI Assistant
+  {
+    id: 'conv-meta-ai',
+    type: 'direct',
+    participants: ['me', 'user-meta-ai'],
+    groupRoleType: 'teacher-to-student',
+    unreadCount: 0,
+    updatedAt: 'Just now',
+    lastMessage: INITIAL_MESSAGES['conv-meta-ai'][INITIAL_MESSAGES['conv-meta-ai'].length - 1]
+  },
+  // 9. Dr. Sarah Mwangi
   {
     id: 'conv-teacher-1',
     type: 'direct',
     participants: ['me', 'teacher-1'],
     groupRoleType: 'teacher-to-student',
     unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 3).toISOString(),
+    updatedAt: 'Yesterday',
     lastMessage: INITIAL_MESSAGES['conv-teacher-1'][INITIAL_MESSAGES['conv-teacher-1'].length - 1]
-  },
-  {
-    id: 'conv-student-1',
-    type: 'direct',
-    participants: ['me', 'student-1'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 1,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 15).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-student-1'][INITIAL_MESSAGES['conv-student-1'].length - 1]
-  },
-  {
-    id: 'conv-group-1',
-    type: 'group',
-    name: 'CBC Senior STEM Study Circle',
-    groupAvatar: '🔬',
-    description: 'Collaborative study hub for Senior Secondary Physics, Chemistry & Math students and faculty mentors.',
-    participants: ['me', 'teacher-1', 'student-1', 'student-2', 'student-3'],
-    groupRoleType: 'study-group',
-    unreadCount: 0,
-    updatedAt: new Date(Date.now() - 1000 * 60 * 20).toISOString(),
-    lastMessage: INITIAL_MESSAGES['conv-group-1'][INITIAL_MESSAGES['conv-group-1'].length - 1]
   }
 ];
