@@ -758,7 +758,7 @@ Return a JSON object with a single 'steps' array. Each step should have:
 `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -881,7 +881,7 @@ Behavioral Persona:
       chatContext += `\nUser: ${prompt}\nSage AI:`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-2.5-flash",
         contents: chatContext,
       });
 
