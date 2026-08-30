@@ -758,7 +758,7 @@ Return a JSON object with a single 'steps' array. Each step should have:
 `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: prompt,
         config: {
           responseMimeType: "application/json",
@@ -790,7 +790,9 @@ Return a JSON object with a single 'steps' array. Each step should have:
     } catch (error: any) {
       console.error("Error generating learning path:", error);
       let errorMessage = "Failed to generate learning path";
-      if (error?.status === 503 || error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE') || error?.message?.includes('high demand')) {
+      if (error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('RESOURCE_EXHAUSTED') || error?.message?.includes('prepayment credits are depleted')) {
+        errorMessage = "Your Gemini API credits are depleted. Please check your billing settings in Google AI Studio to add credits.";
+      } else if (error?.status === 503 || error?.message?.includes('503') || error?.message?.includes('UNAVAILABLE') || error?.message?.includes('high demand')) {
         errorMessage = "The AI model is currently experiencing high demand. Please try again in a few moments.";
       }
       res.status(503).json({ error: errorMessage });
@@ -881,7 +883,7 @@ Behavioral Persona:
       chatContext += `\nUser: ${prompt}\nSage AI:`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: chatContext,
       });
 
@@ -895,7 +897,9 @@ Behavioral Persona:
       }
 
       let errorMessage = "Failed to generate chat response";
-      if (error?.status === 503 || errorString.includes('503') || errorString.includes('UNAVAILABLE') || errorString.includes('high demand')) {
+      if (error?.status === 429 || errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED') || errorString.includes('prepayment credits are depleted')) {
+        errorMessage = "Your Gemini API credits are depleted. Please check your billing settings in Google AI Studio to add credits.";
+      } else if (error?.status === 503 || errorString.includes('503') || errorString.includes('UNAVAILABLE') || errorString.includes('high demand')) {
         errorMessage = "The AI model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again in a few moments.";
       }
       res.status(error?.status || 500).json({ error: errorMessage });
