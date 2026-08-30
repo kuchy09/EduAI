@@ -74,11 +74,13 @@ if (typeof window !== 'undefined') {
       msg.includes('Invalid Refresh Token') ||
       msg.includes('refresh_token_not_found') ||
       msg.includes('Refresh Token Not Found') ||
-      (msg.includes('Failed to fetch') && (reason?.stack?.includes('supabase') || reason?.stack?.includes('gotrue') || msg.includes('auth')))
+      msg.includes('Failed to fetch')
     ) {
       event.preventDefault();
-      clearStaleSupabaseTokens();
-      console.warn('Supabase auth session auto-cleared due to invalid/expired refresh token or network fault:', msg);
+      if (!msg.includes('Failed to fetch')) {
+        clearStaleSupabaseTokens();
+      }
+      console.warn('Handled background network or auth error:', msg);
     }
   });
 }

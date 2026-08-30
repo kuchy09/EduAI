@@ -416,9 +416,10 @@ export default function App() {
       onProfileChange: (newProfile) => {
         setProfile(newProfile);
       },
-      onBooksChange: () => {
+      onBooksChange: async () => {
         if (!supabase) return;
-        supabase.from('books').select('*').order('created_at', { ascending: false }).then(({ data, error }) => {
+        try {
+          const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
           if (!error && data && Array.isArray(data)) {
             const apiBooks = data.map(b => ({
               id: b.id,
@@ -436,9 +437,9 @@ export default function App() {
             }));
             setBooks(getPersistedBooks([...apiBooks, ...mockBooks]));
           }
-        }).catch(err => {
+        } catch (err) {
           console.warn('[App] Realtime books sync error:', err);
-        });
+        }
       }
     });
 
