@@ -9,7 +9,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import PDFDocument from "pdfkit";
 import { generateKLBPhysicsPdf } from "./server/klbPhysicsPdf";
 
-const UPLOADS_DIR = path.join(process.cwd(), "uploads");
+const UPLOADS_DIR = process.env.VERCEL ? path.join("/tmp", "uploads") : path.join(process.cwd(), "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
@@ -523,9 +523,8 @@ function getMimeType(filename: string, defaultType = 'application/octet-stream')
   }
 }
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
+const app = express();
+const PORT = process.env.PORT || 3000;
 
   app.use(express.json());
 
@@ -904,7 +903,10 @@ Behavioral Persona:
   });
 
   // Vite middleware for development
+
+async function startDevServer() {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -919,8 +921,15 @@ Behavioral Persona:
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Server running on port ${PORT}`);
   });
 }
 
-startServer();
+// Check if file is run directly (ESM or CJS)
+const isMain = process.argv[1] && (import.meta.url === `file://${process.argv[1]}` || require.main === module);
+if (process.env.VERCEL !== "1" && !process.env.VERCEL_ENV) {
+  startDevServer();
+}
+
+export default app;
+
