@@ -78,6 +78,17 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
 
   // Initial load from Supabase directory
   useEffect(() => {
+    const handleAvatarChange = (e: any) => {
+      const newAvatar = e?.detail?.avatarUrl;
+      if (newAvatar) {
+        setCurrentUser(prev => ({ ...prev, avatar: newAvatar }));
+      }
+    };
+    window.addEventListener('user_avatar_changed', handleAvatarChange);
+    return () => window.removeEventListener('user_avatar_changed', handleAvatarChange);
+  }, []);
+
+  useEffect(() => {
     const loadDirectory = async () => {
       if (user?.id) {
         await syncCurrentUserToSupabase(user, {

@@ -63,10 +63,28 @@ export function Profile() {
     const file = event.target.files?.[0];
     if (!file) return;
 
+    let previewDataUrl = '';
+
     try {
       setIsUploading(true);
       
-      // Upload directly to our backend which then puts it to B2
+      // 1. Read locally first for guaranteed instant 0ms preview and offline persistence
+      await new Promise<void>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const res = e.target?.result as string;
+          if (res) {
+            previewDataUrl = res;
+            saveUserAvatarLocally(res, res);
+            setProfile((prev: any) => ({ ...(prev || {}), avatar_url: res }));
+          }
+          resolve();
+        };
+        reader.onerror = () => resolve();
+        reader.readAsDataURL(file);
+      });
+
+      // 2. Upload directly to our backend which then puts it to persistent disk and B2
       const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}`, {
         method: 'POST',
         body: file,
@@ -76,43 +94,40 @@ export function Profile() {
       });
 
       if (!uploadRes.ok) {
-        const text = await uploadRes.text();
-        throw new Error(`Upload failed: ${uploadRes.status} ${text}`);
-      }
+        console.warn(`Upload to server completed with status ${uploadRes.status}, local photo retained.`);
+      } else {
+        const data = await uploadRes.json();
+        const fileKey = data?.key;
+        if (fileKey) {
+          saveUserAvatarLocally(fileKey, previewDataUrl);
+          setProfile((prev: any) => ({ ...(prev || {}), avatar_url: fileKey }));
 
-      const { key: fileKey } = await uploadRes.json();
-      
-      if (fileKey) {
-        // Immediately persist locally and broadcast to entire application
-        saveUserAvatarLocally(fileKey);
-        setProfile((prev: any) => ({ ...(prev || {}), avatar_url: fileKey }));
-
-        // Also update Supabase metadata if logged in
-        if (supabase && user) {
-          try {
-            await supabase.auth.updateUser({
-              data: { avatar_url: fileKey, profile_photo_key: fileKey }
-            });
-          } catch (e) {
-            console.warn("Auth updateUser error:", e);
-          }
-
-          try {
-            const { data, error } = await supabase.from('profiles').update({
-              avatar_url: fileKey
-            }).eq('id', user.id).select().single();
-            if (!error && data) {
-              setProfile(data);
+          // Also update Supabase metadata if logged in
+          if (supabase && user) {
+            try {
+              await supabase.auth.updateUser({
+                data: { avatar_url: fileKey, profile_photo_key: fileKey }
+              });
+            } catch (e) {
+              console.warn("Auth updateUser error:", e);
             }
-          } catch (e) {
-            console.warn("Profiles update error:", e);
+
+            try {
+              const { data: updatedProfile, error } = await supabase.from('profiles').update({
+                avatar_url: fileKey
+              }).eq('id', user.id).select().single();
+              if (!error && updatedProfile) {
+                setProfile(updatedProfile);
+              }
+            } catch (e) {
+              console.warn("Profiles update error:", e);
+            }
           }
         }
       }
-
     } catch (error) {
-      console.error('Error uploading photo:', error);
-      alert('Failed to upload photo: ' + (error instanceof Error ? error.message : ""));
+      console.error('Error during photo upload:', error);
+      // Even if network failed, the preview was saved locally so user doesn't lose their avatar
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

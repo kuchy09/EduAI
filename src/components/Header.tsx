@@ -2,7 +2,7 @@ import {
   Search, Bell, MoreHorizontal, Book as BookIcon, Map, FileQuestion, 
   Headphones, ShoppingBag, X, CheckCircle2, Sparkles, ArrowRight,
   BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp,
-  MessageCircle, Moon, Sun, User
+  MessageCircle, Moon, Sun, User, Camera, Loader2
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -12,7 +12,8 @@ import { useOffline } from '../lib/useOffline';
 import { getRelatedSearchSuggestions } from '../lib/searchSuggestions';
 import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
-import { useUserAvatar } from '../lib/userAvatarService';
+import { useUserAvatar, saveUserAvatarLocally } from '../lib/userAvatarService';
+import { supabase } from '../lib/supabase';
 
 interface HeaderProps {
   currentView?: ViewState;
@@ -94,10 +95,67 @@ export function Header({
 
   const userAvatarUrl = useUserAvatar(user);
   const [avatarImgFailed, setAvatarImgFailed] = useState(false);
+  const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
+  const headerFileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     setAvatarImgFailed(false);
   }, [userAvatarUrl]);
+
+  const handleHeaderPhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    let previewDataUrl = '';
+    try {
+      setIsUploadingPhoto(true);
+
+      // 1. Instant local base64 display across whole app
+      await new Promise<void>((resolve) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          const res = e.target?.result as string;
+          if (res) {
+            previewDataUrl = res;
+            saveUserAvatarLocally(res, res);
+            setAvatarImgFailed(false);
+          }
+          resolve();
+        };
+        reader.onerror = () => resolve();
+        reader.readAsDataURL(file);
+      });
+
+      // 2. Upload to server disk & B2 for cloud sync
+      const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}`, {
+        method: 'POST',
+        body: file,
+        headers: { 'Content-Type': file.type },
+      });
+
+      if (uploadRes.ok) {
+        const data = await uploadRes.json();
+        if (data?.key) {
+          saveUserAvatarLocally(data.key, previewDataUrl);
+          if (supabase && user?.id) {
+            try {
+              await supabase.auth.updateUser({
+                data: { avatar_url: data.key, profile_photo_key: data.key }
+              });
+              await supabase.from('profiles').update({ avatar_url: data.key }).eq('id', user.id);
+            } catch (e) {
+              console.warn("Supabase profile photo update notice:", e);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("Header photo upload error:", err);
+    } finally {
+      setIsUploadingPhoto(false);
+      if (headerFileInputRef.current) headerFileInputRef.current.value = '';
+    }
+  };
 
   const userInitial = useMemo(() => {
     const name = user?.user_metadata?.full_name;
@@ -930,6 +988,14 @@ export function Header({
       <div className="flex items-center gap-1.5 sm:gap-2.5 ml-1.5 sm:ml-4 shrink-0">
         {/* User's Profile Locality & Quick Menu (Replaces standalone Dark/Light toggle on Home Page) */}
         <div className="relative" ref={profileMenuRef}>
+          <input 
+            type="file" 
+            ref={headerFileInputRef} 
+            onChange={handleHeaderPhotoUpload} 
+            accept="image/*" 
+            className="hidden" 
+          />
+
           <button 
             onClick={() => {
               triggerCapsuleFeedback({ pitch: 650, volume: 0.16, hapticDuration: 12 });
@@ -948,7 +1014,14 @@ export function Header({
                 src={userAvatarUrl} 
                 alt="Profile" 
                 className="w-full h-full object-cover rounded-full"
-                onError={() => setAvatarImgFailed(true)}
+                onError={() => {
+                  const fallbackData = localStorage.getItem('user_avatar_data_url');
+                  if (fallbackData && userAvatarUrl !== fallbackData) {
+                    saveUserAvatarLocally(fallbackData, fallbackData);
+                  } else {
+                    setAvatarImgFailed(true);
+                  }
+                }}
               />
             ) : (
               <div className="w-full h-full bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-xs sm:text-sm font-display shadow-inner">
@@ -965,12 +1038,28 @@ export function Header({
             <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-3xl liquid-glass-dock border border-white/80 dark:border-slate-700/80 shadow-[0_20px_50px_rgba(0,0,0,0.25)] p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
               {/* Header profile identity */}
               <div className="flex items-center gap-3 pb-3 border-b border-slate-200/60 dark:border-slate-800">
-                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0 overflow-hidden">
+                <div 
+                  onClick={() => headerFileInputRef.current?.click()}
+                  className="group relative w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0 overflow-hidden cursor-pointer"
+                  title="Click to change photo"
+                >
                   {userAvatarUrl && !avatarImgFailed ? (
-                    <img src={userAvatarUrl} alt="Profile" className="w-full h-full object-cover" />
+                    <img 
+                      src={userAvatarUrl} 
+                      alt="Profile" 
+                      className="w-full h-full object-cover" 
+                      onError={() => setAvatarImgFailed(true)}
+                    />
                   ) : (
                     userInitial
                   )}
+                  <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
+                    {isUploadingPhoto ? (
+                      <Loader2 className="w-4 h-4 text-white animate-spin" />
+                    ) : (
+                      <Camera className="w-4 h-4 text-white" />
+                    )}
+                  </div>
                 </div>
                 <div className="min-w-0 flex-1">
                   <p className="font-bold text-slate-900 dark:text-white text-sm truncate font-display">
@@ -989,6 +1078,24 @@ export function Header({
 
               {/* Action: Go to Profile & Shortcuts */}
               <div className="py-2.5 space-y-1">
+                <button
+                  onClick={() => headerFileInputRef.current?.click()}
+                  disabled={isUploadingPhoto}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    {isUploadingPhoto ? (
+                      <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />
+                    ) : (
+                      <Camera className="w-4 h-4 text-indigo-500" />
+                    )}
+                    <span>{isUploadingPhoto ? 'Uploading photo...' : 'Upload / Change Photo'}</span>
+                  </div>
+                  <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded-full border border-indigo-200/60 dark:border-indigo-800/60">
+                    Upload
+                  </span>
+                </button>
+
                 <button
                   onClick={() => {
                     setIsProfileMenuOpen(false);

@@ -15,6 +15,12 @@ interface SidebarProps {
 export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarProps) {
   const [user, setUser] = useState<any>(null);
   const avatarUrl = useUserAvatar(user);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUrl]);
+
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = ((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light';
@@ -173,14 +179,12 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
             }`}
           >
             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm overflow-hidden">
-              {avatarUrl ? (
+              {avatarUrl && !avatarFailed ? (
                 <img 
                   src={avatarUrl} 
                   alt="Profile" 
                   className="w-full h-full object-cover" 
-                  onError={(e) => {
-                    (e.target as HTMLElement).style.display = 'none';
-                  }}
+                  onError={() => setAvatarFailed(true)}
                 />
               ) : user?.email ? (
                 user.email.charAt(0).toUpperCase()

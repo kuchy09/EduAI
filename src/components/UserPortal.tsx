@@ -78,6 +78,18 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
   const [requestTargetUser, setRequestTargetUser] = useState<ChatUser | null>(null);
   const [customRequestNote, setCustomRequestNote] = useState('');
 
+  // Realtime avatar updates
+  useEffect(() => {
+    const handleAvatarChange = (e: any) => {
+      const newAvatar = e?.detail?.avatarUrl;
+      if (newAvatar) {
+        setCurrentUser(prev => ({ ...prev, avatar: newAvatar }));
+      }
+    };
+    window.addEventListener('user_avatar_changed', handleAvatarChange);
+    return () => window.removeEventListener('user_avatar_changed', handleAvatarChange);
+  }, []);
+
   // Initial Sync & Fetch
   useEffect(() => {
     const initPortal = async () => {

@@ -12,6 +12,7 @@ import { DailyReadingGoalCard } from './DailyReadingGoalCard';
 import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
 import { fetchUserDashboardMetrics, UserStatsSummary } from '../lib/userHomeDataService';
 import { isAppOnline } from '../lib/offlineManager';
+import { useUserAvatar } from '../lib/userAvatarService';
 
 interface DashboardProps {
   books: Book[];
@@ -23,6 +24,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: DashboardProps) {
+  const avatarUrl = useUserAvatar(user);
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [metrics, setMetrics] = useState<UserStatsSummary>({
     booksRead: 0,
@@ -204,13 +206,30 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
         <div className="absolute bottom-0 left-1/3 w-60 h-60 bg-brand-400/20 rounded-full blur-2xl pointer-events-none"></div>
         
         <div className="relative z-10 space-y-4 max-w-2xl">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-white/20 rounded-full text-xs font-medium backdrop-blur-sm shadow-inner">
-            <Sparkles className="w-3.5 h-3.5 text-amber-300" />
-            <span>AI Personalized Reading Feed</span>
+          <div className="flex items-center gap-3.5">
+            <button 
+              onClick={() => onNavigate?.('profile')}
+              className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-2xl ring-2 ring-white/40 p-0.5 shadow-lg overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all bg-white/20 group"
+              title="View & Edit Profile"
+            >
+              {avatarUrl ? (
+                <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover rounded-xl" />
+              ) : (
+                <div className="w-full h-full bg-gradient-to-tr from-white/30 to-white/10 backdrop-blur-md rounded-xl flex items-center justify-center font-bold text-lg text-white">
+                  {firstName.charAt(0).toUpperCase()}
+                </div>
+              )}
+            </button>
+            <div>
+              <div className="inline-flex items-center gap-2 px-3 py-0.5 bg-white/20 rounded-full text-[11px] font-medium backdrop-blur-sm shadow-inner mb-1">
+                <Sparkles className="w-3 h-3 text-amber-300" />
+                <span>AI Personalized Reading Feed</span>
+              </div>
+              <h2 className="text-2xl sm:text-3xl font-display font-bold tracking-tight">
+                {greeting}, {firstName}.
+              </h2>
+            </div>
           </div>
-          <h2 className="text-2xl sm:text-3xl font-display font-bold tracking-tight">
-            {greeting}, {firstName}.
-          </h2>
           <p className="text-brand-100 text-base sm:text-lg leading-relaxed italic">
             "{personalizedMessage}"
           </p>

@@ -724,6 +724,11 @@ app.get("/api/download", async (req, res) => {
     }
   }
 
+    const mimeType = getMimeType(filename);
+    if (mimeType.startsWith('image/')) {
+      return res.status(404).send("Image not found");
+    }
+
     // 3. Graceful fallback for study documents / syllabus materials
     const title = getTitleFromKey(key);
     res.setHeader('Content-Type', 'application/pdf');
