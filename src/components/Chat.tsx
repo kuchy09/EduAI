@@ -55,7 +55,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
       id: user?.id || INITIAL_CURRENT_USER.id,
       name: profile?.full_name || user?.user_metadata?.full_name || INITIAL_CURRENT_USER.name,
       email: user?.email || INITIAL_CURRENT_USER.email,
-      avatar: customAvatar || profile?.avatar_url || user?.user_metadata?.avatar_url || INITIAL_CURRENT_USER.avatar,
+      avatar: customAvatar || profile?.avatar_url || user?.user_metadata?.avatar_url || '',
       role: detectedRole === 'teacher' ? 'teacher' : 'student',
       title: detectedRole === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)'
     };

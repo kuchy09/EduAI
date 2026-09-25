@@ -25,6 +25,12 @@ interface DashboardProps {
 
 export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: DashboardProps) {
   const avatarUrl = useUserAvatar(user);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUrl]);
+
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [metrics, setMetrics] = useState<UserStatsSummary>({
     booksRead: 0,
@@ -212,8 +218,13 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
               className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-2xl ring-2 ring-white/40 p-0.5 shadow-lg overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all bg-white/20 group"
               title="View & Edit Profile"
             >
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="Profile" className="w-full h-full object-cover rounded-xl" />
+              {avatarUrl && !avatarFailed ? (
+                <img 
+                  src={avatarUrl} 
+                  alt="Profile" 
+                  className="w-full h-full object-cover rounded-xl" 
+                  onError={() => setAvatarFailed(true)}
+                />
               ) : (
                 <div className="w-full h-full bg-gradient-to-tr from-white/30 to-white/10 backdrop-blur-md rounded-xl flex items-center justify-center font-bold text-lg text-white">
                   {firstName.charAt(0).toUpperCase()}

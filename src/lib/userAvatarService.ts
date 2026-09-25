@@ -8,7 +8,7 @@ export function getPublicAvatarUrl(keyOrUrl: string | null | undefined): string 
   if (trimmed.startsWith('http://') || trimmed.startsWith('https://') || trimmed.startsWith('data:') || trimmed.startsWith('blob:')) {
     return trimmed;
   }
-  return `/api/download?key=${encodeURIComponent(trimmed)}`;
+  return `/api/download?key=${encodeURIComponent(trimmed)}&inline=true`;
 }
 
 export function getStoredUserAvatar(user?: any): string | null {
@@ -22,7 +22,9 @@ export function getStoredUserAvatar(user?: any): string | null {
     // 2. Check direct cached full URL in localStorage
     const cachedUrl = localStorage.getItem('user_custom_avatar');
     if (cachedUrl && cachedUrl.trim().length > 0) {
-      return getPublicAvatarUrl(cachedUrl);
+      if (!cachedUrl.includes('photo-1534528741775-53994a69daeb')) {
+        return getPublicAvatarUrl(cachedUrl);
+      }
     }
 
     // 3. Check cached file key in localStorage
@@ -39,13 +41,15 @@ export function getStoredUserAvatar(user?: any): string | null {
       return getPublicAvatarUrl(user.user_metadata.profile_photo_key);
     }
 
-    // 5. Check cached chat current user object
+    // 5. Check cached chat current user object (ignoring mock female stock avatar)
     const chatCurrentUserRaw = localStorage.getItem('eduai_chat_current_user');
     if (chatCurrentUserRaw) {
       try {
         const parsed = JSON.parse(chatCurrentUserRaw);
         if (parsed?.avatar && typeof parsed.avatar === 'string' && parsed.avatar.trim().length > 0) {
-          return getPublicAvatarUrl(parsed.avatar);
+          if (!parsed.avatar.includes('photo-1534528741775-53994a69daeb')) {
+            return getPublicAvatarUrl(parsed.avatar);
+          }
         }
       } catch {
         // Ignore json parse error
@@ -59,7 +63,7 @@ export function getStoredUserAvatar(user?: any): string | null {
         const parsed = JSON.parse(chatUsersRaw);
         if (Array.isArray(parsed)) {
           const found = parsed.find((u: any) => u.id === user?.id || u.id === 'me');
-          if (found?.avatar) {
+          if (found?.avatar && !found.avatar.includes('photo-1534528741775-53994a69daeb')) {
             return getPublicAvatarUrl(found.avatar);
           }
         }
@@ -163,27 +167,39 @@ export function useUserAvatar(user?: any): string | null {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(() => getStoredUserAvatar(user));
 
   useEffect(() => {
+    let isMounted = true;
+
     // 1. Initial resolution
     const current = getStoredUserAvatar(user);
-    if (current) {
+    if (current && isMounted) {
       setAvatarUrl(current);
     }
 
     // 2. Fetch from Supabase profiles table if available
-    let isMounted = true;
-    if (supabase && user?.id) {
+    if (supabase) {
       const fetchProfileAvatar = async () => {
         try {
+          let targetUserId = user?.id;
+          if (!targetUserId) {
+            const authRes = await supabase.auth.getUser();
+            targetUserId = authRes?.data?.user?.id;
+          }
+          if (!targetUserId) return;
+
           const { data, error } = await supabase
             .from('profiles')
             .select('avatar_url')
-            .eq('id', user.id)
+            .eq('id', targetUserId)
             .single();
 
           if (!error && data?.avatar_url && isMounted) {
             const resolved = getPublicAvatarUrl(data.avatar_url);
             if (resolved) {
-              setAvatarUrl(resolved);
+              const currentDataUrl = localStorage.getItem('user_avatar_data_url');
+              // Only override state if we do not already have an instant data URL preview
+              if (!currentDataUrl || (!currentDataUrl.startsWith('data:image') && !currentDataUrl.startsWith('blob:'))) {
+                setAvatarUrl(resolved);
+              }
               localStorage.setItem('user_custom_avatar', resolved);
               localStorage.setItem('user_profile_avatar_key', data.avatar_url);
             }

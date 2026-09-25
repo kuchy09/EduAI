@@ -1016,8 +1016,9 @@ export function Header({
                 className="w-full h-full object-cover rounded-full"
                 onError={() => {
                   const fallbackData = localStorage.getItem('user_avatar_data_url');
-                  if (fallbackData && userAvatarUrl !== fallbackData) {
+                  if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
                     saveUserAvatarLocally(fallbackData, fallbackData);
+                    setAvatarImgFailed(false);
                   } else {
                     setAvatarImgFailed(true);
                   }
@@ -1048,7 +1049,15 @@ export function Header({
                       src={userAvatarUrl} 
                       alt="Profile" 
                       className="w-full h-full object-cover" 
-                      onError={() => setAvatarImgFailed(true)}
+                      onError={() => {
+                        const fallbackData = localStorage.getItem('user_avatar_data_url');
+                        if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
+                          saveUserAvatarLocally(fallbackData, fallbackData);
+                          setAvatarImgFailed(false);
+                        } else {
+                          setAvatarImgFailed(true);
+                        }
+                      }}
                     />
                   ) : (
                     userInitial

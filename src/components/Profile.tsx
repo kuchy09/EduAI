@@ -9,6 +9,11 @@ export function Profile() {
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarUrl = useUserAvatar(user);
+  const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    setAvatarFailed(false);
+  }, [avatarUrl]);
 
   useEffect(() => {
     if (!supabase) return;
@@ -35,7 +40,8 @@ export function Profile() {
             if (data) {
               setProfile(data);
               if (data.avatar_url) {
-                saveUserAvatarLocally(data.avatar_url);
+                const existingData = localStorage.getItem('user_avatar_data_url') || undefined;
+                saveUserAvatarLocally(data.avatar_url, existingData);
               }
             } else {
               try {
@@ -159,23 +165,26 @@ export function Profile() {
                 accept="image/*" 
               />
               <div className="w-32 h-32 sm:w-40 sm:h-40 bg-white p-1.5 rounded-full z-10 shadow-md relative overflow-hidden">
-                {avatarUrl ? (
+                {avatarUrl && !avatarFailed ? (
                   <img 
                     src={avatarUrl} 
                     alt="Profile" 
                     className="w-full h-full rounded-full object-cover"
+                    onError={() => setAvatarFailed(true)}
                   />
-                ) : profile?.avatar_url ? (
+                ) : profile?.avatar_url && !avatarFailed ? (
                   <img 
                     src={getPublicUrl(profile.avatar_url)} 
                     alt="Profile" 
                     className="w-full h-full rounded-full object-cover"
+                    onError={() => setAvatarFailed(true)}
                   />
-                ) : user?.user_metadata?.profile_photo_key ? (
+                ) : user?.user_metadata?.profile_photo_key && !avatarFailed ? (
                   <img 
                     src={getPublicUrl(user.user_metadata.profile_photo_key)} 
                     alt="Profile" 
                     className="w-full h-full rounded-full object-cover"
+                    onError={() => setAvatarFailed(true)}
                   />
                 ) : (
                   <div className="w-full h-full bg-brand-100 rounded-full flex items-center justify-center text-4xl font-display font-bold text-brand-600">

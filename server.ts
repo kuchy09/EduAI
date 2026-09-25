@@ -707,17 +707,41 @@ app.get("/api/download", async (req, res) => {
 
       const response = await s3.send(command);
       
-      if (response.ContentType) res.setHeader('Content-Type', response.ContentType);
+      const mimeType = response.ContentType || getMimeType(filename);
+      res.setHeader('Content-Type', mimeType);
       if (response.ContentLength) res.setHeader('Content-Length', response.ContentLength);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
       
-      if (inline === 'true') {
+      if (inline === 'true' || mimeType.startsWith('image/')) {
         res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
       } else {
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       }
       
       if (response.Body) {
-        return (response.Body as any).pipe(res);
+        try {
+          const chunks: any[] = [];
+          for await (const chunk of (response.Body as any)) {
+            chunks.push(chunk);
+          }
+          const buffer = Buffer.concat(chunks);
+          
+          // Cache to local disk so future requests are instant 0ms
+          try {
+            const localDir = path.dirname(localFilePath);
+            if (!fs.existsSync(localDir)) {
+              fs.mkdirSync(localDir, { recursive: true });
+            }
+            fs.writeFileSync(localFilePath, buffer);
+          } catch (cacheErr) {
+            console.warn("[Storage] Error caching remote file to disk:", cacheErr);
+          }
+
+          return res.end(buffer);
+        } catch (streamErr) {
+          console.error("[Storage] Error reading stream from B2:", streamErr);
+          return (response.Body as any).pipe(res);
+        }
       }
     } catch (error: any) {
       console.warn(`[Storage] Remote B2 fetch for ${key} notice:`, error.message || error);
