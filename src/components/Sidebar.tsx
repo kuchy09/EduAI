@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, X, Bell, UserPlus, Moon, Sun } from 'lucide-react';
+import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
@@ -71,13 +71,9 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
 
   const navItems: { id: ViewState; label: string; icon: React.ReactNode }[] = [
     { id: 'progress', label: 'My Progress', icon: <LineChart className="w-5 h-5" /> },
-    { id: 'notifications', label: 'Notifications', icon: <Bell className="w-5 h-5" /> },
-    { id: 'workspace', label: 'Workspace', icon: <FolderArchive className="w-5 h-5" /> },
     { id: 'learning-path', label: 'Learning Path', icon: <Map className="w-5 h-5" /> },
-    { id: 'quizzes', label: 'Quizzes', icon: <FileQuestion className="w-5 h-5" /> },
     { id: 'community', label: 'Community', icon: <Users className="w-5 h-5" /> },
     { id: 'users-portal', label: 'Find Members & Friends', icon: <UserPlus className="w-5 h-5" /> },
-    { id: 'chat', label: 'Student Chat', icon: <MessageCircle className="w-5 h-5" /> },
     { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
     { id: 'support', label: 'Support', icon: <LifeBuoy className="w-5 h-5" /> },
   ];

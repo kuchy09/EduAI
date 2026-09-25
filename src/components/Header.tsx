@@ -2,7 +2,7 @@ import {
   Search, Bell, MoreHorizontal, Book as BookIcon, Map, FileQuestion, 
   Headphones, ShoppingBag, X, CheckCircle2, Sparkles, ArrowRight,
   BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp,
-  MessageCircle, Moon, Sun
+  MessageCircle, Moon, Sun, User
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -72,7 +72,39 @@ export function Header({
 
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { cachedBookIds } = useOffline();
+
+  // Close profile menu on outside click
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (profileMenuRef.current && !profileMenuRef.current.contains(e.target as Node)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
+    if (isProfileMenuOpen) {
+      document.addEventListener('mousedown', handleOutsideClick);
+    }
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+    };
+  }, [isProfileMenuOpen]);
+
+  const userAvatarUrl = useMemo(() => {
+    const rawKey = user?.user_metadata?.avatar_url || user?.user_metadata?.profile_photo_key;
+    if (!rawKey) return null;
+    if (rawKey.startsWith('http')) return rawKey;
+    return `/api/download?key=${encodeURIComponent(rawKey)}`;
+  }, [user]);
+
+  const userInitial = useMemo(() => {
+    const name = user?.user_metadata?.full_name;
+    if (name && name.trim().length > 0) return name.trim().charAt(0).toUpperCase();
+    const email = user?.email;
+    if (email && email.trim().length > 0) return email.trim().charAt(0).toUpperCase();
+    return 'U';
+  }, [user]);
 
   const handleToggleTheme = () => {
     const nextIsDark = !isDarkTheme;
@@ -895,18 +927,140 @@ export function Header({
       </div>
 
       <div className="flex items-center gap-1.5 sm:gap-2.5 ml-1.5 sm:ml-4 shrink-0">
-        {/* Dark / Light Theme Quick Toggle (Always Available) */}
-        <button 
-          onClick={handleToggleTheme}
-          className="relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-600 dark:text-slate-300 border-white/60 dark:border-white/10 hover:text-amber-500 dark:hover:text-amber-400 hover:border-amber-300 dark:hover:border-amber-700/60 shrink-0"
-          title={isDarkTheme ? "Switch to Light Mode" : "Switch to Dark Mode (Chat Style)"}
-        >
-          {isDarkTheme ? (
-            <Sun className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-amber-400 transition-transform duration-300" />
-          ) : (
-            <Moon className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-slate-600 dark:text-slate-300 transition-transform duration-300" />
+        {/* User's Profile Locality & Quick Menu (Replaces standalone Dark/Light toggle on Home Page) */}
+        <div className="relative" ref={profileMenuRef}>
+          <button 
+            onClick={() => {
+              triggerCapsuleFeedback({ pitch: 650, volume: 0.16, hapticDuration: 12 });
+              setIsProfileMenuOpen(prev => !prev);
+            }}
+            className={`relative w-8.5 h-8.5 sm:w-10 sm:h-10 rounded-full liquid-glass-card hover:scale-105 active:scale-95 flex items-center justify-center transition-all shadow-sm cursor-pointer border text-slate-700 dark:text-slate-200 shrink-0 overflow-hidden ${
+              isProfileMenuOpen || currentView === 'profile'
+                ? 'ring-2 ring-indigo-500/70 border-indigo-400 dark:border-indigo-500'
+                : 'border-white/60 dark:border-white/10 hover:border-indigo-300 dark:hover:border-indigo-700'
+            }`}
+            title={`User Profile (${user?.user_metadata?.full_name || user?.email || 'Learner Account'})`}
+            aria-label="User Profile"
+          >
+            {userAvatarUrl ? (
+              <img 
+                src={userAvatarUrl} 
+                alt="Profile" 
+                className="w-full h-full object-cover rounded-full"
+                onError={(e) => {
+                  (e.target as HTMLElement).style.display = 'none';
+                }}
+              />
+            ) : (
+              <div className="w-full h-full bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-xs sm:text-sm font-display shadow-inner">
+                {userInitial}
+              </div>
+            )}
+            
+            {/* Status dot indicator */}
+            <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 rounded-full ring-1.5 ring-white dark:ring-slate-900" />
+          </button>
+
+          {/* User Profile Dropdown Card */}
+          {isProfileMenuOpen && (
+            <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-3xl liquid-glass-dock border border-white/80 dark:border-slate-700/80 shadow-[0_20px_50px_rgba(0,0,0,0.25)] p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
+              {/* Header profile identity */}
+              <div className="flex items-center gap-3 pb-3 border-b border-slate-200/60 dark:border-slate-800">
+                <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0 overflow-hidden">
+                  {userAvatarUrl ? (
+                    <img src={userAvatarUrl} alt="Profile" className="w-full h-full object-cover" />
+                  ) : (
+                    userInitial
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-slate-900 dark:text-white text-sm truncate font-display">
+                    {user?.user_metadata?.full_name || 'Edu AI Learner'}
+                  </p>
+                  <p className="text-slate-500 dark:text-slate-400 text-xs truncate">
+                    {user?.email || 'Active Account'}
+                  </p>
+                  <div className="mt-1 flex items-center gap-1.5">
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/60">
+                      {user?.user_metadata?.field_of_study || 'Active Scholar'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action: Go to Profile & Shortcuts */}
+              <div className="py-2.5 space-y-1">
+                <button
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    onNavigate('profile');
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer group"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <User className="w-4 h-4 text-indigo-500" />
+                    <span>View User Profile</span>
+                  </div>
+                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    onNavigate('workspace');
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <BookmarkCheck className="w-4 h-4 text-brand-500" />
+                    <span>My Notes & Workspace</span>
+                  </div>
+                </button>
+
+                <button
+                  onClick={() => {
+                    setIsProfileMenuOpen(false);
+                    onNavigate('settings');
+                  }}
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <MoreHorizontal className="w-4 h-4 text-slate-400" />
+                    <span>Preferences & Settings</span>
+                  </div>
+                </button>
+              </div>
+
+              {/* Theme Locality: Dark & Light Mode Toggle inside User Profile Locality */}
+              <div className="pt-2.5 border-t border-slate-200/60 dark:border-slate-800">
+                <div className="flex items-center justify-between p-2 rounded-2xl bg-white/60 dark:bg-black/40 border border-slate-200/60 dark:border-white/10">
+                  <div className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
+                    {isDarkTheme ? (
+                      <Moon className="w-4 h-4 text-indigo-400" />
+                    ) : (
+                      <Sun className="w-4 h-4 text-amber-500" />
+                    )}
+                    <span>{isDarkTheme ? 'Dark Mode' : 'Light Mode'}</span>
+                  </div>
+
+                  <button
+                    onClick={handleToggleTheme}
+                    className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                      isDarkTheme ? 'bg-indigo-600' : 'bg-slate-300'
+                    }`}
+                    title={isDarkTheme ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                  >
+                    <span
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                        isDarkTheme ? 'translate-x-5' : 'translate-x-0'
+                      }`}
+                    />
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
-        </button>
+        </div>
 
         {/* Student Chat & Study Discussion - ONLY on Home Page */}
         {isHomePage && (
