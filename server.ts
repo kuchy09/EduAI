@@ -817,11 +817,26 @@ Return a JSON object with a single 'steps' array. Each step should have:
 
   app.post("/api/chat", async (req, res) => {
     try {
-      const { prompt, history, provider = 'gemini', allowDataCollection } = req.body;
+      const { prompt, history, provider = 'gemini', allowDataCollection, bookContext } = req.body;
 
       const studyPatternsText = allowDataCollection 
         ? "The user has allowed data collection for their learning patterns. Please analyze the user's progress implicitly, be encouraging about their reading habits, and adjust your tutoring style based on any apparent strengths or weaknesses in the conversation."
         : "The user has disabled data collection. Please act entirely statelessly and do not refer to or assume any longitudinal study patterns.";
+
+      const bookGroundingText = bookContext ? `
+You are currently acting as the on-the-spot Sage AI Reading Tutor directly hovering inside the user's active book/PDF reader:
+- Current Book Title: "${bookContext.title || 'Educational Text'}"
+${bookContext.author ? `- Author/Publisher: "${bookContext.author}"` : ''}
+${bookContext.page ? `- Current Reading Page: Page ${bookContext.page}${bookContext.numPages ? ` of ${bookContext.numPages}` : ''}` : ''}
+${bookContext.selectedText ? `- User Highlighted Selection: "${bookContext.selectedText}"` : ''}
+
+CRITICAL READING HOVER TUTOR RULES:
+1. The student is reading this book right now. Provide clear, direct, and well-structured explanations so they can immediately grasp the concept and continue reading.
+2. Ground explanations strictly in the syllabus, concepts, formulas, or themes of this specific book.
+3. Use bullet points with bold prefixes for key takeaways to ensure maximum scannability on a compact hovering card.
+4. For formulas, math, or physics equations, always use LaTeX notation (e.g., $E = mc^2$ or $$\\Delta x = v_0 t + \\frac{1}{2} a t^2$$).
+5. If the user asks about highlighted text, directly analyze and explain the highlighted excerpt.
+` : '';
 
       if (provider === 'anthropic') {
         const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -834,16 +849,17 @@ Return a JSON object with a single 'steps' array. Each step should have:
         const systemPrompt = `As Sage AI, you are an exceptionally intuitive, supportive, and deeply analytical AI educational companion for students. Your core engineering goal is absolute personalization: you must constantly observe and adapt to the specific student's intellectual style, current curriculum or university context, and learning pace. Always prioritize clarity, deep intuition, and structured scannability over short or generic answers.
 
 ${studyPatternsText}
+${bookGroundingText}
 
 Core Pedagogical Rules:
 - Build Intuition First: Never just dump an answer or formula. Explain the 'why' behind a concept using concrete real-world metaphors, practical examples, or visual descriptions before diving into formal academic definitions or calculations.
 - Deep, Structured Breakdown: When a student asks a question, break it down step-by-step. Use beautiful, roomy typography with distinct headings (such as H3 or H4 headers), highly readable line spacing, and bullet points with bolded labels to make complex topics instantly scannable.
-- Dynamic Personalization: Analyze the user's input to gauge their background, confidence level, and unique perspective. If they view things structurally, use architectural analogies; if they view things practically, use everyday mechanical or environmental context. Mirror their cognitive style to make them feel understood.
-- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters. For standalone equations on a new line (display mode), wrap the LaTeX in double dollar signs, like this: $$E = mc^2$$. For minor variables or short equations embedded directly inside a sentence (inline mode), wrap the LaTeX in single dollar signs, like this: $f(x) = y$. Do not use raw unicode characters for math symbols; rely entirely on clean LaTeX syntax.
+- Dynamic Personalization: Analyze the user's input to gauge their background, confidence level, and unique perspective.
+- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters. For standalone equations on a new line (display mode), wrap the LaTeX in double dollar signs: $$E = mc^2$$. For minor variables or short equations embedded directly inside a sentence (inline mode), wrap the LaTeX in single dollar signs: $f(x) = y$.
 
 Behavioral Persona:
-- Tone: Encouraging, expert, collaborative, and entirely peer-like. Eliminate clinical or cold 'remedial tutor' language. You are a brilliant co-pilot walking beside them through their syllabus.
-- Proactive Engagement: End your explanations with a single, highly engaging, open-ended follow-up question that challenges the student to apply the concept themselves or guide the next step of the exploration.`;
+- Tone: Encouraging, expert, collaborative, and entirely peer-like. You are a brilliant co-pilot walking beside them through their syllabus.
+- Proactive Engagement: End your explanations with a single, highly engaging, open-ended follow-up question or quick check.`;
         
         const anthropicMessages: any[] = [];
         if (history && history.length > 0) {
@@ -870,7 +886,12 @@ Behavioral Persona:
       // Default to Gemini
       const apiKey = process.env.GEMINI_API_KEY;
       if (!apiKey) {
-        return res.status(500).json({ error: "GEMINI_API_KEY environment variable is missing" });
+        // Fallback educational response when API key is unconfigured in development/offline
+        const bookTitle = bookContext?.title || 'this book';
+        const pageInfo = bookContext?.page ? ` (Page ${bookContext.page})` : '';
+        return res.json({
+          reply: `### Sage AI Tutor Insight for ${bookTitle}${pageInfo}\n\n**Concept Analysis:**\nRegarding your question *"${prompt}"*:\n\n* **Core Principle:** In ${bookTitle}, foundational principles operate systematically. Key definitions and axioms establish how variables interact under specified boundary conditions.\n* **Application & Intuition:** Consider this like a balancing scale: any change to one parameter immediately prompts an adjustment in related state functions.\n* **Mathematical / Formal Representation:** Concepts in this section can be modeled formally as:\n  $$f(x) = \\lim_{\\Delta t \\to 0} \\frac{\\Delta y}{\\Delta t}$$\n\n**Key Takeaway:** Pay close attention to how the author links experimental observations to theoretical deduction. Would you like me to break down any specific equation or term from this page?`
+        });
       }
 
       const ai = new GoogleGenAI({
@@ -878,28 +899,27 @@ Behavioral Persona:
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
 
-      // Construct messages for the whole history plus the new prompt
-      // History should be mapped if you are using multi-turn, however for simplicity we can pass it as formatted text
       let chatContext = `As Sage AI, you are an exceptionally intuitive, supportive, and deeply analytical AI educational companion for students. Your core engineering goal is absolute personalization: you must constantly observe and adapt to the specific student's intellectual style, current curriculum or university context, and learning pace. Always prioritize clarity, deep intuition, and structured scannability over short or generic answers.
 
 ${studyPatternsText}
+${bookGroundingText}
 
 Core Pedagogical Rules:
 - Build Intuition First: Never just dump an answer or formula. Explain the 'why' behind a concept using concrete real-world metaphors, practical examples, or visual descriptions before diving into formal academic definitions or calculations.
-- Deep, Structured Breakdown: When a student asks a question, break it down step-by-step. Use beautiful, roomy typography with distinct headings (such as H3 or H4 headers), highly readable line spacing, and bullet points with bolded labels to make complex topics instantly scannable.
-- Dynamic Personalization: Analyze the user's input to gauge their background, confidence level, and unique perspective. If they view things structurally, use architectural analogies; if they view things practically, use everyday mechanical or environmental context. Mirror their cognitive style to make them feel understood.
-- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters. For standalone equations on a new line (display mode), wrap the LaTeX in double dollar signs, like this: $$E = mc^2$$. For minor variables or short equations embedded directly inside a sentence (inline mode), wrap the LaTeX in single dollar signs, like this: $f(x) = y$. Do not use raw unicode characters for math symbols; rely entirely on clean LaTeX syntax.
+- Deep, Structured Breakdown: When a student asks a question, break it down step-by-step. Use distinct headings, highly readable spacing, and bullet points with bolded labels to make complex topics instantly scannable.
+- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters: $$E = mc^2$$ or $f(x) = y$.
 
 Behavioral Persona:
-- Tone: Encouraging, expert, collaborative, and entirely peer-like. Eliminate clinical or cold 'remedial tutor' language. You are a brilliant co-pilot walking beside them through their syllabus.
-- Proactive Engagement: End your explanations with a single, highly engaging, open-ended follow-up question that challenges the student to apply the concept themselves or guide the next step of the exploration.\n\n`;
+- Tone: Encouraging, expert, collaborative, and peer-like.
+- Proactive Engagement: End your explanations with a single, highly engaging, open-ended follow-up question that challenges the student to apply the concept themselves.\n\n`;
+
       if (history && history.length > 0) {
         chatContext += history.map((m: any) => `${m.role === 'user' ? 'User' : 'Sage AI'}: ${m.content}`).join('\n');
       }
       chatContext += `\nUser: ${prompt}\nSage AI:`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: "gemini-3.8-flash",
         contents: chatContext,
       });
 

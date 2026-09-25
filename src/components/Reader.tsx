@@ -20,6 +20,7 @@ import {
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { QuoteCardModal } from './QuoteCardModal';
 import { QuickDictionaryPopover } from './QuickDictionaryPopover';
+import { ReaderAiHoverTutor } from './ReaderAiHoverTutor';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -99,6 +100,10 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
   const { isOnline, isBookCached, downloadBook, isDownloading, downloadProgress } = useOffline();
   const [cachedBlobUrl, setCachedBlobUrl] = useState<string | null>(null);
   const [isCachedLocally, setIsCachedLocally] = useState<boolean>(false);
+
+  // Floating Hovering Sage AI Tutor State (open by default when reading book)
+  const [isAiHoverOpen, setIsAiHoverOpen] = useState<boolean>(true);
+  const [aiHoverSelectedText, setAiHoverSelectedText] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -183,7 +188,24 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     else localStorage.setItem('fontSize', 'Medium');
   }, [fontSize]);
   const [theme, setTheme] = useState<'sepia' | 'dark' | 'amoled'>('sepia');
-  const [viewMode, setViewMode] = useState<'slide' | 'scroll'>('slide');
+  const getInitialViewMode = (): 'slide' | 'scroll' => {
+    try {
+      const saved = localStorage.getItem('edu_reader_view_mode');
+      if (saved === 'slide' || saved === 'scroll') return saved;
+      return 'scroll';
+    } catch {
+      return 'scroll';
+    }
+  };
+  const [viewMode, setViewMode] = useState<'slide' | 'scroll'>(getInitialViewMode());
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('edu_reader_view_mode', viewMode);
+    } catch {
+      // Ignore storage errors in sandboxed iframes
+    }
+  }, [viewMode]);
   const [showSettingsDropdown, setShowSettingsDropdown] = useState(false);
   const [fontFamily, setFontFamily] = useState<'serif' | 'sans'>('serif');
   const [showHighlights, setShowHighlights] = useState(true);
@@ -246,6 +268,43 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
   }, [showSettingsDropdown]);
   
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const pdfContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const container = pdfContainerRef.current;
+    if (!container || viewMode !== 'scroll' || !numPages) return;
+
+    let timeoutId: any;
+    const handlePdfScroll = () => {
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => {
+        if (!container) return;
+        const pageElements = container.querySelectorAll<HTMLElement>('[data-page-number]');
+        const containerTop = container.getBoundingClientRect().top;
+        let activePage = 1;
+        let minDistance = Infinity;
+
+        pageElements.forEach((el) => {
+          const rect = el.getBoundingClientRect();
+          const distance = Math.abs(rect.top - containerTop - 60);
+          if (distance < minDistance) {
+            minDistance = distance;
+            const pNum = parseInt(el.getAttribute('data-page-number') || '1', 10);
+            if (!isNaN(pNum)) activePage = pNum;
+          }
+        });
+
+        setPageNumber(prev => (prev !== activePage ? activePage : prev));
+      }, 60);
+    };
+
+    container.addEventListener('scroll', handlePdfScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', handlePdfScroll);
+      clearTimeout(timeoutId);
+    };
+  }, [viewMode, numPages]);
+
   const [readingProgress, setReadingProgress] = useState<number>(() => {
     const saved = localStorage.getItem(`book_progress_${book.id}`);
     return saved ? parseInt(saved, 10) : 0;
@@ -961,11 +1020,22 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
 
           <div className="w-px h-6 bg-stone-200 dark:bg-stone-700 mx-1 md:mx-2"></div>
           <button 
-            onClick={onOpenAi}
-            className="flex items-center gap-2 px-3 py-1.5 liquid-glass-pill text-brand-700 dark:text-brand-300 hover:scale-105 active:scale-95 rounded-full text-sm font-medium transition-all shadow-sm cursor-pointer"
+            onClick={() => {
+              triggerCapsuleFeedback({ pitch: 700, volume: 0.14, hapticDuration: 12 });
+              setIsAiHoverOpen(prev => !prev);
+            }}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all shadow-sm cursor-pointer ${
+              isAiHoverOpen 
+                ? 'bg-brand-600 text-white shadow-brand-500/25 ring-2 ring-brand-400/40' 
+                : 'liquid-glass-pill text-brand-700 dark:text-brand-300 hover:scale-105 active:scale-95'
+            }`}
+            title={isAiHoverOpen ? "Sage AI Tutor Active (Hovering in book)" : "Open Sage AI Hover Tutor"}
           >
             <MessageSquareText className="w-4 h-4" />
-            <span className="hidden md:inline">Ask AI Tutor</span>
+            <span className="hidden md:inline">Sage AI Tutor</span>
+            {isAiHoverOpen && (
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            )}
           </button>
         </div>
       </header>
@@ -984,7 +1054,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           className={`flex-1 flex overflow-hidden bg-stone-100 items-center justify-center relative ${showSidebar ? 'mr-0 lg:mr-80' : ''} transition-all duration-300`}
         >
           {book ? (
-            <div className="flex-1 h-full overflow-y-auto bg-stone-100 flex justify-center pb-20">
+            <div ref={pdfContainerRef} className="flex-1 h-full overflow-y-auto bg-stone-100 flex justify-center pb-20">
               <Document
                 file={
                   cachedBlobUrl ||
@@ -1014,7 +1084,11 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                 {viewMode === 'scroll' ? (
                   <div className="flex flex-col items-center gap-8 py-8">
                     {Array.from(new Array(numPages || 0), (el, index) => (
-                      <div key={`page_${index + 1}`} className={`relative shadow-xl bg-white transition-all duration-300 ${theme === 'dark' || theme === 'amoled' ? 'invert-[0.92] hue-rotate-180 brightness-95' : ''}`}>
+                      <div 
+                        key={`page_${index + 1}`} 
+                        data-page-number={index + 1}
+                        className={`relative shadow-xl bg-white transition-all duration-300 ${theme === 'dark' || theme === 'amoled' ? 'invert-[0.92] hue-rotate-180 brightness-95' : ''}`}
+                      >
                          <Page 
                             pageNumber={index + 1} 
                             width={Math.min(window.innerWidth - 32, 800)}
@@ -1331,13 +1405,16 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
 
             <button 
               onClick={() => {
+                const textToTranslate = selectionRange.text;
+                setAiHoverSelectedText(`Translate this excerpt from ${book.title} and explain its meaning in context: "${textToTranslate}"`);
+                setIsAiHoverOpen(true);
                 setSelectionRange(null);
-                onOpenAi();
+                triggerCapsuleFeedback({ pitch: 640, volume: 0.14, hapticDuration: 12 });
               }}
               className="flex items-center gap-2.5 px-4 py-2 hover:bg-black/5 dark:hover:bg-white/5 text-xs sm:text-sm font-medium text-stone-700 dark:text-stone-200 transition-colors text-left w-full cursor-pointer"
             >
               <span className="text-stone-400 text-xs font-serif italic">A文</span>
-              Translate
+              Translate with Sage
             </button>
             <button 
               onClick={() => {
@@ -1353,14 +1430,20 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           {/* Edu AI Assistant Premium Portal */}
           <div className="border-t border-stone-200/60 dark:border-stone-700/60 bg-gradient-to-r from-brand-500/10 via-purple-500/10 to-indigo-500/10 p-1.5">
             <button 
-              onClick={() => { setSelectionRange(null); onOpenAi(); }}
+              onClick={() => { 
+                setAiHoverSelectedText(selectionRange.text);
+                setIsAiHoverOpen(true);
+                setSelectionRange(null);
+                triggerCapsuleFeedback({ pitch: 680, volume: 0.16, hapticDuration: 14 });
+              }}
               className="flex items-center justify-between w-full px-3 py-2 liquid-glass-pill hover:scale-[1.02] active:scale-95 rounded-2xl transition-all cursor-pointer shadow-sm"
+              title="Ask Sage AI tutor about this text directly inside reader"
             >
               <div className="flex items-center gap-2 text-xs font-semibold text-brand-700 dark:text-brand-300">
                 <Sparkles className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400 animate-pulse" />
                 Edu AI Assistant
               </div>
-              <span className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-brand-500/20 text-brand-700 dark:text-brand-300 border border-brand-500/30">Ask</span>
+              <span className="text-[9px] uppercase tracking-wider font-bold px-1.5 py-0.5 rounded-full bg-brand-500/20 text-brand-700 dark:text-brand-300 border border-brand-500/30">Ask Sage</span>
             </button>
           </div>
         </motion.div>
@@ -1376,9 +1459,9 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           bookTitle={book.title}
           onClose={() => setDictionaryTarget(null)}
           onAskAi={(prompt) => {
-            localStorage.setItem('ai_tutor_prefill', prompt);
+            setAiHoverSelectedText(prompt);
+            setIsAiHoverOpen(true);
             setDictionaryTarget(null);
-            onOpenAi();
           }}
           onSaveToVocabulary={(entry) => {
             setToastMessage(`"${entry.word}" saved to Vocabulary flashcards`);
@@ -1405,6 +1488,20 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
         bookAuthor={book.author || ''}
         category={book.category}
         pageNumber={activeQuoteForCard.pageNumber}
+      />
+
+      {/* Persistent Hovering Sage AI Reading Tutor */}
+      <ReaderAiHoverTutor
+        book={book}
+        pageNumber={pageNumber}
+        numPages={numPages}
+        theme={theme}
+        isOpen={isAiHoverOpen}
+        onToggleOpen={() => setIsAiHoverOpen(prev => !prev)}
+        selectedText={aiHoverSelectedText}
+        onClearSelectedText={() => setAiHoverSelectedText(null)}
+        onOpenFullAi={onOpenAi}
+        user={user}
       />
     </div>
   );
