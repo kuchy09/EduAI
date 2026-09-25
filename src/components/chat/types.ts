@@ -36,7 +36,7 @@ export type ConversationType = 'direct' | 'group';
 export type GroupRoleType = 'teacher-to-teacher' | 'teacher-to-student' | 'student-to-student' | 'study-group';
 
 export interface ChatAttachment {
-  type: 'book' | 'image' | 'voice' | 'file' | 'code';
+  type: 'book' | 'image' | 'voice' | 'file' | 'code' | 'note';
   url?: string;
   name?: string;
   size?: string;
@@ -47,6 +47,9 @@ export interface ChatAttachment {
   duration?: number; // in seconds for voice notes
   language?: string;
   codeSnippet?: string;
+  noteId?: string;
+  noteTakeaways?: string[];
+  notePermission?: string;
 }
 
 export interface ChatMessage {
@@ -91,4 +94,43 @@ export interface CallSession {
   isMuted: boolean;
   isVideoOff: boolean;
   status: 'ringing' | 'connected' | 'ended';
+}
+
+export type SharedNotePermission = 'private' | 'individual' | 'group' | 'public';
+
+export interface NoteCollaborator {
+  userId: string;
+  userName: string;
+  userRole?: UserRole;
+  userAvatar?: string;
+  permission: 'view' | 'edit' | 'admin';
+  addedAt: string;
+}
+
+export interface SharedBookNote {
+  id: string;
+  title: string;
+  bookId: string;
+  bookTitle: string;
+  bookAuthor?: string;
+  bookCover?: string;
+  chapterOrPage?: string;
+  keyTakeaways: string[]; // Bulleted key takeaways
+  content: string; // Markdown notes / synthesis
+  tags: string[];
+  authorId: string;
+  authorName: string;
+  authorRole: UserRole;
+  authorAvatar?: string;
+  conversationId?: string; // Associated chat conversation / study room
+  permissionType: SharedNotePermission;
+  // Specific allowed user IDs (individual permission)
+  allowedUserIds: string[];
+  // Specific allowed group/conversation IDs (group permission)
+  allowedGroupIds: string[];
+  // Collaborators with edit or view access
+  collaborators: NoteCollaborator[];
+  isPinned?: boolean;
+  createdAt: string;
+  updatedAt: string;
 }

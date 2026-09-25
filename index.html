@@ -3,11 +3,184 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>EduAI - AI-Powered Learning Platform</title>
+    <title>Edu AI - Library and Educational Application</title>
+    <meta name="description" content="Library and educational application with an AI assistant." />
+    <meta property="og:title" content="Edu AI" />
+    <meta property="og:description" content="Library and educational application with an AI assistant." />
+
+    <!-- Storage Defense & Service Worker Cleanup Polyfill -->
+    <script>
+      (function() {
+        // 1. Safe in-memory storage polyfill if localStorage/sessionStorage are blocked in iframes
+        function makeMemoryStorage() {
+          var store = {};
+          return {
+            getItem: function(key) { return store.hasOwnProperty(key) ? store[key] : null; },
+            setItem: function(key, val) { store[key] = String(val); },
+            removeItem: function(key) { delete store[key]; },
+            clear: function() { store = {}; },
+            get length() { return Object.keys(store).length; },
+            key: function(idx) { return Object.keys(store)[idx] || null; }
+          };
+        }
+
+        try {
+          var test = '__edu_test__';
+          window.localStorage.setItem(test, '1');
+          window.localStorage.removeItem(test);
+        } catch (e) {
+          try {
+            Object.defineProperty(window, 'localStorage', {
+              value: makeMemoryStorage(),
+              configurable: true,
+              writable: true
+            });
+          } catch (_) {}
+        }
+
+        try {
+          var testSession = '__edu_session_test__';
+          window.sessionStorage.setItem(testSession, '1');
+          window.sessionStorage.removeItem(testSession);
+        } catch (e) {
+          try {
+            Object.defineProperty(window, 'sessionStorage', {
+              value: makeMemoryStorage(),
+              configurable: true,
+              writable: true
+            });
+          } catch (_) {}
+        }
+
+        // 2. Unregister stale service workers and clear caches in development / iframe
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.getRegistrations().then(function(regs) {
+            for (var i = 0; i < regs.length; i++) {
+              regs[i].unregister().catch(function() {});
+            }
+          }).catch(function() {});
+        }
+        if ('caches' in window) {
+          caches.keys().then(function(keys) {
+            for (var i = 0; i < keys.length; i++) {
+              caches.delete(keys[i]).catch(function() {});
+            }
+          }).catch(function() {});
+        }
+
+        // 3. Client error reporting & visible recovery trigger if scripts fail
+        window.__eduClientErrors = [];
+        window.addEventListener('error', function(e) {
+          window.__eduClientErrors.push({
+            type: 'error',
+            message: e.message || String(e),
+            filename: e.filename,
+            lineno: e.lineno
+          });
+          try {
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ type: 'uncaught_error', message: e.message, filename: e.filename, lineno: e.lineno })
+            }).catch(function() {});
+          } catch (_) {}
+        });
+
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled rejection';
+          window.__eduClientErrors.push({ type: 'unhandledrejection', message: reason });
+          try {
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ type: 'unhandled_rejection', message: reason })
+            }).catch(function() {});
+          } catch (_) {}
+        });
+      })();
+    </script>
   </head>
-  <body>
-    <div id="root"></div>
+  <body class="bg-slate-50 dark:bg-slate-950 font-sans antialiased text-slate-900 dark:text-slate-100">
+    <div id="root">
+      <!-- High-fidelity, immediate initial splash screen to prevent white screen flash -->
+      <div id="edu-loading-splash" style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #0b0f19; color: #ffffff; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 24px; text-align: center;">
+        <div style="position: relative; width: 68px; height: 68px; margin-bottom: 24px;">
+          <div style="position: absolute; inset: 0; border-radius: 20px; background: linear-gradient(135deg, #7c3aed, #4f46e5); opacity: 0.8; filter: blur(12px);"></div>
+          <div style="position: relative; width: 100%; height: 100%; border-radius: 20px; background: linear-gradient(135deg, #8b5cf6, #6366f1); display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px -5px rgba(124, 58, 237, 0.5);">
+            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
+              <path d="M6 6h10"></path>
+              <path d="M6 10h7"></path>
+            </svg>
+          </div>
+        </div>
+        <h1 style="font-size: 22px; font-weight: 700; margin: 0 0 8px 0; letter-spacing: -0.02em; color: #ffffff;">Edu AI</h1>
+        <p style="font-size: 13.5px; color: #94a3b8; margin: 0 0 24px 0; max-width: 320px; line-height: 1.5;">Preparing your library, study guides, and Sage AI tutor...</p>
+        <div style="width: 140px; height: 3px; background-color: #1e293b; border-radius: 9999px; overflow: hidden; position: relative;">
+          <div style="position: absolute; inset: 0; background: linear-gradient(90deg, #8b5cf6, #38bdf8); border-radius: 9999px; width: 40%; animation: edu-shimmer 1.4s ease-in-out infinite alternate;"></div>
+        </div>
+        <style>
+          @keyframes edu-shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(250%); }
+          }
+        </style>
+        <noscript>
+          <p style="color: #f87171; margin-top: 20px; font-size: 13px;">JavaScript is required to run Edu AI. Please enable JavaScript in your browser.</p>
+        </noscript>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      (function() {
+        // Watchdog: If splash screen is still attached after 3500ms, provide instant recovery actions
+        setTimeout(function() {
+          var splash = document.getElementById('edu-loading-splash');
+          if (splash && splash.parentElement) {
+            var recoveryContainer = document.getElementById('edu-splash-recovery');
+            if (!recoveryContainer) {
+              recoveryContainer = document.createElement('div');
+              recoveryContainer.id = 'edu-splash-recovery';
+              recoveryContainer.style.marginTop = '28px';
+              recoveryContainer.style.display = 'flex';
+              recoveryContainer.style.flexDirection = 'column';
+              recoveryContainer.style.alignItems = 'center';
+              recoveryContainer.style.gap = '10px';
+              recoveryContainer.innerHTML = [
+                '<p style="color: #cbd5e1; font-size: 13px; margin: 0 0 8px 0;">Connection taking a moment? You can continue directly:</p>',
+                '<div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;">',
+                '  <button id="edu-btn-force-start" style="background: #7c3aed; color: #ffffff; border: none; padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(124,58,237,0.35);">Open Guest Mode</button>',
+                '  <button id="edu-btn-reset-cache" style="background: rgba(255,255,255,0.08); color: #cbd5e1; border: 1px solid rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 10px; font-size: 13px; cursor: pointer;">Reset Storage & Reload</button>',
+                '</div>'
+              ].join('');
+              splash.appendChild(recoveryContainer);
+
+              var btnForce = document.getElementById('edu-btn-force-start');
+              if (btnForce) {
+                btnForce.onclick = function() {
+                  try {
+                    localStorage.setItem('edu_ai_guest_mode', 'true');
+                    sessionStorage.setItem('edu_ai_guest_mode', 'true');
+                  } catch (_) {}
+                  window.location.reload();
+                };
+              }
+
+              var btnReset = document.getElementById('edu-btn-reset-cache');
+              if (btnReset) {
+                btnReset.onclick = function() {
+                  try {
+                    localStorage.clear();
+                    sessionStorage.clear();
+                    localStorage.setItem('edu_ai_guest_mode', 'true');
+                  } catch (_) {}
+                  window.location.href = window.location.origin;
+                };
+              }
+            }
+          }
+        }, 3500);
+      })();
+    </script>
   </body>
 </html>
-

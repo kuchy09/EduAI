@@ -30,11 +30,13 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
 
   // Load prefilled search query if navigating from Header
   useEffect(() => {
-    const prefill = localStorage.getItem('edu_search_prefill');
-    if (prefill) {
-      setSearchQuery(prefill);
-      localStorage.removeItem('edu_search_prefill');
-    }
+    try {
+      const prefill = localStorage.getItem('edu_search_prefill');
+      if (prefill) {
+        setSearchQuery(prefill);
+        localStorage.removeItem('edu_search_prefill');
+      }
+    } catch (_) {}
   }, []);
 
   // Animated visualizer heights
@@ -129,7 +131,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
           <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">
             AI Audiobooks
           </h2>
-          <p className="text-slate-500 dark:text-slate-400">
+          <p className="text-slate-500 dark:text-slate-300">
             Listen to expert AI-narrated books with synchronized highlight tracking.
           </p>
         </div>
@@ -172,21 +174,21 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
                       <Radio className="w-3 h-3 text-red-500 animate-pulse" />
                       HQ AI Voice
                     </span>
-                    <span className="text-[10px] text-slate-400 dark:text-slate-500 font-medium">
+                    <span className="text-[10px] text-slate-400 dark:text-slate-300 font-medium">
                       Est. 45 mins
                     </span>
                   </div>
                   <h3 className="text-xl font-display font-bold text-slate-900 dark:text-white leading-snug tracking-tight truncate">
                     {playingBook ? playingBook.title : 'Select an Audiobook'}
                   </h3>
-                  <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">
+                  <p className="text-sm text-slate-500 dark:text-slate-300 font-medium">
                     by {playingBook ? playingBook.author : 'Edu AI Reader'}
                   </p>
                 </div>
 
                 {/* Voice Profile Picker */}
                 <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                  <p className="text-xs font-semibold text-slate-400 dark:text-slate-500 flex items-center gap-1.5 uppercase tracking-wider">
+                  <p className="text-xs font-semibold text-slate-400 dark:text-slate-300 flex items-center gap-1.5 uppercase tracking-wider">
                     <Sparkles className="w-3.5 h-3.5 text-indigo-500" /> AI Narrator Voice
                   </p>
                   <div className="grid grid-cols-3 gap-1.5">
@@ -197,7 +199,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
                         className={`py-2 px-1 text-center rounded-lg border text-xs font-medium transition-all focus:outline-none ${
                           selectedVoice === voice.id
                             ? 'bg-indigo-50 dark:bg-indigo-950/40 border-indigo-200 dark:border-indigo-800 text-indigo-600 dark:text-indigo-400 font-semibold shadow-sm'
-                            : 'bg-slate-50/50 dark:bg-slate-900/50 border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800'
+                            : 'bg-slate-50/50 dark:bg-slate-900/50 border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
                         }`}
                       >
                         <span className="block text-[11px] truncate">{voice.name}</span>
@@ -211,7 +213,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
 
             {/* Immersive Audio Progress Bar */}
             <div className="mt-8 space-y-2">
-              <div className="flex justify-between items-center text-xs text-slate-400 dark:text-slate-500 font-mono">
+              <div className="flex justify-between items-center text-xs text-slate-400 dark:text-slate-300 font-mono">
                 <span>{time.current}</span>
                 
                 {/* Simulated Waveform Visualization */}
@@ -250,7 +252,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
                     className={`px-3 py-1 text-xs font-semibold rounded-full transition-all ${
                       playbackSpeed === speed
                         ? 'bg-white dark:bg-slate-800 shadow-sm text-slate-900 dark:text-white'
-                        : 'text-slate-400 dark:text-slate-500 hover:text-slate-600 dark:hover:text-slate-400'
+                        : 'text-slate-400 dark:text-slate-300 hover:text-slate-600 dark:hover:text-slate-400'
                     }`}
                   >
                     {speed}x
@@ -287,7 +289,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
               {/* Mute button */}
               <button 
                 onClick={() => setIsMuted(!isMuted)}
-                className="p-2.5 bg-slate-50 dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 rounded-full transition-colors"
+                className="p-2.5 bg-slate-50 dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-300 rounded-full transition-colors"
               >
                 {isMuted ? <VolumeX className="w-4 h-4 text-red-500" /> : <Volume2 className="w-4 h-4" />}
               </button>
@@ -341,7 +343,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
         {/* Right Column: Audiobooks Playlist Grid */}
         <div className="lg:col-span-5 space-y-3">
           <div className="flex items-center justify-between px-1">
-            <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+            <h4 className="text-sm font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-300">
               Audio Library ({filteredAudiobooks.length})
             </h4>
             {searchQuery && (
@@ -405,7 +407,7 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
                     <div className="flex-1 min-w-0 flex flex-col justify-between py-0.5">
                       <div>
                         <div className="flex items-center justify-between gap-1">
-                          <span className="text-[9px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+                          <span className="text-[9px] font-semibold text-slate-400 dark:text-slate-300 uppercase tracking-wider">
                             {book.category.split(',')[0]}
                           </span>
                           {isSelected && isPlaying ? (
@@ -423,12 +425,12 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
                         <h5 className={`text-sm font-semibold truncate leading-snug ${isSelected ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-900 dark:text-white'}`}>
                           {book.title}
                         </h5>
-                        <p className="text-xs text-slate-400 dark:text-slate-500 truncate">
+                        <p className="text-xs text-slate-400 dark:text-slate-300 truncate">
                           by {book.author}
                         </p>
                       </div>
 
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-slate-500">
+                      <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-slate-300">
                         <span className="flex items-center gap-0.5">
                           <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                           {book.rating}

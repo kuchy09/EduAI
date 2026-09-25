@@ -378,7 +378,7 @@ export function AiTutor({ user }: AiTutorProps) {
               className={`group relative flex items-center gap-3 px-3 py-3 rounded-2xl cursor-pointer transition-all border ${
                 isActive
                   ? 'bg-white dark:bg-slate-800 border-slate-200/80 dark:border-slate-700 shadow-sm text-slate-900 dark:text-white font-semibold'
-                  : 'bg-transparent border-transparent text-slate-600 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 hover:text-slate-800 dark:hover:text-slate-200'
+                  : 'bg-transparent border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
             >
               <div className={`p-2 rounded-xl shrink-0 transition-colors ${
@@ -413,13 +413,13 @@ export function AiTutor({ user }: AiTutorProps) {
 
       <div className="p-4 border-t border-slate-200/50 dark:border-slate-800 shrink-0 bg-slate-100/40 dark:bg-slate-900/60 text-[11px] text-slate-400 flex items-center justify-between">
         <span>Continuous Auto-Save</span>
-        <span className="font-bold text-slate-500 dark:text-slate-400">Edu AI Core</span>
+        <span className="font-bold text-slate-500 dark:text-slate-300">Edu AI Core</span>
       </div>
     </div>
   );
 
   return (
-    <div className="flex h-full w-full bg-slate-50 dark:bg-slate-950 relative overflow-hidden font-sans">
+    <div className="flex h-full w-full bg-slate-50 dark:bg-slate-900 relative overflow-hidden font-sans">
       
       {/* Desktop Sidebar Panel */}
       <div 
@@ -488,11 +488,11 @@ export function AiTutor({ user }: AiTutorProps) {
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-bold text-slate-900 dark:text-white text-sm leading-none font-display">Sage AI</span>
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-950/60 text-brand-700 dark:text-brand-300 border border-brand-200/60 dark:border-brand-800/60">
+                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-950/60 text-brand-700 dark:text-brand-400 border border-brand-200/60 dark:border-brand-800/60">
                     Tutor
                   </span>
                 </div>
-                <span className="text-[11px] text-slate-400 dark:text-slate-500 block truncate max-w-[140px] sm:max-w-[240px] mt-0.5">
+                <span className="text-[11px] text-slate-400 dark:text-slate-300 block truncate max-w-[140px] sm:max-w-[240px] mt-0.5">
                   {activeSession?.title || 'Active thread'}
                 </span>
               </div>
@@ -529,7 +529,7 @@ export function AiTutor({ user }: AiTutorProps) {
                   <h3 className="text-xl font-bold font-display text-slate-900 dark:text-white">
                     What would you like to master today?
                   </h3>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-300 leading-relaxed">
                     Ask any question, derive mathematical formulas with LaTeX, or select an interactive starter below:
                   </p>
                 </div>
@@ -548,11 +548,11 @@ export function AiTutor({ user }: AiTutorProps) {
                         <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-700 group-hover:bg-brand-50 dark:group-hover:bg-brand-950/60 transition-colors">
                           {item.icon}
                         </div>
-                        <h4 className="text-xs font-bold text-slate-800 dark:text-slate-100 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
                           {item.title}
                         </h4>
                       </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                      <p className="text-[11px] text-slate-500 dark:text-slate-300 leading-relaxed">
                         {item.desc}
                       </p>
                     </motion.button>
@@ -583,7 +583,7 @@ export function AiTutor({ user }: AiTutorProps) {
 
                       {/* AI Message Card */}
                       <div className="flex-1 min-w-0 bg-white dark:bg-slate-800/90 rounded-3xl p-5 sm:p-6 border border-slate-200/70 dark:border-slate-700/80 shadow-xs space-y-3">
-                        <div className="gemini-markdown text-slate-800 dark:text-slate-100 text-[14.5px] sm:text-[15px] leading-relaxed select-text overflow-x-auto">
+                        <div className="gemini-markdown text-slate-800 dark:text-white text-[14.5px] sm:text-[15px] leading-relaxed select-text overflow-x-auto">
                           <ReactMarkdown 
                             remarkPlugins={[remarkMath]}
                             rehypePlugins={[rehypeKatex]}
@@ -597,7 +597,7 @@ export function AiTutor({ user }: AiTutorProps) {
                           <div className="flex items-center gap-1.5">
                             <button
                               onClick={() => handleCopyMessage(msg.id, msg.content)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer"
                               title="Copy response to clipboard"
                             >
                               {copiedMsgId === msg.id ? (
@@ -617,8 +617,8 @@ export function AiTutor({ user }: AiTutorProps) {
                               onClick={() => handleSpeakMessage(msg.id, msg.content)}
                               className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-colors cursor-pointer ${
                                 speakingMsgId === msg.id
-                                  ? 'bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-300 font-bold'
-                                  : 'hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
+                                  ? 'bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 font-bold'
+                                  : 'hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-200'
                               }`}
                               title={speakingMsgId === msg.id ? "Stop voice playback" : "Listen with speech audio"}
                             >
@@ -663,7 +663,7 @@ export function AiTutor({ user }: AiTutorProps) {
                     <span className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '150ms' }} />
                     <span className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
-                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
+                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-300">
                     Sage AI is thinking...
                   </span>
                 </div>
@@ -685,7 +685,7 @@ export function AiTutor({ user }: AiTutorProps) {
                   key={idx}
                   type="button"
                   onClick={() => handleSelectStarterPrompt(chip.prompt)}
-                  className="whitespace-nowrap px-3 py-1 text-[11px] font-semibold bg-white/90 dark:bg-slate-800/90 hover:bg-brand-50 dark:hover:bg-brand-950/50 hover:text-brand-700 dark:hover:text-brand-300 text-slate-600 dark:text-slate-300 rounded-full border border-slate-200/80 dark:border-slate-700/80 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                  className="whitespace-nowrap px-3 py-1 text-[11px] font-semibold bg-white/90 dark:bg-slate-800/90 hover:bg-brand-50 dark:hover:bg-brand-950/50 hover:text-brand-700 dark:hover:text-brand-400 text-slate-600 dark:text-slate-300 rounded-full border border-slate-200/80 dark:border-slate-700/80 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                 >
                   {chip.label}
                 </button>
@@ -703,7 +703,7 @@ export function AiTutor({ user }: AiTutorProps) {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 placeholder="Ask Sage AI about concepts, formulas, book summaries..."
-                className="w-full bg-transparent border-none focus:ring-0 focus:outline-none pl-4 pr-24 py-2.5 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 text-sm font-medium"
+                className="w-full bg-transparent border-none focus:ring-0 focus:outline-none pl-4 pr-24 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 text-sm font-medium"
               />
 
               <div className="absolute right-2 flex items-center gap-1.5">

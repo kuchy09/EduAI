@@ -70,7 +70,22 @@ export function openDB(): Promise<IDBDatabase> {
       return reject(new Error('IndexedDB is not supported in this environment.'));
     }
 
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        reject(new Error('IndexedDB open request timed out.'));
+      }
+    }, 1800);
+
+    let request: IDBOpenDBRequest;
+    try {
+      request = indexedDB.open(DB_NAME, DB_VERSION);
+    } catch (e) {
+      clearTimeout(timer);
+      settled = true;
+      return reject(e);
+    }
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
@@ -116,8 +131,27 @@ export function openDB(): Promise<IDBDatabase> {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+    request.onsuccess = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve(request.result);
+      }
+    };
+    request.onerror = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(request.error);
+      }
+    };
+    request.onblocked = () => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(new Error('IndexedDB open request blocked.'));
+      }
+    };
   });
 }
 
@@ -211,7 +245,8 @@ export async function saveReadingProgressLocal(
     // Push directly to Supabase reading_progress table
     (async () => {
       try {
-        const { data } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getUser();
+        if (error) return;
         const userId = data?.user?.id;
         if (userId) {
           const { error } = await supabase

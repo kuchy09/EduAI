@@ -17,14 +17,31 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 const rawEndpoint = process.env.B2_ENDPOINT || "https://s3.us-west-004.backblazeb2.com";
 const endpoint = rawEndpoint.startsWith('http') ? rawEndpoint : `https://${rawEndpoint}`;
 
-const s3Client = new S3Client({
-  endpoint,
-  region: process.env.B2_REGION || "us-west-004",
-  credentials: {
-    accessKeyId: process.env.B2_ACCESS_KEY_ID || "",
-    secretAccessKey: process.env.B2_SECRET_ACCESS_KEY || "",
-  },
-});
+let s3ClientInstance: S3Client | null = null;
+function getS3Client(): S3Client | null {
+  const isB2Configured = Boolean(
+    process.env.B2_ACCESS_KEY_ID && 
+    !process.env.B2_ACCESS_KEY_ID.startsWith('your_') && 
+    process.env.B2_SECRET_ACCESS_KEY && 
+    !process.env.B2_SECRET_ACCESS_KEY.startsWith('your_') && 
+    process.env.B2_BUCKET_NAME && 
+    !process.env.B2_BUCKET_NAME.startsWith('your_')
+  );
+
+  if (!isB2Configured) return null;
+
+  if (!s3ClientInstance) {
+    s3ClientInstance = new S3Client({
+      endpoint,
+      region: process.env.B2_REGION || "us-west-004",
+      credentials: {
+        accessKeyId: process.env.B2_ACCESS_KEY_ID!,
+        secretAccessKey: process.env.B2_SECRET_ACCESS_KEY!,
+      },
+    });
+  }
+  return s3ClientInstance;
+}
 
 const B2_BUCKET_NAME = process.env.B2_BUCKET_NAME || "";
 
@@ -524,189 +541,188 @@ function getMimeType(filename: string, defaultType = 'application/octet-stream')
 }
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = 3000;
 
-  app.use(express.json());
+app.use(express.json());
 
-  // API Routes - Unified Direct Upload & Presigned Storage Flow
-  const handleDirectUpload = async (req: express.Request, res: express.Response) => {
-    try {
-      const filename = (req.query.filename as string) || `file-${Date.now()}`;
-      const prefix = (req.query.prefix as string) || 'uploads';
-      const customKey = (req.query.key as string);
-      const headerContentType = (req.headers['content-type'] as string) || '';
-      const contentType = headerContentType.split(';')[0] || getMimeType(filename);
-      
-      const sanitizedFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-      const key = customKey || `${prefix}/${Date.now()}-${sanitizedFilename}`;
+// Health check endpoint
+app.get("/api/health", (req, res) => {
+  res.json({ status: "ok" });
+});
 
-      // 1. Always store to local persistent disk for guaranteed instant access
-      const localFilePath = path.join(UPLOADS_DIR, key);
-      const localDir = path.dirname(localFilePath);
-      if (!fs.existsSync(localDir)) {
-        fs.mkdirSync(localDir, { recursive: true });
-      }
+// Client error diagnostics endpoint
+app.post("/api/client-log", (req, res) => {
+  console.warn("[Browser Diagnostics]", JSON.stringify(req.body));
+  res.json({ received: true });
+});
 
-      // Check if body is a Buffer or stream
-      if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-        fs.writeFileSync(localFilePath, req.body);
-      } else if (typeof req.body === 'string') {
-        fs.writeFileSync(localFilePath, Buffer.from(req.body));
-      } else {
-        // Empty body or stream fallback
-        fs.writeFileSync(localFilePath, Buffer.from(''));
-      }
+// API Routes - Unified Direct Upload & Presigned Storage Flow
+const handleDirectUpload = async (req: express.Request, res: express.Response) => {
+  try {
+    const filename = (req.query.filename as string) || `file-${Date.now()}`;
+    const prefix = (req.query.prefix as string) || 'uploads';
+    const customKey = (req.query.key as string);
+    const headerContentType = (req.headers['content-type'] as string) || '';
+    const contentType = headerContentType.split(';')[0] || getMimeType(filename);
+    
+    const sanitizedFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
+    const key = customKey || `${prefix}/${Date.now()}-${sanitizedFilename}`;
 
-      // 2. Opportunistically sync with Backblaze B2 cloud storage
-      const isB2Configured = process.env.B2_ACCESS_KEY_ID && 
-                             !process.env.B2_ACCESS_KEY_ID.startsWith('your_') && 
-                             B2_BUCKET_NAME && 
-                             !B2_BUCKET_NAME.startsWith('your_');
-
-      if (isB2Configured) {
-        try {
-          const fileBuffer = fs.readFileSync(localFilePath);
-          const command = new PutObjectCommand({
-            Bucket: B2_BUCKET_NAME,
-            Key: key,
-            ContentType: contentType,
-            Body: fileBuffer,
-          });
-          await s3Client.send(command);
-          console.log(`[Storage] Successfully synced ${key} to B2 bucket ${B2_BUCKET_NAME}`);
-        } catch (b2Err: any) {
-          console.warn(`[Storage] B2 cloud sync notice for ${key}:`, b2Err.message || b2Err);
-        }
-      }
-
-      res.json({ 
-        key, 
-        success: true, 
-        url: `/api/download?key=${encodeURIComponent(key)}` 
-      });
-    } catch (error: any) {
-      console.error("Error direct upload:", error);
-      res.status(500).json({ error: "Failed to process upload: " + (error.message || "Unknown error") });
-    }
-  };
-
-  app.post("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-  app.put("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-  app.post("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-  app.put("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-
-  app.post("/api/presigned-url", async (req, res) => {
-    try {
-      const { filename, fileType, operation, prefix = 'uploads' } = req.body;
-      if (!filename || !fileType) {
-        return res.status(400).json({ error: "filename and fileType are required" });
-      }
-
-      const key = `${prefix}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
-
-      const isB2Configured = process.env.B2_ACCESS_KEY_ID && 
-                             !process.env.B2_ACCESS_KEY_ID.startsWith('your_') && 
-                             B2_BUCKET_NAME && 
-                             !B2_BUCKET_NAME.startsWith('your_');
-
-      if (!isB2Configured) {
-        return res.json({ 
-          presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
-          fileKey: key,
-          directFallback: true 
-        });
-      }
-
-      try {
-        let command;
-        if (operation === 'download') {
-          command = new GetObjectCommand({
-            Bucket: B2_BUCKET_NAME,
-            Key: filename,
-          });
-        } else {
-          command = new PutObjectCommand({
-            Bucket: B2_BUCKET_NAME,
-            Key: key,
-            ContentType: fileType,
-          });
-        }
-
-        const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-        res.json({ presignedUrl, fileKey: key });
-      } catch (signErr) {
-        console.warn("[Storage] S3 presign warning, falling back to direct upload route:", signErr);
-        res.json({ 
-          presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
-          fileKey: key,
-          directFallback: true 
-        });
-      }
-    } catch (error) {
-      console.error("Error generating presigned url:", error);
-      res.status(500).json({ error: "Failed to generate presigned URL" });
-    }
-  });
-
-  app.get("/api/download", async (req, res) => {
-    const { key, inline } = req.query;
-    if (!key || typeof key !== 'string') {
-      return res.status(400).send("Key is required");
-    }
-
-    const filename = key.split('/').pop() || 'download';
+    // 1. Always store to local persistent disk for guaranteed instant access
     const localFilePath = path.join(UPLOADS_DIR, key);
-
-    // 1. Check local persistent storage first
-    if (fs.existsSync(localFilePath)) {
-      try {
-        const mimeType = getMimeType(filename);
-        const stat = fs.statSync(localFilePath);
-        res.setHeader('Content-Type', mimeType);
-        res.setHeader('Content-Length', stat.size);
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        if (inline === 'true' || mimeType.startsWith('image/')) {
-          res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-        } else {
-          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        }
-        return fs.createReadStream(localFilePath).pipe(res);
-      } catch (readErr) {
-        console.error("[Storage] Error streaming local file:", readErr);
-      }
+    const localDir = path.dirname(localFilePath);
+    if (!fs.existsSync(localDir)) {
+      fs.mkdirSync(localDir, { recursive: true });
     }
 
-    // 2. If not local, try remote B2 bucket
-    const isB2Configured = process.env.B2_ACCESS_KEY_ID && 
-                           !process.env.B2_ACCESS_KEY_ID.startsWith('your_') && 
-                           B2_BUCKET_NAME && 
-                           !B2_BUCKET_NAME.startsWith('your_');
+    // Check if body is a Buffer or stream
+    if (Buffer.isBuffer(req.body) && req.body.length > 0) {
+      fs.writeFileSync(localFilePath, req.body);
+    } else if (typeof req.body === 'string') {
+      fs.writeFileSync(localFilePath, Buffer.from(req.body));
+    } else {
+      // Empty body or stream fallback
+      fs.writeFileSync(localFilePath, Buffer.from(''));
+    }
 
-    if (isB2Configured) {
+    // 2. Opportunistically sync with Backblaze B2 cloud storage
+    const s3 = getS3Client();
+    if (s3 && B2_BUCKET_NAME) {
       try {
-        const command = new GetObjectCommand({
+        const fileBuffer = fs.readFileSync(localFilePath);
+        const command = new PutObjectCommand({
           Bucket: B2_BUCKET_NAME,
           Key: key,
+          ContentType: contentType,
+          Body: fileBuffer,
         });
-
-        const response = await s3Client.send(command);
-        
-        if (response.ContentType) res.setHeader('Content-Type', response.ContentType);
-        if (response.ContentLength) res.setHeader('Content-Length', response.ContentLength);
-        
-        if (inline === 'true') {
-          res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-        } else {
-          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        }
-        
-        if (response.Body) {
-          return (response.Body as any).pipe(res);
-        }
-      } catch (error: any) {
-        console.warn(`[Storage] Remote B2 fetch for ${key} notice:`, error.message || error);
+        await s3.send(command);
+        console.log(`[Storage] Successfully synced ${key} to B2 bucket ${B2_BUCKET_NAME}`);
+      } catch (b2Err: any) {
+        console.warn(`[Storage] B2 cloud sync notice for ${key}:`, b2Err.message || b2Err);
       }
     }
+
+    res.json({ 
+      key, 
+      success: true, 
+      url: `/api/download?key=${encodeURIComponent(key)}` 
+    });
+  } catch (error: any) {
+    console.error("Error direct upload:", error);
+    res.status(500).json({ error: "Failed to process upload: " + (error.message || "Unknown error") });
+  }
+};
+
+app.post("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+app.put("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+app.post("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+app.put("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+
+app.post("/api/presigned-url", async (req, res) => {
+  try {
+    const { filename, fileType, operation, prefix = 'uploads' } = req.body;
+    if (!filename || !fileType) {
+      return res.status(400).json({ error: "filename and fileType are required" });
+    }
+
+    const key = `${prefix}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+
+    const s3 = getS3Client();
+    if (!s3 || !B2_BUCKET_NAME) {
+      return res.json({ 
+        presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
+        fileKey: key,
+        directFallback: true 
+      });
+    }
+
+    try {
+      let command;
+      if (operation === 'download') {
+        command = new GetObjectCommand({
+          Bucket: B2_BUCKET_NAME,
+          Key: filename,
+        });
+      } else {
+        command = new PutObjectCommand({
+          Bucket: B2_BUCKET_NAME,
+          Key: key,
+          ContentType: fileType,
+        });
+      }
+
+      const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
+      res.json({ presignedUrl, fileKey: key });
+    } catch (signErr) {
+      console.warn("[Storage] S3 presign warning, falling back to direct upload route:", signErr);
+      res.json({ 
+        presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
+        fileKey: key,
+        directFallback: true 
+      });
+    }
+  } catch (error) {
+    console.error("Error generating presigned url:", error);
+    res.status(500).json({ error: "Failed to generate presigned URL" });
+  }
+});
+
+app.get("/api/download", async (req, res) => {
+  const { key, inline } = req.query;
+  if (!key || typeof key !== 'string') {
+    return res.status(400).send("Key is required");
+  }
+
+  const filename = key.split('/').pop() || 'download';
+  const localFilePath = path.join(UPLOADS_DIR, key);
+
+  // 1. Check local persistent storage first
+  if (fs.existsSync(localFilePath)) {
+    try {
+      const mimeType = getMimeType(filename);
+      const stat = fs.statSync(localFilePath);
+      res.setHeader('Content-Type', mimeType);
+      res.setHeader('Content-Length', stat.size);
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      if (inline === 'true' || mimeType.startsWith('image/')) {
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      } else {
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      }
+      return fs.createReadStream(localFilePath).pipe(res);
+    } catch (readErr) {
+      console.error("[Storage] Error streaming local file:", readErr);
+    }
+  }
+
+  // 2. If not local, try remote B2 bucket
+  const s3 = getS3Client();
+  if (s3 && B2_BUCKET_NAME) {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: B2_BUCKET_NAME,
+        Key: key,
+      });
+
+      const response = await s3.send(command);
+      
+      if (response.ContentType) res.setHeader('Content-Type', response.ContentType);
+      if (response.ContentLength) res.setHeader('Content-Length', response.ContentLength);
+      
+      if (inline === 'true') {
+        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      } else {
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      }
+      
+      if (response.Body) {
+        return (response.Body as any).pipe(res);
+      }
+    } catch (error: any) {
+      console.warn(`[Storage] Remote B2 fetch for ${key} notice:`, error.message || error);
+    }
+  }
 
     // 3. Graceful fallback for study documents / syllabus materials
     const title = getTitleFromKey(key);
@@ -910,7 +926,6 @@ Behavioral Persona:
 
 async function startDevServer() {
   if (process.env.NODE_ENV !== "production") {
-    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
@@ -925,15 +940,11 @@ async function startDevServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`Server running on http://localhost:${PORT}`);
   });
 }
 
-// Check if file is run directly (ESM or CJS)
-const isMain = process.argv[1] && (import.meta.url === `file://${process.argv[1]}` || require.main === module);
-if (process.env.VERCEL !== "1" && !process.env.VERCEL_ENV) {
-  startDevServer();
-}
+startDevServer();
 
 export default app;
 

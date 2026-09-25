@@ -1,14 +1,16 @@
 import React, { useState } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
-import { Mail, Phone, Lock, Hash, Loader2, BookOpen } from 'lucide-react';
+import { Mail, Phone, Lock, Hash, Loader2, BookOpen, Compass, ArrowRight, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AuthMode = 'email' | 'phone';
 type AuthState = 'sign_in' | 'sign_up' | 'verify_otp';
 
-interface AuthProps {}
+interface AuthProps {
+  onContinueAsGuest?: () => void;
+}
 
-export function Auth({}: AuthProps = {}) {
+export function Auth({ onContinueAsGuest }: AuthProps = {}) {
   const [mode, setMode] = useState<AuthMode>('email');
   const [state, setState] = useState<AuthState>('sign_in');
   const [isLoading, setIsLoading] = useState(false);
@@ -579,6 +581,23 @@ export function Auth({}: AuthProps = {}) {
                   {state === 'sign_in' ? 'Sign up' : 'Sign in'}
                 </button>
               </div>
+            </div>
+          )}
+
+          {onContinueAsGuest && (
+            <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 text-center">
+              <button
+                type="button"
+                onClick={onContinueAsGuest}
+                className="w-full py-2.5 px-4 rounded-xl border border-slate-200 hover:border-brand-300 dark:border-slate-700 dark:hover:border-brand-600 text-slate-700 dark:text-slate-200 bg-slate-50/70 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 transition-all font-medium text-xs sm:text-sm flex items-center justify-center gap-2 group cursor-pointer shadow-xs"
+              >
+                <Sparkles className="w-4 h-4 text-brand-500 group-hover:scale-110 transition-transform" />
+                <span>Explore Applet as Guest</span>
+                <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+              </button>
+              <p className="text-[11px] text-slate-400 mt-2">
+                Preview all reader features, AI tools, and curriculum library instantly
+              </p>
             </div>
           )}
           

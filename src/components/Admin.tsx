@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { 
   Upload, FileText, CheckCircle, AlertCircle, Loader2, BookOpen, 
   Trash2, Search, Palette, Eye, Sparkles, Filter, CheckCircle2 
@@ -66,6 +66,13 @@ export function Admin({ appBooks, onUpdateBook }: AdminProps) {
     }
     try {
       const res = await supabase.auth.getUser();
+      if (res?.error) {
+        if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
+          clearStaleSupabaseTokens();
+        }
+        setIsAdmin(devBypass);
+        return;
+      }
       const user = res?.data?.user;
       const isDomainAdmin = user?.email?.toLowerCase().endsWith('@admin.com') || false;
       setIsAdmin(isDomainAdmin || devBypass);

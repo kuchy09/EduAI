@@ -14,6 +14,8 @@ interface ChatSidebarProps {
   onSelectConversation: (id: string) => void;
   onOpenFindFriends: () => void;
   onOpenNewGroupModal: () => void;
+  onOpenSharedNotes?: () => void;
+  sharedNotesCount?: number;
   onToggleUserRole?: (role: UserRole) => void;
   filterTab?: 'all' | 'direct' | 'teachers' | 'students' | 'groups';
   setFilterTab?: (tab: 'all' | 'direct' | 'teachers' | 'students' | 'groups') => void;
@@ -27,26 +29,30 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onSelectConversation,
   onOpenFindFriends,
   onOpenNewGroupModal,
+  onOpenSharedNotes,
+  sharedNotesCount = 0,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'favourites' | 'groups'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'favourites' | 'groups' | 'notes'>('all');
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
   const [showFilterDropdown, setShowFilterDropdown] = useState(false);
 
   // Helper to find partner in a direct chat
+  const currentUid = currentUser?.id || 'current-user-id';
   const getPartner = (conv: Conversation): ChatUser | undefined => {
     if (conv.type === 'direct') {
-      const partnerId = conv.participants.find(p => p !== currentUser.id);
-      return allUsers.find(u => u.id === partnerId);
+      const participants = Array.isArray(conv.participants) ? conv.participants : [];
+      const partnerId = participants.find(p => p !== currentUid);
+      return (allUsers || []).find(u => u.id === partnerId);
     }
     return undefined;
   };
 
   // Calculate total unread count across all conversations
-  const totalUnreadCount = conversations.reduce((sum, c) => sum + (c.unreadCount || 0), 0);
+  const totalUnreadCount = (conversations || []).reduce((sum, c) => sum + (c.unreadCount || 0), 0);
 
   // Filter conversations based on search and active filter pill
-  const filteredConversations = conversations.filter(conv => {
+  const filteredConversations = (conversations || []).filter(conv => {
     const partner = getPartner(conv);
     const title = conv.type === 'group' ? conv.name || '' : partner?.name || '';
     const lastMsg = conv.lastMessage?.content || '';
@@ -116,6 +122,18 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                     <UserPlus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                     <span>Find contacts</span>
                   </button>
+                  {onOpenSharedNotes && (
+                    <button
+                      onClick={() => {
+                        setShowMenuDropdown(false);
+                        onOpenSharedNotes();
+                      }}
+                      className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
+                    >
+                      <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      <span>Shared Takeaways</span>
+                    </button>
+                  )}
                   <button
                     onClick={() => {
                       setShowMenuDropdown(false);
@@ -140,6 +158,22 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
               </>
             )}
           </div>
+
+          {/* Shared Notes Header Button */}
+          {onOpenSharedNotes && (
+            <button
+              onClick={onOpenSharedNotes}
+              className="w-8.5 h-8.5 rounded-full flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 transition-colors cursor-pointer relative"
+              title="Shared Book Takeaways"
+            >
+              <BookOpen className="w-5 h-5" />
+              {sharedNotesCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-xs">
+                  {sharedNotesCount > 9 ? '9+' : sharedNotesCount}
+                </span>
+              )}
+            </button>
+          )}
 
           {/* Green New Chat Plus Button */}
           <button
@@ -239,6 +273,18 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                   <Users className="w-3.5 h-3.5 text-emerald-600" />
                   <span>Groups only</span>
                 </button>
+                {onOpenSharedNotes && (
+                  <button
+                    onClick={() => {
+                      setShowFilterDropdown(false);
+                      onOpenSharedNotes();
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-2 cursor-pointer"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
+                    <span>Shared Book Notes</span>
+                  </button>
+                )}
                 <button
                   onClick={() => {
                     setActiveFilter('all');

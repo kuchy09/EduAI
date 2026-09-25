@@ -1,6 +1,6 @@
 import { Mail, MapPin, Building, Calendar, BookOpen, GraduationCap, BarChart2, LogOut, Award, Star, Clock, Camera, Loader2 } from 'lucide-react';
 import React, { useEffect, useState, useRef } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 
 export function Profile() {
   const [user, setUser] = useState<any>(null);
@@ -16,6 +16,13 @@ export function Profile() {
     const loadUserData = async () => {
       try {
         const res = await supabase.auth.getUser();
+        if (res?.error) {
+          if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
+            clearStaleSupabaseTokens();
+          }
+          if (isMounted) setUser(null);
+          return;
+        }
         const user = res?.data?.user || null;
         if (!isMounted) return;
         setUser(user);

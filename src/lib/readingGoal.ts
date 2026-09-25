@@ -157,7 +157,8 @@ export function saveDailyGoal(goal: DailyReadingGoal, syncCloud = true): void {
   if (syncCloud && supabase) {
     (async () => {
       try {
-        const { data } = await supabase.auth.getUser();
+        const { data, error } = await supabase.auth.getUser();
+        if (error) return;
         const userId = data?.user?.id;
         if (userId) {
           const { error } = await supabase

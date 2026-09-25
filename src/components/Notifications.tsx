@@ -59,19 +59,33 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
 
   // Sound preference
   const [soundEnabled, setSoundEnabled] = useState(() => {
-    return localStorage.getItem('edu_notif_sound') !== 'false';
+    try {
+      return localStorage.getItem('edu_notif_sound') !== 'false';
+    } catch (_) {
+      return true;
+    }
   });
 
   // Channel notification preferences
   const [channelPrefs, setChannelPrefs] = useState(() => {
-    const saved = localStorage.getItem('edu_channel_prefs');
-    return saved ? JSON.parse(saved) : {
-      platform: true,
-      teacher: true,
-      ai_study: true,
-      peer: true,
-      audio_chime: true
-    };
+    try {
+      const saved = localStorage.getItem('edu_channel_prefs');
+      return saved ? JSON.parse(saved) : {
+        platform: true,
+        teacher: true,
+        ai_study: true,
+        peer: true,
+        audio_chime: true
+      };
+    } catch (_) {
+      return {
+        platform: true,
+        teacher: true,
+        ai_study: true,
+        peer: true,
+        audio_chime: true
+      };
+    }
   });
 
   // Composer Form State

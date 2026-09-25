@@ -1,6 +1,6 @@
 import { Upload, FileText, Image as ImageIcon, File, Loader2, Download, Trash2, FolderArchive, ArrowRight, HardDrive, FileArchive, Video, LayoutGrid, List, FolderPlus, Folder, Plus } from 'lucide-react';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface WorkspaceFolder {
@@ -56,6 +56,14 @@ export function Workspace() {
       }
 
       const res = await supabase.auth.getUser();
+      if (res?.error) {
+        if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
+          clearStaleSupabaseTokens();
+        }
+        if (localFiles) setFiles(JSON.parse(localFiles));
+        if (localFolders) setFolders(JSON.parse(localFolders));
+        return;
+      }
       const user = res?.data?.user;
       if (!user) {
         if (localFiles) setFiles(JSON.parse(localFiles));

@@ -22,6 +22,8 @@ interface ChatWindowProps {
   onBackToList?: () => void;
   onSendFriendRequest: (userId: string) => void;
   isPartnerTyping?: boolean;
+  onOpenSharedNotes?: () => void;
+  onSelectSharedNote?: (noteId: string) => void;
 }
 
 export const ChatWindow: React.FC<ChatWindowProps> = ({
@@ -37,7 +39,9 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   isInfoDrawerOpen,
   onBackToList,
   onSendFriendRequest,
-  isPartnerTyping = false
+  isPartnerTyping = false,
+  onOpenSharedNotes,
+  onSelectSharedNote
 }) => {
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [activeReactionMenuId, setActiveReactionMenuId] = useState<string | null>(null);
@@ -134,6 +138,17 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
         {/* Action Controls */}
         <div className="flex items-center gap-0.5 sm:gap-1.5 shrink-0 ml-1">
+          {onOpenSharedNotes && (
+            <button
+              onClick={onOpenSharedNotes}
+              className="p-1.5 sm:p-2 rounded-xl text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 transition-colors cursor-pointer flex items-center gap-1"
+              title="View & Share Book Takeaways"
+            >
+              <BookOpen className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
+              <span className="text-[11px] font-bold hidden lg:inline">Takeaways</span>
+            </button>
+          )}
+
           {!isGroup && (
             <>
               <button
@@ -268,6 +283,40 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                         : 'bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-100 border border-slate-200/80 dark:border-slate-700/80 rounded-bl-xs'
                     }`}
                   >
+                    {/* Attachment: Shared Book Takeaway Note */}
+                    {msg.attachment?.type === 'note' && (
+                      <div 
+                        onClick={() => msg.attachment?.noteId && onSelectSharedNote && onSelectSharedNote(msg.attachment.noteId)}
+                        className="mb-2 p-3 rounded-2xl bg-indigo-950/20 dark:bg-slate-900/70 border border-indigo-300/40 dark:border-slate-700 hover:border-indigo-400 transition-all cursor-pointer shadow-xs text-left"
+                      >
+                        <div className="flex items-center justify-between gap-2 mb-1">
+                          <span className="text-[10px] uppercase font-bold tracking-wider text-indigo-400 flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-indigo-400" />
+                            Book Takeaways • {msg.attachment.notePermission || 'Shared'}
+                          </span>
+                          <span className="text-[10px] text-indigo-300 font-semibold hover:underline flex items-center gap-0.5">
+                            Open Note <ExternalLink className="w-2.5 h-2.5" />
+                          </span>
+                        </div>
+                        <h4 className="text-xs sm:text-sm font-bold truncate">
+                          {msg.attachment.name || 'Shared Book Takeaway'}
+                        </h4>
+                        <p className="text-[11px] opacity-80 mt-0.5 truncate">
+                          📖 {msg.attachment.bookTitle || 'Textbook'}
+                        </p>
+                        {msg.attachment.noteTakeaways && msg.attachment.noteTakeaways.length > 0 && (
+                          <div className="mt-2 space-y-0.5 pt-1.5 border-t border-indigo-500/20">
+                            {msg.attachment.noteTakeaways.slice(0, 2).map((pt, i) => (
+                              <p key={i} className="text-[10px] sm:text-[11px] opacity-90 truncate flex items-start gap-1">
+                                <span className="text-indigo-400 font-bold">•</span>
+                                <span>{pt}</span>
+                              </p>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     {/* Attachment: Book Card */}
                     {msg.attachment?.type === 'book' && (
                       <div className="mb-2 p-2.5 rounded-xl bg-indigo-950/20 dark:bg-slate-900/60 border border-indigo-300/30 dark:border-slate-700 flex items-center gap-3">
@@ -420,6 +469,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             : 'You must add this teacher/student as a friend to message directly.'
         }
         onSendFriendRequest={partner ? () => onSendFriendRequest(partner.id) : undefined}
+        onOpenSharedNotes={onOpenSharedNotes}
       />
     </div>
   );

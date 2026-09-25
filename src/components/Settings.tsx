@@ -8,8 +8,8 @@ type Tab = 'appearance' | 'notifications' | 'privacy' | 'offline';
 
 export function Settings() {
   const [activeTab, setActiveTab] = useState<Tab>('appearance');
-  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'system');
-  const [fontSize, setFontSize] = useState(localStorage.getItem('fontSize') || 'Medium');
+  const [theme, setTheme] = useState(((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light');
+  const [fontSize, setFontSize] = useState(((() => { try { return localStorage.getItem('fontSize'); } catch (e) { return null; } })()) || 'Medium');
   const { isOnline, storageStats, clearCache, triggerSync, isSyncing, lastSyncResult, deleteCachedBook, refreshOfflineState } = useOffline();
   const [cacheClearedToast, setCacheClearedToast] = useState(false);
   const [syncToast, setSyncToast] = useState(false);
@@ -29,15 +29,15 @@ export function Settings() {
   }, [activeTab, storageStats.count]);
   
   const [notifications, setNotifications] = useState({
-    study: JSON.parse(localStorage.getItem('notify_study') ?? 'true'),
-    mentions: JSON.parse(localStorage.getItem('notify_mentions') ?? 'true'),
-    recs: JSON.parse(localStorage.getItem('notify_recs') ?? 'false'),
-    progress: JSON.parse(localStorage.getItem('notify_progress') ?? 'false'),
+    study: JSON.parse(((() => { try { return localStorage.getItem('notify_study'); } catch (e) { return null; } })()) ?? 'true'),
+    mentions: JSON.parse(((() => { try { return localStorage.getItem('notify_mentions'); } catch (e) { return null; } })()) ?? 'true'),
+    recs: JSON.parse(((() => { try { return localStorage.getItem('notify_recs'); } catch (e) { return null; } })()) ?? 'false'),
+    progress: JSON.parse(((() => { try { return localStorage.getItem('notify_progress'); } catch (e) { return null; } })()) ?? 'false'),
   });
 
   const [privacy, setPrivacy] = useState({
-    public: JSON.parse(localStorage.getItem('privacy_public') ?? 'true'),
-    data: JSON.parse(localStorage.getItem('privacy_data') ?? 'true'),
+    public: JSON.parse(((() => { try { return localStorage.getItem('privacy_public'); } catch (e) { return null; } })()) ?? 'true'),
+    data: JSON.parse(((() => { try { return localStorage.getItem('privacy_data'); } catch (e) { return null; } })()) ?? 'true'),
   });
 
   useEffect(() => {

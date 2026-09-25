@@ -64,7 +64,7 @@ export function Header({
   });
   const [isDarkTheme, setIsDarkTheme] = useState(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('theme') || 'system';
+      const saved = ((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light';
       return saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
     }
     return false;

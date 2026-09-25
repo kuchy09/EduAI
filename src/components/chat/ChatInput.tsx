@@ -11,13 +11,15 @@ interface ChatInputProps {
   disabled?: boolean;
   disabledReason?: string;
   onSendFriendRequest?: () => void;
+  onOpenSharedNotes?: () => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
   onSendMessage,
   disabled = false,
   disabledReason,
-  onSendFriendRequest
+  onSendFriendRequest,
+  onOpenSharedNotes
 }) => {
   const [text, setText] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -178,7 +180,19 @@ export const ChatInput: React.FC<ChatInputProps> = ({
 
       {/* Attachment Options Menu */}
       {showAttachMenu && (
-        <div className="absolute bottom-16 left-2 sm:left-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-2 z-30 space-y-1 w-52 max-w-[calc(100vw-24px)]">
+        <div className="absolute bottom-16 left-2 sm:left-3 bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl p-2 z-30 space-y-1 w-56 max-w-[calc(100vw-24px)]">
+          {onOpenSharedNotes && (
+            <button
+              onClick={() => {
+                setShowAttachMenu(false);
+                onOpenSharedNotes();
+              }}
+              className="w-full px-3 py-2 rounded-xl bg-indigo-50/70 hover:bg-indigo-100 dark:bg-indigo-950/60 dark:hover:bg-indigo-900/60 text-left text-xs font-semibold text-indigo-700 dark:text-indigo-300 flex items-center gap-2.5 transition-colors cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4 text-indigo-600 shrink-0" />
+              <span className="truncate">Collaborative Takeaway</span>
+            </button>
+          )}
           <button
             onClick={() => {
               setShowBookPicker(true);

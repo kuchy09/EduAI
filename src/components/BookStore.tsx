@@ -158,7 +158,7 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
             Premium Course Library
           </div>
           <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Syllabus & Textbook Store</h2>
-          <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
+          <p className="text-sm sm:text-base text-slate-500 dark:text-slate-300 mt-1 max-w-2xl">
             Browse and unlock official curriculum publications, accredited CBC materials, and high school test-preps powered by Edu AI learning pathways.
           </p>
         </div>
@@ -177,7 +177,7 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
 
       {/* Filter Options */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 sm:mb-8 w-full max-w-full">
-        <div className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-400">
+        <div className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-300">
           Showing <span className="font-bold text-slate-800 dark:text-slate-200">{filteredItems.length}</span> textbooks & curriculum courses
         </div>
         
@@ -226,13 +226,13 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
                     <h3 className="font-semibold text-slate-900 dark:text-white leading-snug line-clamp-2 text-sm sm:text-base group-hover:text-indigo-600 transition-colors">
                       {item.title}
                     </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 truncate">{item.author}</p>
+                    <p className="text-xs text-slate-500 dark:text-slate-300 mt-1 truncate">{item.author}</p>
                   </div>
                   
                   <div className="flex items-center gap-1.5 text-amber-500 text-xs font-semibold mt-1">
                     <Star className="w-3.5 h-3.5 fill-current shrink-0" />
                     {item.rating}
-                    <span className="text-slate-400 dark:text-slate-500 font-normal">({(idx + 12) * 5} reviews)</span>
+                    <span className="text-slate-400 dark:text-slate-300 font-normal">({(idx + 12) * 5} reviews)</span>
                   </div>
                 </div>
               </div>
@@ -332,13 +332,13 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
                     </div>
                     <div className="min-w-0 flex-1">
                       <h4 className="font-bold text-slate-900 dark:text-white leading-tight text-sm sm:text-base line-clamp-2">{activeModalItem.title}</h4>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 truncate">{activeModalItem.author}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-300 mt-1 truncate">{activeModalItem.author}</p>
                       <div className="text-indigo-600 dark:text-indigo-400 text-xs sm:text-sm font-bold mt-2 font-mono">KES 1,200.00</div>
                     </div>
                   </div>
 
                   <div className="bg-slate-50 dark:bg-slate-800/60 rounded-2xl p-4 space-y-3 border border-slate-100 dark:border-slate-800">
-                    <div className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">Course Syllabus Features Included</div>
+                    <div className="text-[10px] font-bold text-slate-500 dark:text-slate-300 uppercase tracking-wider">Course Syllabus Features Included</div>
                     <div className="space-y-2 text-xs text-slate-600 dark:text-slate-300">
                       <div className="flex items-center gap-2">
                         <ShieldCheck className="w-4 h-4 text-emerald-500 shrink-0" />
@@ -355,7 +355,7 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
                     </div>
                   </div>
 
-                  <div className="flex justify-between items-center text-xs text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-800 pt-4">
+                  <div className="flex justify-between items-center text-xs text-slate-500 dark:text-slate-300 border-t border-slate-100 dark:border-slate-800 pt-4">
                     <span>Payment Method:</span>
                     <span className="font-semibold text-slate-800 dark:text-slate-200 flex items-center gap-1">
                       <CreditCard className="w-3.5 h-3.5 text-indigo-500 shrink-0" />

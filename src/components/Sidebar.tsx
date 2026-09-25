@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { BookOpen, Map, FileQuestion, Users, Settings, LifeBuoy, Code, User, FolderArchive, MessageCircle, LineChart, X, Bell, UserPlus, Moon, Sun } from 'lucide-react';
 import { ViewState } from '../types';
-import { supabase } from '../lib/supabase';
+import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 
 interface SidebarProps {
@@ -15,7 +15,7 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
   const [user, setUser] = useState<any>(null);
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('theme') || 'system';
+      const saved = ((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light';
       return saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
     }
     return false;
@@ -42,9 +42,19 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
     if (supabase) {
       supabase.auth.getUser()
         .then((res) => {
+          if (res?.error) {
+            if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
+              clearStaleSupabaseTokens();
+            }
+            setUser(null);
+            return;
+          }
           setUser(res?.data?.user || null);
         })
-        .catch(err => console.warn('Sidebar getUser error ignored:', err));
+        .catch(err => {
+          console.warn('Sidebar getUser error ignored:', err);
+          setUser(null);
+        });
 
       try {
         const { data } = supabase.auth.onAuthStateChange((_event, session) => {

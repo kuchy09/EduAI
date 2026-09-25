@@ -14,6 +14,7 @@ interface ChatInfoDrawerProps {
   messages: ChatMessage[];
   onStartCall: (type: 'audio' | 'video') => void;
   onUnfriend?: (userId: string) => void;
+  onOpenSharedNotes?: () => void;
 }
 
 export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
@@ -23,13 +24,15 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
   partner,
   messages,
   onStartCall,
-  onUnfriend
+  onUnfriend,
+  onOpenSharedNotes
 }) => {
   if (!isOpen) return null;
 
   const isGroup = conversation.type === 'group';
 
   // Gather attachments from conversation
+  const sharedNotes = messages.filter(m => m.attachment?.type === 'note');
   const sharedBooks = messages.filter(m => m.attachment?.type === 'book');
   const sharedFiles = messages.filter(m => m.attachment?.type === 'file' || m.attachment?.type === 'voice' || m.attachment?.type === 'code');
 
@@ -154,20 +157,75 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
             </div>
           )}
 
-          <div>
-            <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
-              Focus Subjects
-            </span>
-            <div className="flex flex-wrap gap-1">
-              {partner.subjects.map(s => (
-                <span key={s} className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 text-[11px] font-medium">
-                  {s}
-                </span>
-              ))}
+          {partner.subjects && partner.subjects.length > 0 && (
+            <div>
+              <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider block mb-1.5">
+                Focus Subjects
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {partner.subjects.map(s => (
+                  <span key={s} className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 text-[11px] font-medium">
+                    {s}
+                  </span>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       )}
+
+      {/* Shared Book Takeaways Section */}
+      <div className="p-4 border-b border-slate-100 dark:border-slate-800">
+        <div className="flex items-center justify-between mb-2.5">
+          <span className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Shared Takeaways ({sharedNotes.length})</span>
+          </span>
+          {onOpenSharedNotes && (
+            <button
+              onClick={onOpenSharedNotes}
+              className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+            >
+              Open Hub
+            </button>
+          )}
+        </div>
+        {sharedNotes.length === 0 ? (
+          <div className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/50 text-center">
+            <p className="text-[11px] text-slate-500">No takeaways posted in this chat yet.</p>
+            {onOpenSharedNotes && (
+              <button
+                onClick={onOpenSharedNotes}
+                className="mt-1.5 text-xs text-indigo-600 font-bold hover:underline cursor-pointer"
+              >
+                + Share key takeaways
+              </button>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {sharedNotes.map((m, idx) => (
+              <div 
+                key={idx} 
+                onClick={onOpenSharedNotes}
+                className="p-2 rounded-xl bg-indigo-50/50 dark:bg-slate-800/80 hover:bg-indigo-100/50 dark:hover:bg-slate-800 border border-indigo-100 dark:border-slate-700 transition-colors cursor-pointer"
+              >
+                <div className="flex items-center justify-between">
+                  <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                    {m.attachment?.name || 'Shared Note'}
+                  </p>
+                  <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold">
+                    {m.attachment?.notePermission || 'Shared'}
+                  </span>
+                </div>
+                <p className="text-[10px] text-slate-500 truncate mt-0.5">
+                  📖 {m.attachment?.bookTitle || 'Book'}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Shared Textbooks & Curriculum Modules */}
       {sharedBooks.length > 0 && (

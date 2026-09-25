@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   ChatUser, Conversation, ChatMessage, 
-  ChatAttachment, CallSession, UserRole 
+  ChatAttachment, CallSession, UserRole,
+  SharedBookNote 
 } from './chat/types';
 import { 
   INITIAL_CURRENT_USER, INITIAL_USERS, 
@@ -13,6 +14,15 @@ import { ChatEmptyState } from './chat/ChatEmptyState';
 import { ChatInfoDrawer } from './chat/ChatInfoDrawer';
 import { FindFriendsModal } from './chat/FindFriendsModal';
 import { CallModal } from './chat/CallModal';
+import { NoteEditorModal } from './chat/NoteEditorModal';
+import { NoteDetailModal } from './chat/NoteDetailModal';
+import { SharedNotesPanel } from './chat/SharedNotesPanel';
+import { 
+  getStoredSharedNotes, 
+  saveStoredSharedNotes, 
+  canUserViewNote, 
+  canUserEditNote 
+} from './chat/sharedNotesService';
 import { supabase } from '../lib/supabase';
 import { 
   fetchSearchableUsersFromSupabase, 
@@ -31,10 +41,12 @@ interface ChatProps {
 export function Chat({ user, profile, onNavigate }: ChatProps) {
   // 1. Current User State
   const [currentUser, setCurrentUser] = useState<ChatUser>(() => {
-    const saved = localStorage.getItem('eduai_chat_current_user');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
-    }
+    try {
+      const saved = localStorage.getItem('eduai_chat_current_user');
+      if (saved) {
+        return JSON.parse(saved);
+      }
+    } catch (e) {}
     const detectedRole: UserRole = (profile?.role || user?.user_metadata?.role || 'student') as UserRole;
     return {
       ...INITIAL_CURRENT_USER,
@@ -48,16 +60,16 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
 
   // 2. All Users (Teachers & Students)
   const [allUsers, setAllUsers] = useState<ChatUser[]>(() => {
-    const saved = localStorage.getItem('eduai_chat_users');
     let list = INITIAL_USERS;
-    if (saved) {
-      try {
+    try {
+      const saved = localStorage.getItem('eduai_chat_users');
+      if (saved) {
         const parsed: ChatUser[] = JSON.parse(saved);
         const parsedNames = new Set(parsed.map(u => u.name.toLowerCase()));
         const missing = INITIAL_USERS.filter(u => !parsedNames.has(u.name.toLowerCase()));
         list = [...parsed, ...missing];
-      } catch (e) {}
-    }
+      }
+    } catch (e) {}
     return list;
   });
 
@@ -86,9 +98,9 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
 
   // 3. Conversations List
   const [conversations, setConversations] = useState<Conversation[]>(() => {
-    const saved = localStorage.getItem('eduai_chat_conversations');
-    if (saved) {
-      try { 
+    try {
+      const saved = localStorage.getItem('eduai_chat_conversations');
+      if (saved) {
         const parsed: Conversation[] = JSON.parse(saved);
         const parsedIds = new Set(parsed.map(c => c.id));
         const missing = INITIAL_CONVERSATIONS.filter(c => !parsedIds.has(c.id));
@@ -96,20 +108,20 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
           return [...INITIAL_CONVERSATIONS, ...parsed.filter(p => !INITIAL_CONVERSATIONS.some(ic => ic.id === p.id))];
         }
         return parsed;
-      } catch (e) {}
-    }
+      }
+    } catch (e) {}
     return INITIAL_CONVERSATIONS;
   });
 
   // 4. Messages grouped by conversation ID
   const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>(() => {
-    const saved = localStorage.getItem('eduai_chat_messages');
-    if (saved) {
-      try { 
+    try {
+      const saved = localStorage.getItem('eduai_chat_messages');
+      if (saved) {
         const parsed: Record<string, ChatMessage[]> = JSON.parse(saved);
         return { ...INITIAL_MESSAGES, ...parsed };
-      } catch (e) {}
-    }
+      }
+    } catch (e) {}
     return INITIAL_MESSAGES;
   });
 
@@ -124,6 +136,18 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   const [isInfoDrawerOpen, setIsInfoDrawerOpen] = useState(false);
   const [filterTab, setFilterTab] = useState<'all' | 'direct' | 'teachers' | 'students' | 'groups'>('all');
   const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+
+  // Shared Book Takeaways State
+  const [sharedNotes, setSharedNotes] = useState<SharedBookNote[]>(() => getStoredSharedNotes());
+  const [isNotesPanelOpen, setIsNotesPanelOpen] = useState(false);
+  const [isNoteEditorOpen, setIsNoteEditorOpen] = useState(false);
+  const [noteToEdit, setNoteToEdit] = useState<SharedBookNote | null>(null);
+  const [selectedNoteForDetail, setSelectedNoteForDetail] = useState<SharedBookNote | null>(null);
+
+  // Sync Shared Notes to localStorage
+  useEffect(() => {
+    saveStoredSharedNotes(sharedNotes);
+  }, [sharedNotes]);
 
   // Call Session State
   const [callSession, setCallSession] = useState<CallSession>({
@@ -433,6 +457,66 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
     setCallSession(prev => ({ ...prev, isActive: false, partner: null }));
   };
 
+  // Shared Notes Action Handlers
+  const handleSaveNote = (savedNote: SharedBookNote) => {
+    setSharedNotes(prev => {
+      const idx = prev.findIndex(n => n.id === savedNote.id);
+      if (idx >= 0) {
+        const updated = [...prev];
+        updated[idx] = savedNote;
+        return updated;
+      } else {
+        return [savedNote, ...prev];
+      }
+    });
+    setIsNoteEditorOpen(false);
+    setNoteToEdit(null);
+  };
+
+  const handleDeleteNote = (noteId: string) => {
+    setSharedNotes(prev => prev.filter(n => n.id !== noteId));
+    setSelectedNoteForDetail(null);
+  };
+
+  const handleShareNoteToChat = (note: SharedBookNote) => {
+    if (!activeConversation) {
+      // If no active conversation, open the first group or direct conversation
+      if (conversations.length > 0) {
+        setActiveConversationId(conversations[0].id);
+        setMobileView('chat');
+      }
+    }
+
+    const convId = activeConversation ? activeConversation.id : (conversations[0]?.id || '');
+    if (!convId) return;
+
+    const attachment: ChatAttachment = {
+      type: 'note',
+      name: note.title,
+      bookId: note.bookId,
+      bookTitle: note.bookTitle,
+      bookAuthor: note.bookAuthor,
+      noteId: note.id,
+      noteTakeaways: note.keyTakeaways,
+      notePermission: note.permissionType
+    };
+
+    handleSendMessage(
+      `Shared collaborative book takeaways: "${note.title}" (${note.bookTitle})`,
+      attachment
+    );
+
+    setSelectedNoteForDetail(null);
+    setIsNotesPanelOpen(false);
+  };
+
+  const handleOpenNoteDetail = (noteId: string) => {
+    const found = sharedNotes.find(n => n.id === noteId);
+    if (found) {
+      setSelectedNoteForDetail(found);
+    }
+  };
+
   return (
     <div className="flex h-[calc(100vh-3.5rem)] sm:h-[calc(100vh-4rem)] w-full overflow-hidden bg-slate-50 dark:bg-slate-950 relative">
       {/* Left Sidebar: Conversations & Active Friends (Full width on mobile when in 'list' view, hidden on mobile when in 'chat' view) */}
@@ -445,6 +529,8 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
           onSelectConversation={handleSelectConversation}
           onOpenFindFriends={() => setIsFindFriendsOpen(true)}
           onOpenNewGroupModal={() => setIsFindFriendsOpen(true)}
+          onOpenSharedNotes={() => setIsNotesPanelOpen(true)}
+          sharedNotesCount={sharedNotes.length}
           onToggleUserRole={handleToggleUserRole}
           filterTab={filterTab}
           setFilterTab={setFilterTab}
@@ -471,6 +557,8 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
             }}
             onSendFriendRequest={handleSendFriendRequest}
             isPartnerTyping={isPartnerTyping}
+            onOpenSharedNotes={() => setIsNotesPanelOpen(true)}
+            onSelectSharedNote={handleOpenNoteDetail}
           />
         ) : (
           <ChatEmptyState
@@ -496,8 +584,79 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
           messages={activeMessages}
           onStartCall={handleStartCall}
           onUnfriend={activePartner ? handleUnfriend : undefined}
+          onOpenSharedNotes={() => {
+            setIsInfoDrawerOpen(false);
+            setIsNotesPanelOpen(true);
+          }}
         />
       )}
+
+      {/* Slide-over Shared Notes Panel Drawer */}
+      {isNotesPanelOpen && (
+        <>
+          <div
+            onClick={() => setIsNotesPanelOpen(false)}
+            className="fixed inset-0 bg-black/40 z-40 md:hidden backdrop-blur-xs transition-opacity"
+          />
+          <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-96 md:w-96 lg:w-100 border-l border-slate-200/80 dark:border-slate-800 bg-white dark:bg-[#111b21] flex flex-col h-full shadow-2xl animate-in slide-in-from-right duration-200">
+            <div className="h-full flex flex-col relative">
+              <SharedNotesPanel
+                currentUser={currentUser}
+                notes={sharedNotes}
+                activeConversation={activeConversation}
+                onOpenCreateNote={() => {
+                  setNoteToEdit(null);
+                  setIsNoteEditorOpen(true);
+                }}
+                onSelectNote={(note) => setSelectedNoteForDetail(note)}
+                onEditNote={(note) => {
+                  setNoteToEdit(note);
+                  setIsNoteEditorOpen(true);
+                }}
+                onShareNoteToChat={handleShareNoteToChat}
+                onClose={() => setIsNotesPanelOpen(false)}
+              />
+              <button
+                onClick={() => setIsNotesPanelOpen(false)}
+                className="absolute top-3.5 right-3.5 w-7 h-7 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-500 hover:text-slate-900 dark:hover:text-white flex items-center justify-center transition-colors cursor-pointer text-xs font-bold"
+                title="Close drawer"
+              >
+                ✕
+              </button>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* Note Editor Modal (Create / Edit note with Individual & Group view permissions) */}
+      <NoteEditorModal
+        isOpen={isNoteEditorOpen}
+        onClose={() => {
+          setIsNoteEditorOpen(false);
+          setNoteToEdit(null);
+        }}
+        noteToEdit={noteToEdit}
+        currentUser={currentUser}
+        allUsers={allUsers}
+        conversations={conversations}
+        activeConversation={activeConversation}
+        onSaveNote={handleSaveNote}
+      />
+
+      {/* Note Detail Modal (View note, copy, share to chat, check collaborators) */}
+      <NoteDetailModal
+        isOpen={!!selectedNoteForDetail}
+        onClose={() => setSelectedNoteForDetail(null)}
+        note={selectedNoteForDetail}
+        currentUser={currentUser}
+        onEditNote={(note) => {
+          setSelectedNoteForDetail(null);
+          setNoteToEdit(note);
+          setIsNoteEditorOpen(true);
+        }}
+        onDeleteNote={handleDeleteNote}
+        onShareToChat={handleShareNoteToChat}
+      />
 
       {/* Directory & Friendship Modal */}
       <FindFriendsModal
