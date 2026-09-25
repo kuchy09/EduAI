@@ -3,6 +3,7 @@ import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, Use
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
+import { useUserAvatar } from '../lib/userAvatarService';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -13,6 +14,7 @@ interface SidebarProps {
 
 export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarProps) {
   const [user, setUser] = useState<any>(null);
+  const avatarUrl = useUserAvatar(user);
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
       const saved = ((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light';
@@ -170,8 +172,21 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
                 : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm">
-              {user?.email ? user.email.charAt(0).toUpperCase() : <User className="w-4 h-4 text-white" />}
+            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm overflow-hidden">
+              {avatarUrl ? (
+                <img 
+                  src={avatarUrl} 
+                  alt="Profile" 
+                  className="w-full h-full object-cover" 
+                  onError={(e) => {
+                    (e.target as HTMLElement).style.display = 'none';
+                  }}
+                />
+              ) : user?.email ? (
+                user.email.charAt(0).toUpperCase()
+              ) : (
+                <User className="w-4 h-4 text-white" />
+              )}
             </div>
             <div className="text-left flex-1 min-w-0">
               <p className="text-slate-900 dark:text-white font-medium text-xs sm:text-sm truncate">

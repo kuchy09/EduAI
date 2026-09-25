@@ -12,6 +12,7 @@ import { useOffline } from '../lib/useOffline';
 import { getRelatedSearchSuggestions } from '../lib/searchSuggestions';
 import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
+import { useUserAvatar } from '../lib/userAvatarService';
 
 interface HeaderProps {
   currentView?: ViewState;
@@ -91,12 +92,12 @@ export function Header({
     };
   }, [isProfileMenuOpen]);
 
-  const userAvatarUrl = useMemo(() => {
-    const rawKey = user?.user_metadata?.avatar_url || user?.user_metadata?.profile_photo_key;
-    if (!rawKey) return null;
-    if (rawKey.startsWith('http')) return rawKey;
-    return `/api/download?key=${encodeURIComponent(rawKey)}`;
-  }, [user]);
+  const userAvatarUrl = useUserAvatar(user);
+  const [avatarImgFailed, setAvatarImgFailed] = useState(false);
+
+  useEffect(() => {
+    setAvatarImgFailed(false);
+  }, [userAvatarUrl]);
 
   const userInitial = useMemo(() => {
     const name = user?.user_metadata?.full_name;
@@ -942,14 +943,12 @@ export function Header({
             title={`User Profile (${user?.user_metadata?.full_name || user?.email || 'Learner Account'})`}
             aria-label="User Profile"
           >
-            {userAvatarUrl ? (
+            {userAvatarUrl && !avatarImgFailed ? (
               <img 
                 src={userAvatarUrl} 
                 alt="Profile" 
                 className="w-full h-full object-cover rounded-full"
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
+                onError={() => setAvatarImgFailed(true)}
               />
             ) : (
               <div className="w-full h-full bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-xs sm:text-sm font-display shadow-inner">
@@ -967,7 +966,7 @@ export function Header({
               {/* Header profile identity */}
               <div className="flex items-center gap-3 pb-3 border-b border-slate-200/60 dark:border-slate-800">
                 <div className="w-11 h-11 rounded-2xl bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0 overflow-hidden">
-                  {userAvatarUrl ? (
+                  {userAvatarUrl && !avatarImgFailed ? (
                     <img src={userAvatarUrl} alt="Profile" className="w-full h-full object-cover" />
                   ) : (
                     userInitial

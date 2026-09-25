@@ -1,12 +1,14 @@
 import { Mail, MapPin, Building, Calendar, BookOpen, GraduationCap, BarChart2, LogOut, Award, Star, Clock, Camera, Loader2 } from 'lucide-react';
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
+import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl } from '../lib/userAvatarService';
 
 export function Profile() {
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const avatarUrl = useUserAvatar(user);
 
   useEffect(() => {
     if (!supabase) return;
@@ -32,6 +34,9 @@ export function Profile() {
             if (!isMounted) return;
             if (data) {
               setProfile(data);
+              if (data.avatar_url) {
+                saveUserAvatarLocally(data.avatar_url);
+              }
             } else {
               try {
                 const { data: newProfile } = await supabase.from('profiles').insert([{ id: user.id }]).select().single();
@@ -77,13 +82,31 @@ export function Profile() {
 
       const { key: fileKey } = await uploadRes.json();
       
-      // We will just use the returned fileKey to update Supabase metadata.
-      if (supabase && user && fileKey) {
-        const { data, error } = await supabase.from('profiles').update({
-          avatar_url: fileKey
-        }).eq('id', user.id).select().single();
-        if (!error && data) {
-          setProfile(data);
+      if (fileKey) {
+        // Immediately persist locally and broadcast to entire application
+        saveUserAvatarLocally(fileKey);
+        setProfile((prev: any) => ({ ...(prev || {}), avatar_url: fileKey }));
+
+        // Also update Supabase metadata if logged in
+        if (supabase && user) {
+          try {
+            await supabase.auth.updateUser({
+              data: { avatar_url: fileKey, profile_photo_key: fileKey }
+            });
+          } catch (e) {
+            console.warn("Auth updateUser error:", e);
+          }
+
+          try {
+            const { data, error } = await supabase.from('profiles').update({
+              avatar_url: fileKey
+            }).eq('id', user.id).select().single();
+            if (!error && data) {
+              setProfile(data);
+            }
+          } catch (e) {
+            console.warn("Profiles update error:", e);
+          }
         }
       }
 
@@ -97,10 +120,7 @@ export function Profile() {
   };
 
   const getPublicUrl = (key: string) => {
-    // Check if it's already a full HTTP URL (e.g. from GitHub, Google, or direct S3 link)
-    if (key.startsWith('http')) return key;
-    // Otherwise fallback to backend download proxy
-    return `/api/download?key=${encodeURIComponent(key)}`;
+    return getPublicAvatarUrl(key) || `/api/download?key=${encodeURIComponent(key)}`;
   };
 
   return (
@@ -124,7 +144,13 @@ export function Profile() {
                 accept="image/*" 
               />
               <div className="w-32 h-32 sm:w-40 sm:h-40 bg-white p-1.5 rounded-full z-10 shadow-md relative overflow-hidden">
-                {profile?.avatar_url ? (
+                {avatarUrl ? (
+                  <img 
+                    src={avatarUrl} 
+                    alt="Profile" 
+                    className="w-full h-full rounded-full object-cover"
+                  />
+                ) : profile?.avatar_url ? (
                   <img 
                     src={getPublicUrl(profile.avatar_url)} 
                     alt="Profile" 

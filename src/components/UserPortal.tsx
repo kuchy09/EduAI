@@ -15,6 +15,7 @@ import {
   syncCurrentUserToSupabase 
 } from '../lib/userDirectoryService';
 import { supabase } from '../lib/supabase';
+import { getStoredUserAvatar } from '../lib/userAvatarService';
 
 interface UserPortalProps {
   user?: any;
@@ -31,11 +32,12 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
       try { return JSON.parse(saved); } catch (e) {}
     }
     const detectedRole: UserRole = (profile?.role || user?.user_metadata?.role || 'student') as UserRole;
+    const customAvatar = getStoredUserAvatar(user);
     return {
       id: user?.id || 'me',
       name: profile?.full_name || user?.user_metadata?.full_name || 'Dickson Skello',
       email: user?.email || 'dicksonskello09@gmail.com',
-      avatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+      avatar: customAvatar || profile?.avatar_url || user?.user_metadata?.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
       role: detectedRole === 'teacher' ? 'teacher' : 'student',
       title: detectedRole === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)',
       institution: 'Nairobi Academic Senior Secondary',

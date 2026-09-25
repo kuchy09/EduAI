@@ -23,6 +23,7 @@ import {
   canUserViewNote, 
   canUserEditNote 
 } from './chat/sharedNotesService';
+import { getStoredUserAvatar } from '../lib/userAvatarService';
 import { supabase } from '../lib/supabase';
 import { 
   fetchSearchableUsersFromSupabase, 
@@ -48,11 +49,13 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
       }
     } catch (e) {}
     const detectedRole: UserRole = (profile?.role || user?.user_metadata?.role || 'student') as UserRole;
+    const customAvatar = getStoredUserAvatar(user);
     return {
       ...INITIAL_CURRENT_USER,
       id: user?.id || INITIAL_CURRENT_USER.id,
       name: profile?.full_name || user?.user_metadata?.full_name || INITIAL_CURRENT_USER.name,
       email: user?.email || INITIAL_CURRENT_USER.email,
+      avatar: customAvatar || profile?.avatar_url || user?.user_metadata?.avatar_url || INITIAL_CURRENT_USER.avatar,
       role: detectedRole === 'teacher' ? 'teacher' : 'student',
       title: detectedRole === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)'
     };
