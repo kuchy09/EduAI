@@ -1,13 +1,26 @@
-import { User, Bell, Shield, Moon, Smartphone, Type, Monitor, LogOut, HardDrive, Wifi, WifiOff, RefreshCw, Trash2, CheckCircle2, BookOpen, Bookmark, Highlighter, Database, Layers, Sparkles } from 'lucide-react';
+import { User, Bell, Shield, Moon, Smartphone, Type, Monitor, LogOut, HardDrive, Wifi, WifiOff, RefreshCw, Trash2, CheckCircle2, BookOpen, Bookmark, Highlighter, Database, Layers, Sparkles, LifeBuoy, Code, HelpCircle } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { useOffline } from '../lib/useOffline';
 import { getAllCachedBooks, CachedBookMeta } from '../lib/offlineManager';
+import { Support } from './Support';
+import { Developer } from './Developer';
 
-type Tab = 'appearance' | 'notifications' | 'privacy' | 'offline';
+export type SettingsTab = 'appearance' | 'notifications' | 'privacy' | 'offline' | 'support' | 'developer';
 
-export function Settings() {
-  const [activeTab, setActiveTab] = useState<Tab>('appearance');
+export interface SettingsProps {
+  initialTab?: SettingsTab;
+  onNavigate?: (view: any) => void;
+}
+
+export function Settings({ initialTab = 'appearance', onNavigate }: SettingsProps = {}) {
+  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
   const [theme, setTheme] = useState(((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light');
   const [fontSize, setFontSize] = useState(((() => { try { return localStorage.getItem('fontSize'); } catch (e) { return null; } })()) || 'Medium');
   const { isOnline, storageStats, clearCache, triggerSync, isSyncing, lastSyncResult, deleteCachedBook, refreshOfflineState } = useOffline();
@@ -93,31 +106,54 @@ export function Settings() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-        <div className="md:col-span-1 space-y-1">
-          <button 
-            onClick={() => setActiveTab('appearance')}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'appearance' ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
-            <Monitor className="w-4 h-4" /> Appearance
-          </button>
-          <button 
-            onClick={() => setActiveTab('notifications')}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'notifications' ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
-            <Bell className="w-4 h-4" /> Notifications
-          </button>
-          <button 
-            onClick={() => setActiveTab('privacy')}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'privacy' ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
-            <Shield className="w-4 h-4" /> Privacy & Security
-          </button>
-          <button 
-            onClick={() => setActiveTab('offline')}
-            className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'offline' ? 'bg-slate-100 text-slate-900' : 'text-slate-600 hover:bg-slate-50'}`}
-          >
-            <HardDrive className="w-4 h-4" /> Offline & Sync
-          </button>
+        <div className="md:col-span-1 space-y-4">
+          <div className="space-y-1">
+            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 pb-1">
+              Preferences
+            </div>
+            <button 
+              onClick={() => setActiveTab('appearance')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'appearance' ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+            >
+              <Monitor className="w-4 h-4" /> Appearance
+            </button>
+            <button 
+              onClick={() => setActiveTab('notifications')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'notifications' ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+            >
+              <Bell className="w-4 h-4" /> Notifications
+            </button>
+            <button 
+              onClick={() => setActiveTab('privacy')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'privacy' ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+            >
+              <Shield className="w-4 h-4" /> Privacy & Security
+            </button>
+            <button 
+              onClick={() => setActiveTab('offline')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'offline' ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+            >
+              <HardDrive className="w-4 h-4" /> Offline & Sync
+            </button>
+          </div>
+
+          <div className="space-y-1 pt-3 border-t border-slate-200 dark:border-slate-800">
+            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 pb-1">
+              Help & Platform
+            </div>
+            <button 
+              onClick={() => setActiveTab('support')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'support' ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+            >
+              <LifeBuoy className="w-4 h-4 text-indigo-500" /> Support & Help
+            </button>
+            <button 
+              onClick={() => setActiveTab('developer')}
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'developer' ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+            >
+              <Code className="w-4 h-4 text-purple-500" /> Developer & Architect
+            </button>
+          </div>
         </div>
 
         <div className="md:col-span-2 space-y-6">
@@ -506,6 +542,39 @@ export function Settings() {
                   Sync completed. All reading items are synchronized with the cloud!
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Support Tab View */}
+          {activeTab === 'support' && (
+            <Support embedded onNavigate={onNavigate} />
+          )}
+
+          {/* Developer Tab View */}
+          {activeTab === 'developer' && (
+            <Developer embedded />
+          )}
+
+          {/* Helpful Navigation Footer for preferences */}
+          {['appearance', 'notifications', 'privacy', 'offline'].includes(activeTab) && (
+            <div className="p-4 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-2xs">
+              <div className="text-slate-500 dark:text-slate-400 text-center sm:text-left">
+                Need assistance with your account or curious about the project architect?
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button 
+                  onClick={() => setActiveTab('support')}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <LifeBuoy className="w-3.5 h-3.5 text-indigo-500" /> Support & Help
+                </button>
+                <button 
+                  onClick={() => setActiveTab('developer')}
+                  className="px-3 py-1.5 rounded-lg bg-purple-50 dark:bg-purple-950/60 hover:bg-purple-100 dark:hover:bg-purple-900/60 text-purple-700 dark:text-purple-300 font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                >
+                  <Code className="w-3.5 h-3.5 text-purple-500" /> About Developer
+                </button>
+              </div>
             </div>
           )}
         </div>

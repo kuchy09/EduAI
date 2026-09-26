@@ -926,9 +926,9 @@ export default function App() {
                     {currentView === 'community' && <Community />}
                     {currentView === 'users-portal' && <UserPortal user={session?.user} profile={profile} onStartChat={(userId) => changeView('chat')} onNavigate={(view) => changeView(view as any)} />}
                     {currentView === 'chat' && <Chat user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} />}
-                    {currentView === 'settings' && <Settings />}
-                    {currentView === 'support' && <Support />}
-                    {currentView === 'developer' && <Developer />}
+                    {currentView === 'settings' && <Settings onNavigate={(view) => changeView(view as any)} />}
+                    {currentView === 'support' && <Settings initialTab="support" onNavigate={(view) => changeView(view as any)} />}
+                    {currentView === 'developer' && <Settings initialTab="developer" onNavigate={(view) => changeView(view as any)} />}
                     {currentView === 'profile' && <Profile />}
                     {currentView === 'workspace' && <Workspace />}
                     {currentView === 'admin' && (

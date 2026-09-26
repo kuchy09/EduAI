@@ -41,8 +41,8 @@ const VIEW_TITLES: Record<string, { title: string; subtitle?: string; icon?: any
   'notifications': { title: 'Notifications', subtitle: 'Activity & Updates', icon: Bell },
   'workspace': { title: 'Study Workspace', subtitle: 'Notes, Highlights & Flashcards', icon: BookmarkCheck },
   'settings': { title: 'Settings', subtitle: 'Preferences & Configurations', icon: MoreHorizontal },
-  'support': { title: 'Support & Help', subtitle: 'FAQs and Assistance', icon: HelpCircle },
-  'developer': { title: 'Developer Portal', subtitle: 'API & Developer Tools', icon: HardDriveDownload },
+  'support': { title: 'Settings', subtitle: 'Support, FAQs & Assistance', icon: HelpCircle },
+  'developer': { title: 'Settings', subtitle: 'Developer & System Architect', icon: HardDriveDownload },
   'profile': { title: 'User Profile', subtitle: 'Account & Learning Track', icon: Compass },
   'admin': { title: 'Admin Platform', subtitle: 'System & Catalog Management', icon: MoreHorizontal },
 };

@@ -77,20 +77,30 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
     }
   }, []);
 
-  const navItems: { id: ViewState; label: string; icon: React.ReactNode }[] = [
+  const navItems: { 
+    id: ViewState; 
+    label: string; 
+    icon: React.ReactNode;
+    subItems?: { id: ViewState; label: string; icon: React.ReactNode }[];
+  }[] = [
     { id: 'progress', label: 'My Progress', icon: <LineChart className="w-5 h-5" /> },
     { id: 'learning-path', label: 'Learning Path', icon: <Map className="w-5 h-5" /> },
     { id: 'community', label: 'Community', icon: <Users className="w-5 h-5" /> },
     { id: 'users-portal', label: 'Find Members & Friends', icon: <UserPlus className="w-5 h-5" /> },
-    { id: 'settings', label: 'Settings', icon: <Settings className="w-5 h-5" /> },
-    { id: 'support', label: 'Support', icon: <LifeBuoy className="w-5 h-5" /> },
+    { 
+      id: 'settings', 
+      label: 'Settings', 
+      icon: <Settings className="w-5 h-5" />,
+      subItems: [
+        { id: 'support', label: 'Support & Help', icon: <LifeBuoy className="w-4 h-4" /> },
+        { id: 'developer', label: 'Developer', icon: <Code className="w-4 h-4" /> }
+      ]
+    },
   ];
 
   if (user?.email?.toLowerCase().endsWith('@admin.com')) {
     navItems.push({ id: 'admin', label: 'Admin Platform', icon: <Code className="w-5 h-5" /> });
   }
-
-  navItems.push({ id: 'developer', label: 'Developer', icon: <Code className="w-5 h-5" /> });
 
   return (
     <>
@@ -136,22 +146,58 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
 
         {/* Navigation items list */}
         <nav className="flex-1 overflow-y-auto px-3.5 py-4 space-y-1.5">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              onClick={() => onChangeView(item.id)}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
-                currentView === item.id
-                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
-                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
-              }`}
-            >
-              <div className={`p-1 rounded-lg ${currentView === item.id ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-400'}`}>
-                {item.icon}
+          {navItems.map((item) => {
+            const isSubActive = item.subItems?.some(sub => sub.id === currentView);
+            const isSelfActive = currentView === item.id;
+            const isHighlighted = isSelfActive || isSubActive;
+
+            return (
+              <div key={item.id} className="space-y-1">
+                <button
+                  onClick={() => onChangeView(item.id)}
+                  className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
+                    isSelfActive
+                      ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-semibold shadow-xs'
+                      : isHighlighted
+                      ? 'bg-slate-50 dark:bg-slate-800/50 text-slate-900 dark:text-white font-medium'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`p-1 rounded-lg ${isHighlighted ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-400'}`}>
+                      {item.icon}
+                    </div>
+                    <span>{item.label}</span>
+                  </div>
+                </button>
+
+                {/* Sub-items (Support and Developer in Setting) */}
+                {item.subItems && (
+                  <div className="ml-5 pl-3 border-l-2 border-slate-100 dark:border-slate-800/80 space-y-1 pt-0.5 pb-1">
+                    {item.subItems.map((sub) => {
+                      const isThisSubActive = currentView === sub.id;
+                      return (
+                        <button
+                          key={sub.id}
+                          onClick={() => onChangeView(sub.id)}
+                          className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
+                            isThisSubActive
+                              ? 'bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 font-semibold'
+                              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                          }`}
+                        >
+                          <span className={isThisSubActive ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400 dark:text-slate-500'}>
+                            {sub.icon}
+                          </span>
+                          <span>{sub.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
-              <span>{item.label}</span>
-            </button>
-          ))}
+            );
+          })}
         </nav>
 
         {/* User profile & Theme footer */}
