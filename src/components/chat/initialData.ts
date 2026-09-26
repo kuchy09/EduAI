@@ -369,7 +369,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
     }
   ],
 
-  // Meta / Edu AI
+  // 8. Edu AI Assistant
   'conv-meta-ai': [
     {
       id: 'm-meta-1',
@@ -384,7 +384,7 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
     }
   ],
 
-  // Teacher Dr. Sarah Mwangi
+  // 9. Teacher Dr. Sarah Mwangi
   'conv-teacher-1': [
     {
       id: 'm1-1',
@@ -397,11 +397,107 @@ export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
       createdAt: 'Yesterday',
       status: 'read'
     }
+  ],
+
+  // 10. Grade 12 Physics & Mechanics Study Room
+  'conv-group-physics': [
+    {
+      id: 'm-phys-1',
+      conversationId: 'conv-group-physics',
+      senderId: 'teacher-1',
+      senderName: 'Dr. Sarah Mwangi',
+      senderRole: 'teacher',
+      senderAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+      content: 'Welcome everyone! For tomorrow\'s lab, review conservation of momentum equations on Page 142.',
+      createdAt: '2:15 PM',
+      status: 'read'
+    },
+    {
+      id: 'm-phys-2',
+      conversationId: 'conv-group-physics',
+      senderId: 'user-marop',
+      senderName: 'Marop Majok',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80',
+      content: 'I created a quick formula breakdown for elastic vs inelastic collisions. Check this out:',
+      createdAt: '2:18 PM',
+      status: 'read',
+      attachment: {
+        type: 'code',
+        name: 'momentum_conservation.ts',
+        codeSnippet: '// Elastic Collision Conservation\nm1 * u1 + m2 * u2 === m1 * v1 + m2 * v2;\n\n// Kinetic Energy Check\n0.5 * m1 * (u1**2) + 0.5 * m2 * (u2**2) === 0.5 * m1 * (v1**2) + 0.5 * m2 * (v2**2);'
+      }
+    },
+    {
+      id: 'm-phys-3',
+      conversationId: 'conv-group-physics',
+      senderId: 'user-ifrah',
+      senderName: 'Ifrah',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80',
+      content: 'This formula summary saved me so much time! Sharing my textbook highlights too.',
+      createdAt: '2:22 PM',
+      status: 'delivered'
+    }
+  ],
+
+  // 11. Calculus & Pure Math Olympiad Circle
+  'conv-group-math': [
+    {
+      id: 'm-math-1',
+      conversationId: 'conv-group-math',
+      senderId: 'teacher-2',
+      senderName: 'Mr. David Ochieng',
+      senderRole: 'teacher',
+      senderAvatar: 'https://images.unsplash.com/photo-1560250097-0b93528c311a?w=150&auto=format&fit=crop&q=80',
+      content: 'National Olympiad practice question posted: Prove that the derivative of ln(x) equals 1/x using definition of limits.',
+      createdAt: '10:00 AM',
+      status: 'read'
+    },
+    {
+      id: 'm-math-2',
+      conversationId: 'conv-group-math',
+      senderId: 'user-moossy',
+      senderName: 'Mðøssŷ Qħøm',
+      senderRole: 'student',
+      senderAvatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80',
+      content: 'Working through lim(h->0) [ln(1 + h/x)^(1/h)] right now!',
+      createdAt: '10:14 AM',
+      status: 'delivered'
+    }
   ]
 };
 
 export const INITIAL_CONVERSATIONS: Conversation[] = [
-  // 1. Marop Majok (12:36 PM, Unread 2)
+  // 1. Grade 12 Physics & Mechanics Study Room (PINNED GROUP)
+  {
+    id: 'conv-group-physics',
+    type: 'group',
+    name: '⚡ Physics & Mechanics Revision Hub',
+    groupAvatar: '⚡',
+    description: 'Alliance High & Moi Girls joint study room for mechanics, waves, and thermodynamics.',
+    participants: ['me', 'user-marop', 'user-ifrah', 'teacher-1'],
+    groupRoleType: 'teacher-to-student',
+    unreadCount: 2,
+    isPinned: true,
+    updatedAt: '2:22 PM',
+    lastMessage: INITIAL_MESSAGES['conv-group-physics'][INITIAL_MESSAGES['conv-group-physics'].length - 1]
+  },
+  // 2. Calculus & Pure Math Olympiad Circle (GROUP)
+  {
+    id: 'conv-group-math',
+    type: 'group',
+    name: '📐 Pure Math & Calculus Olympiad',
+    groupAvatar: '📐',
+    description: 'Differential equations, algorithmic proofs, and calculus review circle.',
+    participants: ['me', 'user-moossy', 'user-ibrahim', 'teacher-2'],
+    groupRoleType: 'teacher-to-student',
+    unreadCount: 1,
+    isPinned: true,
+    updatedAt: '10:14 AM',
+    lastMessage: INITIAL_MESSAGES['conv-group-math'][INITIAL_MESSAGES['conv-group-math'].length - 1]
+  },
+  // 3. Marop Majok (12:36 PM, Unread 2)
   {
     id: 'conv-marop',
     type: 'direct',
@@ -411,67 +507,7 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     updatedAt: '12:36 PM',
     lastMessage: INITIAL_MESSAGES['conv-marop'][INITIAL_MESSAGES['conv-marop'].length - 1]
   },
-  // 2. Ifrah (Yesterday, Unread 1)
-  {
-    id: 'conv-ifrah',
-    type: 'direct',
-    participants: ['me', 'user-ifrah'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 1,
-    updatedAt: 'Yesterday',
-    lastMessage: INITIAL_MESSAGES['conv-ifrah'][INITIAL_MESSAGES['conv-ifrah'].length - 1]
-  },
-  // 3. Saphira (Monday)
-  {
-    id: 'conv-saphira',
-    type: 'direct',
-    participants: ['me', 'user-saphira'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 0,
-    updatedAt: 'Monday',
-    lastMessage: INITIAL_MESSAGES['conv-saphira'][INITIAL_MESSAGES['conv-saphira'].length - 1]
-  },
-  // 4. Mðøssŷ Qħøm (Monday, Sent by me: ✓ Brody)
-  {
-    id: 'conv-moossy',
-    type: 'direct',
-    participants: ['me', 'user-moossy'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 0,
-    updatedAt: 'Monday',
-    lastMessage: INITIAL_MESSAGES['conv-moossy'][INITIAL_MESSAGES['conv-moossy'].length - 1]
-  },
-  // 5. Jabra (Sunday, Unread 2)
-  {
-    id: 'conv-jabra',
-    type: 'direct',
-    participants: ['me', 'user-jabra'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 2,
-    updatedAt: 'Sunday',
-    lastMessage: INITIAL_MESSAGES['conv-jabra'][INITIAL_MESSAGES['conv-jabra'].length - 1]
-  },
-  // 6. Maggy (Sunday, Unread 1)
-  {
-    id: 'conv-maggy',
-    type: 'direct',
-    participants: ['me', 'user-maggy'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 1,
-    updatedAt: 'Sunday',
-    lastMessage: INITIAL_MESSAGES['conv-maggy'][INITIAL_MESSAGES['conv-maggy'].length - 1]
-  },
-  // 7. Ibrahim Talu (Sunday, Unread 3)
-  {
-    id: 'conv-ibrahim',
-    type: 'direct',
-    participants: ['me', 'user-ibrahim'],
-    groupRoleType: 'student-to-student',
-    unreadCount: 3,
-    updatedAt: 'Sunday',
-    lastMessage: INITIAL_MESSAGES['conv-ibrahim'][INITIAL_MESSAGES['conv-ibrahim'].length - 1]
-  },
-  // 8. Edu AI Assistant
+  // 4. Edu AI Assistant (AI Tutor)
   {
     id: 'conv-meta-ai',
     type: 'direct',
@@ -481,7 +517,17 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     updatedAt: 'Just now',
     lastMessage: INITIAL_MESSAGES['conv-meta-ai'][INITIAL_MESSAGES['conv-meta-ai'].length - 1]
   },
-  // 9. Dr. Sarah Mwangi
+  // 5. Ifrah (Yesterday, Unread 1)
+  {
+    id: 'conv-ifrah',
+    type: 'direct',
+    participants: ['me', 'user-ifrah'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 1,
+    updatedAt: 'Yesterday',
+    lastMessage: INITIAL_MESSAGES['conv-ifrah'][INITIAL_MESSAGES['conv-ifrah'].length - 1]
+  },
+  // 6. Dr. Sarah Mwangi (Physics Faculty)
   {
     id: 'conv-teacher-1',
     type: 'direct',
@@ -490,5 +536,55 @@ export const INITIAL_CONVERSATIONS: Conversation[] = [
     unreadCount: 0,
     updatedAt: 'Yesterday',
     lastMessage: INITIAL_MESSAGES['conv-teacher-1'][INITIAL_MESSAGES['conv-teacher-1'].length - 1]
+  },
+  // 7. Saphira (Monday)
+  {
+    id: 'conv-saphira',
+    type: 'direct',
+    participants: ['me', 'user-saphira'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    updatedAt: 'Monday',
+    lastMessage: INITIAL_MESSAGES['conv-saphira'][INITIAL_MESSAGES['conv-saphira'].length - 1]
+  },
+  // 8. Mðøssŷ Qħøm (Monday, Sent by me)
+  {
+    id: 'conv-moossy',
+    type: 'direct',
+    participants: ['me', 'user-moossy'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 0,
+    updatedAt: 'Monday',
+    lastMessage: INITIAL_MESSAGES['conv-moossy'][INITIAL_MESSAGES['conv-moossy'].length - 1]
+  },
+  // 9. Jabra (Sunday, Unread 2)
+  {
+    id: 'conv-jabra',
+    type: 'direct',
+    participants: ['me', 'user-jabra'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 2,
+    updatedAt: 'Sunday',
+    lastMessage: INITIAL_MESSAGES['conv-jabra'][INITIAL_MESSAGES['conv-jabra'].length - 1]
+  },
+  // 10. Maggy (Sunday, Unread 1)
+  {
+    id: 'conv-maggy',
+    type: 'direct',
+    participants: ['me', 'user-maggy'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 1,
+    updatedAt: 'Sunday',
+    lastMessage: INITIAL_MESSAGES['conv-maggy'][INITIAL_MESSAGES['conv-maggy'].length - 1]
+  },
+  // 11. Ibrahim Talu (Sunday, Unread 3)
+  {
+    id: 'conv-ibrahim',
+    type: 'direct',
+    participants: ['me', 'user-ibrahim'],
+    groupRoleType: 'student-to-student',
+    unreadCount: 3,
+    updatedAt: 'Sunday',
+    lastMessage: INITIAL_MESSAGES['conv-ibrahim'][INITIAL_MESSAGES['conv-ibrahim'].length - 1]
   }
 ];

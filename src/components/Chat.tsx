@@ -577,9 +577,12 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
         ) : (
           <ChatEmptyState
             onOpenFindContacts={() => setIsFindFriendsOpen(true)}
+            onOpenNewGroup={() => setIsFindFriendsOpen(true)}
+            onOpenSharedNotes={() => setIsNotesPanelOpen(true)}
+            onSelectConversation={handleSelectConversation}
             onOpenAIHelp={() => {
               if (onNavigate) {
-                onNavigate('sage');
+                onNavigate('ai-tutor');
               } else {
                 handleSelectConversation('conv-meta-ai');
               }

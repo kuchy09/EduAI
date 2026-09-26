@@ -2,9 +2,9 @@ import React, { useState } from 'react';
 import { 
   Search, Plus, MoreVertical, ChevronDown, Check, CheckCheck, 
   UserPlus, Sparkles, Filter, X, Users, MessageSquarePlus, 
-  Settings, BookOpen, Star, Archive, BellOff
+  Settings, BookOpen, Star, BellOff, User, Pin, Compass, Lightbulb
 } from 'lucide-react';
-import { ChatUser, Conversation, UserRole } from './types';
+import { ChatUser, Conversation, UserRole, UserNote } from './types';
 
 interface ChatSidebarProps {
   currentUser: ChatUser;
@@ -21,6 +21,13 @@ interface ChatSidebarProps {
   setFilterTab?: (tab: 'all' | 'direct' | 'teachers' | 'students' | 'groups') => void;
 }
 
+const DEFAULT_PEER_NOTES = [
+  { id: 'pn-1', userId: 'user-marop', name: 'Marop', focus: 'Mechanics & Newton 3rd ⚡', avatar: 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80', convId: 'conv-marop' },
+  { id: 'pn-2', userId: 'user-ifrah', name: 'Ifrah', focus: 'Genetics & Punnett squares 🧬', avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=150&auto=format&fit=crop&q=80', convId: 'conv-ifrah' },
+  { id: 'pn-3', userId: 'user-moossy', name: 'Mðøssŷ', focus: 'Calculus epsilon-delta proofs 📐', avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150&auto=format&fit=crop&q=80', convId: 'conv-moossy' },
+  { id: 'pn-4', userId: 'user-saphira', name: 'Saphira', focus: 'African post-colonial essays 📖', avatar: 'https://images.unsplash.com/photo-1517841905240-472988babdf9?w=150&auto=format&fit=crop&q=80', convId: 'conv-saphira' },
+];
+
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   currentUser,
   conversations,
@@ -33,9 +40,18 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   sharedNotesCount = 0,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'favourites' | 'groups' | 'notes'>('all');
+  const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'groups' | 'direct' | 'favourites'>('all');
   const [showMenuDropdown, setShowMenuDropdown] = useState(false);
-  const [showFilterDropdown, setShowFilterDropdown] = useState(false);
+  const [myStudyStatus, setMyStudyStatus] = useState(() => {
+    try {
+      return localStorage.getItem('eduai_my_study_focus') || 'Reviewing CBC Syllabus & Physics 📚';
+    } catch (_) {
+      return 'Reviewing CBC Syllabus & Physics 📚';
+    }
+  });
+  const [isEditingStatus, setIsEditingStatus] = useState(false);
+  const [tempStatus, setTempStatus] = useState(myStudyStatus);
+  const [imgFailedMap, setImgFailedMap] = useState<Record<string, boolean>>({});
 
   // Helper to find partner in a direct chat
   const currentUid = currentUser?.id || 'current-user-id';
@@ -48,10 +64,31 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
     return undefined;
   };
 
+  const getInitials = (name?: string) => {
+    if (!name) return 'ED';
+    return name
+      .split(' ')
+      .map(n => n[0])
+      .filter(Boolean)
+      .slice(0, 2)
+      .join('')
+      .toUpperCase();
+  };
+
+  const handleSaveStatus = (e: React.FormEvent) => {
+    e.preventDefault();
+    const updated = tempStatus.trim() || 'Studying on Edu AI 📖';
+    setMyStudyStatus(updated);
+    try {
+      localStorage.setItem('eduai_my_study_focus', updated);
+    } catch (_) {}
+    setIsEditingStatus(false);
+  };
+
   // Calculate total unread count across all conversations
   const totalUnreadCount = (conversations || []).reduce((sum, c) => sum + (c.unreadCount || 0), 0);
 
-  // Filter conversations based on search and active filter pill
+  // Filter conversations based on search and active filter
   const filteredConversations = (conversations || []).filter(conv => {
     const partner = getPartner(conv);
     const title = conv.type === 'group' ? conv.name || '' : partner?.name || '';
@@ -65,11 +102,14 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
     if (activeFilter === 'unread') {
       return (conv.unreadCount || 0) > 0;
     }
-    if (activeFilter === 'favourites') {
-      return conv.isPinned || partner?.role === 'teacher';
-    }
     if (activeFilter === 'groups') {
       return conv.type === 'group';
+    }
+    if (activeFilter === 'direct') {
+      return conv.type === 'direct';
+    }
+    if (activeFilter === 'favourites') {
+      return conv.isPinned || partner?.role === 'teacher';
     }
     return true; // 'all'
   });
@@ -77,21 +117,40 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   return (
     <div className="w-full h-full bg-white dark:bg-[#111b21] text-slate-900 dark:text-white border-r border-slate-200/80 dark:border-slate-800 flex flex-col shrink-0 select-none min-w-0 font-sans">
       
-      {/* 1. TOP HEADER: "Chats" + 3-dots Menu + Green New Chat Plus Button */}
-      <div className="px-4 py-3.5 flex items-center justify-between bg-white dark:bg-[#111b21] border-b border-slate-100 dark:border-slate-800/60 shrink-0">
-        <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-          Chats
-        </h1>
+      {/* 1. TOP HEADER: "Chats & Study Rooms" + Actions */}
+      <div className="px-4 py-3.5 flex items-center justify-between bg-white dark:bg-[#111b21] border-b border-slate-100 dark:border-slate-800/80 shrink-0">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold font-display text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+            <span>Chats & Groups</span>
+          </h1>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 font-medium">Student Collaboration Hub</p>
+        </div>
 
         <div className="flex items-center gap-1.5 relative">
+          {/* Shared Notes Header Button */}
+          {onOpenSharedNotes && (
+            <button
+              onClick={onOpenSharedNotes}
+              className="w-8.5 h-8.5 rounded-xl flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 transition-colors cursor-pointer relative"
+              title="Shared Book Takeaways & Notes"
+            >
+              <BookOpen className="w-4.5 h-4.5" />
+              {sharedNotesCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-2xs">
+                  {sharedNotesCount > 9 ? '9+' : sharedNotesCount}
+                </span>
+              )}
+            </button>
+          )}
+
           {/* 3-dots Menu Button */}
           <div className="relative">
             <button
               onClick={() => setShowMenuDropdown(prev => !prev)}
-              className="w-8.5 h-8.5 rounded-full flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-              title="Menu"
+              className="w-8.5 h-8.5 rounded-xl flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+              title="More options"
             >
-              <MoreVertical className="w-5 h-5" />
+              <MoreVertical className="w-4.5 h-4.5" />
             </button>
 
             {/* Menu Dropdown */}
@@ -101,26 +160,26 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                   className="fixed inset-0 z-40" 
                   onClick={() => setShowMenuDropdown(false)} 
                 />
-                <div className="absolute right-0 top-full mt-1.5 w-52 bg-white dark:bg-[#233138] rounded-xl shadow-xl border border-slate-200/70 dark:border-slate-700 py-1.5 z-50 animate-in fade-in zoom-in-95">
+                <div className="absolute right-0 top-full mt-1.5 w-52 bg-white dark:bg-[#1a2730] rounded-xl shadow-xl border border-slate-200/80 dark:border-slate-700 py-1.5 z-50 animate-in fade-in zoom-in-95">
                   <button
                     onClick={() => {
                       setShowMenuDropdown(false);
                       onOpenNewGroupModal();
                     }}
-                    className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
+                    className="w-full px-4 py-2.5 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer"
                   >
-                    <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <span>New group</span>
+                    <Users className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                    <span>New Study Group</span>
                   </button>
                   <button
                     onClick={() => {
                       setShowMenuDropdown(false);
                       onOpenFindFriends();
                     }}
-                    className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
+                    className="w-full px-4 py-2.5 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer"
                   >
-                    <UserPlus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                    <span>Find contacts</span>
+                    <UserPlus className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>Find Classmates & Teachers</span>
                   </button>
                   {onOpenSharedNotes && (
                     <button
@@ -128,74 +187,119 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                         setShowMenuDropdown(false);
                         onOpenSharedNotes();
                       }}
-                      className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
+                      className="w-full px-4 py-2.5 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer"
                     >
-                      <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      <span>Shared Takeaways</span>
+                      <BookOpen className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                      <span>Shared Book Takeaways</span>
                     </button>
                   )}
+                  <div className="my-1 border-t border-slate-100 dark:border-slate-800" />
                   <button
                     onClick={() => {
                       setShowMenuDropdown(false);
-                      setActiveFilter(prev => prev === 'unread' ? 'all' : 'unread');
+                      setIsEditingStatus(true);
                     }}
-                    className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
+                    className="w-full px-4 py-2.5 text-left text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2.5 cursor-pointer"
                   >
-                    <Star className="w-4 h-4 text-amber-500" />
-                    <span>Starred messages</span>
-                  </button>
-                  <div className="my-1 border-t border-slate-200/60 dark:border-slate-700/60" />
-                  <button
-                    onClick={() => {
-                      setShowMenuDropdown(false);
-                    }}
-                    className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
-                  >
-                    <Settings className="w-4 h-4 text-slate-500" />
-                    <span>Settings</span>
+                    <Lightbulb className="w-4 h-4 text-amber-500" />
+                    <span>Update Study Focus</span>
                   </button>
                 </div>
               </>
             )}
           </div>
 
-          {/* Shared Notes Header Button */}
-          {onOpenSharedNotes && (
-            <button
-              onClick={onOpenSharedNotes}
-              className="w-8.5 h-8.5 rounded-full flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 transition-colors cursor-pointer relative"
-              title="Shared Book Takeaways"
-            >
-              <BookOpen className="w-5 h-5" />
-              {sharedNotesCount > 0 && (
-                <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-xs">
-                  {sharedNotesCount > 9 ? '9+' : sharedNotesCount}
-                </span>
-              )}
-            </button>
-          )}
-
-          {/* Green New Chat Plus Button */}
+          {/* New Chat Button */}
           <button
             onClick={onOpenFindFriends}
-            className="w-8.5 h-8.5 rounded-xl bg-[#00a884] hover:bg-[#008f6f] text-white flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer shrink-0"
-            title="New Chat / Add Contact"
+            className="w-8.5 h-8.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer shrink-0"
+            title="Start New Discussion"
           >
             <Plus className="w-5 h-5 stroke-[2.5]" />
           </button>
         </div>
       </div>
 
-      {/* 2. SEARCH BAR: "Search or start a new chat" */}
-      <div className="px-3.5 pt-2 pb-1.5 shrink-0">
-        <div className="w-full px-3.5 py-2 bg-[#f0f2f5] dark:bg-[#202c33] rounded-full flex items-center gap-2.5 border border-transparent focus-within:bg-white dark:focus-within:bg-[#111b21] focus-within:border-emerald-500 focus-within:ring-1 focus-within:ring-emerald-500/20 transition-all">
-          <Search className="w-4 h-4 text-slate-500 dark:text-slate-400 shrink-0" />
+      {/* 2. PEER STUDY FOCUS BUBBLE BAR */}
+      <div className="px-3.5 py-2.5 bg-slate-50/60 dark:bg-slate-900/40 border-b border-slate-100 dark:border-slate-800/60 shrink-0 overflow-x-auto no-scrollbar">
+        <div className="flex items-center gap-3 min-w-max">
+          {/* User's own focus bubble */}
+          <div 
+            onClick={() => setIsEditingStatus(true)}
+            className="flex flex-col items-center gap-1 cursor-pointer group shrink-0"
+            title="Click to update your study status"
+          >
+            <div className="relative">
+              <div className="w-11 h-11 rounded-full p-[2px] bg-gradient-to-tr from-indigo-500 to-purple-500">
+                <div className="w-full h-full rounded-full overflow-hidden bg-white dark:bg-slate-900 flex items-center justify-center">
+                  {currentUser.avatar && !imgFailedMap['me'] ? (
+                    <img
+                      src={currentUser.avatar}
+                      alt={currentUser.name}
+                      onError={() => setImgFailedMap(prev => ({ ...prev, me: true }))}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                      {getInitials(currentUser.name)}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-indigo-600 text-white rounded-full flex items-center justify-center text-[10px] font-bold shadow-xs">
+                +
+              </span>
+            </div>
+            <span className="text-[10px] font-semibold text-slate-700 dark:text-slate-300 max-w-[54px] truncate">
+              Your Focus
+            </span>
+          </div>
+
+          {/* Classmates' focus bubbles */}
+          {DEFAULT_PEER_NOTES.map((peer) => (
+            <div
+              key={peer.id}
+              onClick={() => onSelectConversation(peer.convId)}
+              className="flex flex-col items-center gap-1 cursor-pointer group shrink-0"
+              title={`${peer.name}: ${peer.focus}`}
+            >
+              <div className="relative">
+                <div className="w-11 h-11 rounded-full p-[2px] bg-gradient-to-tr from-emerald-400 to-teal-500 group-hover:scale-105 transition-transform">
+                  <div className="w-full h-full rounded-full overflow-hidden bg-white dark:bg-slate-900 flex items-center justify-center">
+                    {peer.avatar && !imgFailedMap[peer.id] ? (
+                      <img
+                        src={peer.avatar}
+                        alt={peer.name}
+                        onError={() => setImgFailedMap(prev => ({ ...prev, [peer.id]: true }))}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                        {getInitials(peer.name)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-[#111b21]" />
+              </div>
+              <span className="text-[10px] font-medium text-slate-600 dark:text-slate-400 max-w-[54px] truncate">
+                {peer.name}
+              </span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 3. SEARCH BAR */}
+      <div className="px-3.5 pt-2.5 pb-1.5 shrink-0">
+        <div className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 rounded-xl flex items-center gap-2.5 border border-transparent focus-within:bg-white dark:focus-within:bg-slate-900 focus-within:border-indigo-500 focus-within:ring-2 focus-within:ring-indigo-500/20 transition-all">
+          <Search className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search or start a new chat"
-            className="bg-transparent text-xs sm:text-sm text-slate-900 dark:text-white placeholder:text-slate-500 dark:placeholder:text-slate-400 outline-none w-full min-w-0"
+            placeholder="Search classmate, study room, or message..."
+            className="bg-transparent text-xs text-slate-900 dark:text-white placeholder:text-slate-400 dark:placeholder:text-slate-500 outline-none w-full min-w-0"
           />
           {searchQuery && (
             <button
@@ -208,110 +312,46 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         </div>
       </div>
 
-      {/* 3. FILTER CHIPS ROW: All | Unread 10 | Favourites | Dropdown */}
-      <div className="px-3.5 py-2 flex items-center gap-2 overflow-x-auto no-scrollbar shrink-0 border-b border-slate-100 dark:border-slate-800/40">
-        {/* All Button */}
-        <button
-          onClick={() => setActiveFilter('all')}
-          className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer shrink-0 ${
-            activeFilter === 'all'
-              ? 'bg-[#d9fdd3] dark:bg-[#0a332c] text-[#008069] dark:text-[#00a884] border border-[#a8e89d] dark:border-[#144f43] font-semibold'
-              : 'bg-[#f0f2f5] dark:bg-[#202c33] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-          }`}
-        >
-          All
-        </button>
-
-        {/* Unread Button */}
-        <button
-          onClick={() => setActiveFilter(activeFilter === 'unread' ? 'all' : 'unread')}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer shrink-0 flex items-center gap-1 ${
-            activeFilter === 'unread'
-              ? 'bg-[#d9fdd3] dark:bg-[#0a332c] text-[#008069] dark:text-[#00a884] border border-[#a8e89d] dark:border-[#144f43] font-semibold'
-              : 'bg-[#f0f2f5] dark:bg-[#202c33] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-          }`}
-        >
-          <span>Unread</span>
-          <span className="text-[11px] font-semibold opacity-90">
-            {totalUnreadCount || 10}
-          </span>
-        </button>
-
-        {/* Favourites Button */}
-        <button
-          onClick={() => setActiveFilter(activeFilter === 'favourites' ? 'all' : 'favourites')}
-          className={`px-3 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer shrink-0 ${
-            activeFilter === 'favourites'
-              ? 'bg-[#d9fdd3] dark:bg-[#0a332c] text-[#008069] dark:text-[#00a884] border border-[#a8e89d] dark:border-[#144f43] font-semibold'
-              : 'bg-[#f0f2f5] dark:bg-[#202c33] text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
-          }`}
-        >
-          Favourites
-        </button>
-
-        {/* Filter Dropdown Button */}
-        <div className="relative shrink-0">
-          <button
-            onClick={() => setShowFilterDropdown(prev => !prev)}
-            className="w-7 h-7 rounded-full bg-[#f0f2f5] dark:bg-[#202c33] hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center justify-center text-slate-600 dark:text-slate-300 transition-colors cursor-pointer"
-            title="Filter options"
-          >
-            <ChevronDown className="w-3.5 h-3.5" />
-          </button>
-
-          {showFilterDropdown && (
-            <>
-              <div className="fixed inset-0 z-40" onClick={() => setShowFilterDropdown(false)} />
-              <div className="absolute left-0 top-full mt-1 w-40 bg-white dark:bg-[#233138] rounded-xl shadow-xl border border-slate-200/70 dark:border-slate-700 py-1 z-50 animate-in fade-in zoom-in-95">
-                <button
-                  onClick={() => {
-                    setActiveFilter('groups');
-                    setShowFilterDropdown(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-2 cursor-pointer"
-                >
-                  <Users className="w-3.5 h-3.5 text-emerald-600" />
-                  <span>Groups only</span>
-                </button>
-                {onOpenSharedNotes && (
-                  <button
-                    onClick={() => {
-                      setShowFilterDropdown(false);
-                      onOpenSharedNotes();
-                    }}
-                    className="w-full px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-2 cursor-pointer"
-                  >
-                    <BookOpen className="w-3.5 h-3.5 text-indigo-600" />
-                    <span>Shared Book Notes</span>
-                  </button>
-                )}
-                <button
-                  onClick={() => {
-                    setActiveFilter('all');
-                    setShowFilterDropdown(false);
-                  }}
-                  className="w-full px-3 py-2 text-left text-xs text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-2 cursor-pointer"
-                >
-                  <Filter className="w-3.5 h-3.5 text-slate-500" />
-                  <span>Clear filters</span>
-                </button>
-              </div>
-            </>
-          )}
-        </div>
+      {/* 4. FILTER SEGMENTED BUTTONS ROW */}
+      <div className="px-3.5 py-2 flex items-center gap-1.5 overflow-x-auto no-scrollbar shrink-0 border-b border-slate-100 dark:border-slate-800/40">
+        {[
+          { key: 'all', label: 'All' },
+          { key: 'groups', label: 'Study Rooms', icon: Users },
+          { key: 'direct', label: 'Direct', icon: User },
+          { key: 'unread', label: `Unread (${totalUnreadCount || 0})` },
+          { key: 'favourites', label: 'Pinned', icon: Pin },
+        ].map((tab) => {
+          const isActive = activeFilter === tab.key;
+          const Icon = tab.icon;
+          return (
+            <button
+              key={tab.key}
+              onClick={() => setActiveFilter(tab.key as any)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer shrink-0 flex items-center gap-1.5 ${
+                isActive
+                  ? 'bg-indigo-600 text-white shadow-2xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              {Icon && <Icon className="w-3 h-3" />}
+              <span>{tab.label}</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* 4. CONVERSATIONS LIST */}
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-100/70 dark:divide-slate-800/40 select-none">
+      {/* 5. CONVERSATIONS LIST */}
+      <div className="flex-1 overflow-y-auto divide-y divide-slate-100 dark:divide-slate-800/60 select-none">
         {filteredConversations.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 dark:text-slate-500">
-            <p className="text-sm font-medium">No chats found</p>
-            <p className="text-xs mt-1">Try a different search or start a new chat</p>
+          <div className="p-8 text-center text-slate-400 dark:text-slate-500 space-y-2">
+            <p className="text-sm font-semibold">No discussions found</p>
+            <p className="text-xs">Try adjusting your search or join a study room.</p>
             <button
               onClick={onOpenFindFriends}
-              className="mt-3 px-4 py-1.5 bg-[#00a884] text-white text-xs font-semibold rounded-full hover:bg-[#008f6f] cursor-pointer"
+              className="mt-2 px-4 py-2 bg-indigo-600 text-white text-xs font-semibold rounded-xl hover:bg-indigo-700 cursor-pointer shadow-xs inline-flex items-center gap-1.5"
             >
-              Find Contacts
+              <UserPlus className="w-3.5 h-3.5" />
+              Find Classmates
             </button>
           </div>
         ) : (
@@ -323,10 +363,11 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
             const unread = conv.unreadCount || 0;
             const lastMsg = conv.lastMessage;
             const isSentByMe = lastMsg?.senderId === currentUser.id;
-            const isMaggy = partner?.id === 'user-maggy' || title?.toLowerCase().includes('maggy');
-
-            // Format time display
             const timeDisplay = conv.updatedAt || '12:00 PM';
+            const hasVoice = lastMsg?.attachment?.type === 'voice';
+            const hasNote = lastMsg?.attachment?.type === 'note';
+            const hasCode = lastMsg?.attachment?.type === 'code';
+            const hasBook = lastMsg?.attachment?.type === 'book';
 
             return (
               <div
@@ -334,43 +375,60 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                 onClick={() => onSelectConversation(conv.id)}
                 className={`px-3.5 py-3 flex items-center gap-3 cursor-pointer transition-colors relative ${
                   isSelected
-                    ? 'bg-[#f0f2f5] dark:bg-[#2a3942]'
-                    : 'hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]'
+                    ? 'bg-indigo-50/80 dark:bg-indigo-950/40 border-l-3 border-indigo-600'
+                    : 'hover:bg-slate-50 dark:hover:bg-slate-800/50'
                 }`}
               >
-                {/* Left: Avatar with optional Status Circle Ring */}
+                {/* Left: Avatar with Status */}
                 <div className="relative shrink-0">
                   {isGroup ? (
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-xl shadow-xs">
+                    <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-lg shadow-2xs font-bold">
                       {conv.groupAvatar || '👥'}
                     </div>
                   ) : (
-                    <div className={isMaggy ? 'p-[2px] rounded-full ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-[#111b21]' : ''}>
-                      <img
-                        src={partner?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'}
-                        alt={title}
-                        className="w-12 h-12 rounded-full object-cover"
-                      />
+                    <div className="w-11 h-11 rounded-full overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center border border-slate-200 dark:border-slate-700">
+                      {partner?.avatar && !imgFailedMap[partner.id] ? (
+                        <img
+                          src={partner.avatar}
+                          alt={title}
+                          onError={() => setImgFailedMap(prev => ({ ...prev, [partner.id]: true }))}
+                          className="w-full h-full object-cover"
+                        />
+                      ) : (
+                        <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400">
+                          {getInitials(title)}
+                        </span>
+                      )}
                     </div>
                   )}
 
-                  {/* Online Dot (if not Maggy ring) */}
-                  {!isMaggy && partner?.status === 'online' && !isGroup && (
-                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-[#25d366] rounded-full ring-2 ring-white dark:ring-[#111b21]" />
+                  {/* Online Indicator */}
+                  {!isGroup && partner?.status === 'online' && (
+                    <span className="absolute bottom-0 right-0 w-3 h-3 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-[#111b21]" />
                   )}
                 </div>
 
-                {/* Center: Name & Last Message snippet */}
+                {/* Center: Title & Last Message preview */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-1 mb-0.5">
-                    <h2 className="text-[15px] font-medium sm:font-semibold text-slate-900 dark:text-white truncate">
-                      {title}
-                    </h2>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white truncate">
+                        {title}
+                      </h2>
+                      {conv.isPinned && (
+                        <Pin className="w-3 h-3 text-indigo-500 shrink-0" />
+                      )}
+                      {!isGroup && partner?.role === 'teacher' && (
+                        <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 shrink-0">
+                          Teacher
+                        </span>
+                      )}
+                    </div>
                     
                     {/* Timestamp */}
-                    <span className={`text-xs font-medium shrink-0 ml-1.5 ${
+                    <span className={`text-[11px] font-medium shrink-0 ml-1.5 ${
                       unread > 0 
-                        ? 'text-[#00a884] dark:text-[#25d366] font-semibold' 
+                        ? 'text-indigo-600 dark:text-indigo-400 font-bold' 
                         : 'text-slate-400 dark:text-slate-500'
                     }`}>
                       {timeDisplay}
@@ -378,19 +436,25 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                   </div>
 
                   <div className="flex items-center justify-between gap-1">
-                    {/* Message Preview */}
-                    <p className="text-[13px] text-slate-500 dark:text-slate-400 truncate flex items-center gap-1 min-w-0">
+                    {/* Message Preview snippet */}
+                    <p className="text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1 min-w-0">
                       {isSentByMe && (
-                        <Check className="w-3.5 h-3.5 text-slate-400 shrink-0 inline-block" />
+                        <CheckCheck className="w-3.5 h-3.5 text-indigo-500 shrink-0 inline-block" />
                       )}
-                      <span className="truncate">
-                        {lastMsg?.content || 'No messages yet'}
-                      </span>
+                      {hasVoice && <span className="text-indigo-500 shrink-0">🎙️ Voice Note</span>}
+                      {hasNote && <span className="text-purple-500 shrink-0">📝 Study Note</span>}
+                      {hasCode && <span className="text-blue-500 shrink-0">💻 Formula / Code</span>}
+                      {hasBook && <span className="text-amber-500 shrink-0">📖 Textbook</span>}
+                      {!hasVoice && !hasNote && !hasCode && !hasBook && (
+                        <span className="truncate">
+                          {lastMsg?.content || 'No messages yet'}
+                        </span>
+                      )}
                     </p>
 
                     {/* Unread Counter Badge */}
                     {unread > 0 && (
-                      <span className="min-w-[20px] h-5 px-1 bg-[#25d366] text-white text-[11px] font-bold rounded-full flex items-center justify-center shrink-0 shadow-xs ml-1">
+                      <span className="min-w-[18px] h-4.5 px-1.5 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center shrink-0 shadow-xs ml-1">
                         {unread}
                       </span>
                     )}
@@ -401,6 +465,49 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
           })
         )}
       </div>
+
+      {/* Edit Study Status Modal */}
+      {isEditingStatus && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-[#1a2730] rounded-2xl max-w-sm w-full p-5 border border-slate-200 dark:border-slate-700 shadow-2xl space-y-4 animate-in fade-in zoom-in-95">
+            <div>
+              <h3 className="text-base font-bold text-slate-900 dark:text-white font-display">
+                What are you studying right now?
+              </h3>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Your study status lets classmates know what subjects or chapters you're active on.
+              </p>
+            </div>
+
+            <form onSubmit={handleSaveStatus} className="space-y-3">
+              <input
+                type="text"
+                value={tempStatus}
+                onChange={(e) => setTempStatus(e.target.value)}
+                placeholder="e.g. Solving Physics Mechanics Chapter 4 ⚡"
+                maxLength={60}
+                className="w-full px-3 py-2 text-xs sm:text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white outline-none focus:border-indigo-500"
+              />
+
+              <div className="flex items-center gap-2 justify-end pt-1">
+                <button
+                  type="button"
+                  onClick={() => setIsEditingStatus(false)}
+                  className="px-3 py-1.5 text-xs text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white cursor-pointer font-medium"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold rounded-xl transition-colors cursor-pointer shadow-xs"
+                >
+                  Save Status
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
     </div>
   );
