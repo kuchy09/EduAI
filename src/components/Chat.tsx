@@ -139,8 +139,10 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
     return INITIAL_MESSAGES;
   });
 
-  // Empty string initially so the right side displays the screenshot's empty state
-  const [activeConversationId, setActiveConversationId] = useState<string>('');
+  // Active conversation (defaults to the first colleague so their profile displays immediately on open)
+  const [activeConversationId, setActiveConversationId] = useState<string>(() => {
+    return INITIAL_CONVERSATIONS[0]?.id || '';
+  });
 
   // Mobile View Toggle: 'list' (Inbox/Threads) | 'chat' (Active conversation)
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
@@ -577,12 +579,9 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
         ) : (
           <ChatEmptyState
             onOpenFindContacts={() => setIsFindFriendsOpen(true)}
-            onOpenNewGroup={() => setIsFindFriendsOpen(true)}
-            onOpenSharedNotes={() => setIsNotesPanelOpen(true)}
-            onSelectConversation={handleSelectConversation}
             onOpenAIHelp={() => {
               if (onNavigate) {
-                onNavigate('ai-tutor');
+                onNavigate('sage');
               } else {
                 handleSelectConversation('conv-meta-ai');
               }
