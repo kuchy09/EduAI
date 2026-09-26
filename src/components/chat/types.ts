@@ -45,6 +45,7 @@ export interface ChatAttachment {
   bookAuthor?: string;
   bookCover?: string;
   duration?: number; // in seconds for voice notes
+  transcript?: string; // Web Speech API live transcription
   language?: string;
   codeSnippet?: string;
   noteId?: string;
@@ -62,6 +63,7 @@ export interface ChatMessage {
   content: string;
   createdAt: string;
   status: 'sending' | 'sent' | 'delivered' | 'read';
+  seenAt?: string;
   reactions?: Record<string, string[]>; // emoji -> array of user IDs
   attachment?: ChatAttachment;
   replyTo?: {

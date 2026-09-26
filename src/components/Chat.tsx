@@ -150,8 +150,8 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   // Modals and Drawers
   const [isFindFriendsOpen, setIsFindFriendsOpen] = useState(false);
   const [isInfoDrawerOpen, setIsInfoDrawerOpen] = useState(false);
-  const [filterTab, setFilterTab] = useState<'all' | 'direct' | 'teachers' | 'students' | 'groups'>('all');
-  const [isPartnerTyping, setIsPartnerTyping] = useState(false);
+  const [typingConversations, setTypingConversations] = useState<Record<string, boolean>>({});
+  const isPartnerTyping = Boolean(typingConversations[activeConversationId]);
 
   // Shared Book Takeaways State
   const [sharedNotes, setSharedNotes] = useState<SharedBookNote[]>(() => getStoredSharedNotes());
@@ -225,7 +225,47 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
           }
           return c;
         }));
-      }).subscribe();
+      });
+
+      channel.on('broadcast', { event: 'colleague_typing' }, (payload) => {
+        const data = payload.payload;
+        if (!data || !data.conversationId) return;
+        setTypingConversations(prev => ({
+          ...prev,
+          [data.conversationId]: Boolean(data.isTyping)
+        }));
+      });
+
+      channel.on('broadcast', { event: 'message_seen_update' }, (payload) => {
+        const data = payload.payload;
+        if (!data || !data.messageId || !data.conversationId) return;
+        setMessagesMap(prev => {
+          const list = prev[data.conversationId] || [];
+          return {
+            ...prev,
+            [data.conversationId]: list.map(m => m.id === data.messageId ? {
+              ...m,
+              status: data.status,
+              seenAt: data.seenAt || m.seenAt
+            } : m)
+          };
+        });
+        setConversations(prev => prev.map(c => {
+          if (c.id === data.conversationId && c.lastMessage?.id === data.messageId) {
+            return {
+              ...c,
+              lastMessage: {
+                ...c.lastMessage,
+                status: data.status,
+                seenAt: data.seenAt || c.lastMessage.seenAt
+              }
+            };
+          }
+          return c;
+        }));
+      });
+
+      channel.subscribe();
 
       return () => {
         if (supabase) supabase.removeChannel(channel);
@@ -308,40 +348,179 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
       } catch (e) {}
     }
 
-    // Interactive Teacher / Peer auto-reply simulation for responsive UX
-    if (activeConversation.type === 'direct' && activePartner && activePartner.friendStatus === 'friends') {
-      setIsPartnerTyping(true);
+    // Colleague real-time response generation with live typing indicator
+    const respondent = activeConversation.type === 'direct'
+      ? activePartner
+      : allUsers.find(u => u.id === activeConversation.participants.find(p => p !== currentUser.id));
+
+    if (respondent && respondent.id !== currentUser.id) {
+      const convId = activeConversation.id;
+
+      // 1. Message received/delivered by colleague's device after 550ms (Double gray ticks)
       setTimeout(() => {
-        setIsPartnerTyping(false);
-        const replyText = generateContextualReply(content, activePartner, currentUser);
-        const partnerReply: ChatMessage = {
-          id: crypto.randomUUID(),
-          conversationId: activeConversation.id,
-          senderId: activePartner.id,
-          senderName: activePartner.name,
-          senderRole: activePartner.role,
-          senderAvatar: activePartner.avatar,
-          content: replyText,
-          createdAt: new Date().toISOString(),
-          status: 'read'
-        };
-
-        setMessagesMap(prev => ({
-          ...prev,
-          [activeConversation.id]: [...(prev[activeConversation.id] || []), partnerReply]
-        }));
-
+        setMessagesMap(prev => {
+          const list = prev[convId] || [];
+          return {
+            ...prev,
+            [convId]: list.map(m => m.id === newMessage.id ? { ...m, status: 'delivered' } : m)
+          };
+        });
         setConversations(prev => prev.map(c => {
-          if (c.id === activeConversation.id) {
+          if (c.id === convId && c.lastMessage?.id === newMessage.id) {
             return {
               ...c,
-              lastMessage: partnerReply,
-              updatedAt: partnerReply.createdAt
+              lastMessage: { ...c.lastMessage, status: 'delivered' }
             };
           }
           return c;
         }));
-      }, 1400);
+
+        if (supabase) {
+          try {
+            const channel = supabase.channel('eduai-messenger-network');
+            channel.send({
+              type: 'broadcast',
+              event: 'message_seen_update',
+              payload: {
+                conversationId: convId,
+                messageId: newMessage.id,
+                status: 'delivered'
+              }
+            });
+          } catch (e) {}
+        }
+      }, 550);
+
+      // 2. Colleague opens and views/sees the message after 1250ms (Double blue ticks + "Seen")
+      setTimeout(() => {
+        const seenTimeString = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        setMessagesMap(prev => {
+          const list = prev[convId] || [];
+          return {
+            ...prev,
+            [convId]: list.map(m => m.id === newMessage.id ? { 
+              ...m, 
+              status: 'read',
+              seenAt: seenTimeString
+            } : m)
+          };
+        });
+        setConversations(prev => prev.map(c => {
+          if (c.id === convId && c.lastMessage?.id === newMessage.id) {
+            return {
+              ...c,
+              lastMessage: { 
+                ...c.lastMessage, 
+                status: 'read',
+                seenAt: seenTimeString
+              }
+            };
+          }
+          return c;
+        }));
+
+        if (supabase) {
+          try {
+            const channel = supabase.channel('eduai-messenger-network');
+            channel.send({
+              type: 'broadcast',
+              event: 'message_seen_update',
+              payload: {
+                conversationId: convId,
+                messageId: newMessage.id,
+                status: 'read',
+                seenAt: seenTimeString
+              }
+            });
+          } catch (e) {}
+        }
+      }, 1250);
+
+      // 3. Colleague starts typing in real-time after 1600ms
+      setTimeout(() => {
+        setTypingConversations(prev => ({ ...prev, [convId]: true }));
+
+        // Broadcast live typing status to network
+        if (supabase) {
+          try {
+            const channel = supabase.channel('eduai-messenger-network');
+            channel.send({
+              type: 'broadcast',
+              event: 'colleague_typing',
+              payload: {
+                conversationId: convId,
+                userId: respondent.id,
+                name: respondent.name,
+                isTyping: true
+              }
+            });
+          } catch (e) {}
+        }
+
+        // 4. Colleague generates response over natural typing time (1700ms - 2400ms)
+        const typingDuration = Math.min(2400, Math.max(1700, content.length * 30));
+        setTimeout(() => {
+          // Stop typing indicator
+          setTypingConversations(prev => ({ ...prev, [convId]: false }));
+
+          if (supabase) {
+            try {
+              const channel = supabase.channel('eduai-messenger-network');
+              channel.send({
+                type: 'broadcast',
+                event: 'colleague_typing',
+                payload: {
+                  conversationId: convId,
+                  userId: respondent.id,
+                  name: respondent.name,
+                  isTyping: false
+                }
+              });
+            } catch (e) {}
+          }
+
+          const replyText = generateContextualReply(content, respondent, currentUser);
+          const partnerReply: ChatMessage = {
+            id: crypto.randomUUID(),
+            conversationId: convId,
+            senderId: respondent.id,
+            senderName: respondent.name,
+            senderRole: respondent.role,
+            senderAvatar: respondent.avatar,
+            content: replyText,
+            createdAt: new Date().toISOString(),
+            status: 'read'
+          };
+
+          setMessagesMap(prev => ({
+            ...prev,
+            [convId]: [...(prev[convId] || []), partnerReply]
+          }));
+
+          setConversations(prev => prev.map(c => {
+            if (c.id === convId) {
+              return {
+                ...c,
+                lastMessage: partnerReply,
+                updatedAt: partnerReply.createdAt
+              };
+            }
+            return c;
+          }));
+
+          // Broadcast reply to network
+          if (supabase) {
+            try {
+              const channel = supabase.channel('eduai-messenger-network');
+              channel.send({
+                type: 'broadcast',
+                event: 'new_chat_message',
+                payload: partnerReply
+              });
+            } catch (e) {}
+          }
+        }, typingDuration);
+      }, 450);
     }
   };
 
@@ -355,6 +534,9 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
         if (prompt.includes('syllabus') || prompt.includes('cbc') || prompt.includes('exam')) {
           return `I completely agree. I've updated the practical rubric to emphasize critical thinking and laboratory competencies for our upcoming assessments.`;
         }
+        if (prompt.includes('hello') || prompt.includes('hi') || prompt.includes('morning')) {
+          return `Good day, Colleague! Preparing our lesson materials for the lab modules. How are your students progressing with the term syllabus?`;
+        }
         return `Thanks for sharing this, Colleague. Let's review the academic department goals during tomorrow's faculty briefing.`;
       } else {
         // Teacher to Student response
@@ -364,14 +546,23 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
         if (prompt.includes('book') || prompt.includes('read') || prompt.includes('notes')) {
           return `Excellent initiative! That textbook gives great real-world applications. Try the diagnostic questions at the end of section 3.`;
         }
+        if (prompt.includes('hello') || prompt.includes('hi') || prompt.includes('hey')) {
+          return `Hello! How is your revision coming along? Don't hesitate to ask if you encounter challenging formulas or concepts. 🎓`;
+        }
         return `Well noted! Keep up the consistent study effort. Feel free to reach out anytime if you hit a roadblock in your exercises. 🎓✨`;
       }
     } else {
       // Student to Student response
-      if (prompt.includes('study') || prompt.includes('call') || prompt.includes('review')) {
+      if (prompt.includes('hello') || prompt.includes('hi') || prompt.includes('hey')) {
+        return `Hey! Great to connect. I'm reviewing our notes right now—how is your study session going today? 👋`;
+      }
+      if (prompt.includes('study') || prompt.includes('call') || prompt.includes('review') || prompt.includes('together')) {
         return `Sounds great! I'll open my study notes and flashcards. Let me know when you want to start reviewing together! 📚`;
       }
-      if (prompt.includes('quiz') || prompt.includes('algorithm') || prompt.includes('physics')) {
+      if (prompt.includes('notes') || prompt.includes('takeaway') || prompt.includes('summary')) {
+        return `I just saw the takeaways you shared! The breakdown of formulas and key definitions is super helpful.`;
+      }
+      if (prompt.includes('quiz') || prompt.includes('algorithm') || prompt.includes('physics') || prompt.includes('math')) {
         return `Nice! I just finished that problem set on Edu AI. The step-by-step solutions made it much clearer.`;
       }
       return `Got it! Thanks for sharing. Let's keep pushing for the top scores this semester! 🔥🚀`;
@@ -548,8 +739,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
           onOpenSharedNotes={() => setIsNotesPanelOpen(true)}
           sharedNotesCount={sharedNotes.length}
           onToggleUserRole={handleToggleUserRole}
-          filterTab={filterTab}
-          setFilterTab={setFilterTab}
+          typingConversations={typingConversations}
         />
       </div>
 

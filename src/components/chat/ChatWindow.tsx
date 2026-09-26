@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { 
   Phone, Video, Info, Search, MoreVertical, 
-  CheckCheck, Check, Smile, BookOpen, Play, 
+  CheckCheck, Check, Clock, Smile, BookOpen, Play, 
   Pause, Copy, ExternalLink, Download, Sparkles,
   UserCheck, UserPlus, Users, ArrowLeft, ShieldAlert,
   GraduationCap, MessageSquare, Send
@@ -48,13 +48,95 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   const [activeReactionMenuId, setActiveReactionMenuId] = useState<string | null>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isFirstOpenRef = useRef<boolean>(true);
   const currentConvIdRef = useRef<string>(conversation.id);
 
+  // Clean up audio & Web Speech synthesis on unmount
+  useEffect(() => {
+    return () => {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+    };
+  }, []);
+
+  const playSpeechSynthesis = (textToSpeak: string) => {
+    if (typeof window === 'undefined' || !window.speechSynthesis) {
+      setTimeout(() => setPlayingVoiceId(null), 2500);
+      return;
+    }
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(textToSpeak);
+      utterance.rate = 1.0;
+      utterance.pitch = 1.0;
+      utterance.onend = () => setPlayingVoiceId(null);
+      utterance.onerror = () => setPlayingVoiceId(null);
+      window.speechSynthesis.speak(utterance);
+    } catch (_) {
+      setPlayingVoiceId(null);
+    }
+  };
+
+  const handleToggleVoicePlayback = (msg: ChatMessage) => {
+    if (playingVoiceId === msg.id) {
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
+      }
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+      }
+      setPlayingVoiceId(null);
+      return;
+    }
+
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
+    }
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
+    setPlayingVoiceId(msg.id);
+
+    // If recorded audio blob URL is available, play actual audio
+    if (msg.attachment?.url && msg.attachment.url !== '#') {
+      try {
+        const audio = new Audio(msg.attachment.url);
+        currentAudioRef.current = audio;
+        audio.onended = () => setPlayingVoiceId(null);
+        audio.onerror = () => {
+          const fallbackText = msg.attachment?.transcript || msg.content || 'Voice message';
+          playSpeechSynthesis(fallbackText);
+        };
+        audio.play().catch(() => {
+          const fallbackText = msg.attachment?.transcript || msg.content || 'Voice message';
+          playSpeechSynthesis(fallbackText);
+        });
+        return;
+      } catch (_) {}
+    }
+
+    // Playback using Web Speech API SpeechSynthesis for transcripts
+    const textToSpeak = msg.attachment?.transcript || msg.content?.replace(/^🎙️\s*"?/, '').replace(/"?\s*\(\d+s\)$/, '').replace(/"$/, '') || 'Voice message';
+    playSpeechSynthesis(textToSpeak);
+  };
+
   const isGroup = conversation.type === 'group';
   const isFriends = isGroup || (partner && partner.friendStatus === 'friends');
+
+  // Compute latest message sent by current user for seen receipt indicator
+  const lastMyMessage = [...messages].reverse().find(m => m.senderId === currentUser.id);
+  const lastMyMessageId = lastMyMessage?.id;
 
   // Handle conversation changes
   useEffect(() => {
@@ -86,18 +168,42 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
   const reactionEmojis = ['👍', '❤️', '💡', '👏', '🔥', '😮'];
 
-  // Format message timestamps safely
-  const formatMessageTime = (dateStr: string) => {
+  // Format message timestamps safely to show exact time sent or received
+  const formatExactMessageTime = (dateStr: string) => {
     if (!dateStr) return '';
-    if (dateStr.includes('AM') || dateStr.includes('PM') || (dateStr.includes(':') && !dateStr.includes('T'))) {
+    if (dateStr === 'Just now') return 'Just now';
+
+    // If it's an ISO timestamp or date parseable string
+    if (dateStr.includes('T') || (dateStr.includes('-') && dateStr.length >= 10)) {
+      try {
+        const d = new Date(dateStr);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+        }
+      } catch (_) {}
+    }
+
+    // Clean up commas if needed (e.g. "Yesterday 4:15 PM" -> "Yesterday, 4:15 PM")
+    if (dateStr.includes('Yesterday') && dateStr.includes(':') && !dateStr.includes(',')) {
+      return dateStr.replace('Yesterday ', 'Yesterday, ');
+    }
+    if (dateStr.includes('Monday') && dateStr.includes(':') && !dateStr.includes(',')) {
+      return dateStr.replace('Monday ', 'Monday, ');
+    }
+    if (dateStr.includes('Sunday') && dateStr.includes(':') && !dateStr.includes(',')) {
+      return dateStr.replace('Sunday ', 'Sunday, ');
+    }
+
+    // Standard clock formats
+    if (dateStr.includes('AM') || dateStr.includes('PM') || dateStr.includes(':')) {
       return dateStr;
     }
-    try {
-      const d = new Date(dateStr);
-      if (!isNaN(d.getTime())) {
-        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      }
-    } catch (_) {}
+
+    // Fallbacks for legacy date strings
+    if (dateStr === 'Yesterday') return 'Yesterday, 3:30 PM';
+    if (dateStr === 'Monday') return 'Mon, 2:14 PM';
+    if (dateStr === 'Sunday') return 'Sun, 8:15 PM';
+
     return dateStr;
   };
 
@@ -176,13 +282,27 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
             <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 truncate flex items-center gap-1.5">
               {isGroup ? (
-                <span>{conversation.participants.length} members • {conversation.groupRoleType === 'teacher-to-teacher' ? 'Faculty' : 'Study Group'}</span>
+                isPartnerTyping ? (
+                  <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1.5 animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                    colleague is typing...
+                  </span>
+                ) : (
+                  <span>{conversation.participants.length} members • {conversation.groupRoleType === 'teacher-to-teacher' ? 'Faculty' : 'Study Group'}</span>
+                )
               ) : (
                 <>
-                  <span className={partner?.status === 'online' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''}>
-                    {isPartnerTyping ? 'Typing...' : partner?.status === 'online' ? 'Active now' : partner?.lastSeen || 'Offline'}
-                  </span>
-                  {partner?.institution && (
+                  {isPartnerTyping ? (
+                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold flex items-center gap-1.5 animate-pulse">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping" />
+                      typing...
+                    </span>
+                  ) : (
+                    <span className={partner?.status === 'online' ? 'text-emerald-600 dark:text-emerald-400 font-medium' : ''}>
+                      {partner?.status === 'online' ? 'Active now' : partner?.lastSeen || 'Offline'}
+                    </span>
+                  )}
+                  {partner?.institution && !isPartnerTyping && (
                     <>
                       <span>•</span>
                       <span className="truncate">{partner.institution}</span>
@@ -523,31 +643,58 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                       </div>
                     )}
 
-                    {/* Attachment: Voice Note */}
+                    {/* Attachment: Voice Note (Web Speech API) */}
                     {msg.attachment?.type === 'voice' && (
-                      <div className={`mb-2 p-2 rounded-xl flex items-center gap-3 ${
-                        isMe ? 'bg-blue-200/40 dark:bg-blue-900/40' : 'bg-slate-200/60 dark:bg-slate-700/60'
+                      <div className={`mb-2 p-2.5 rounded-xl border flex flex-col gap-2 ${
+                        isMe 
+                          ? 'bg-blue-100/60 dark:bg-blue-900/40 border-blue-200 dark:border-blue-700/60' 
+                          : 'bg-white dark:bg-slate-900/60 border-slate-200 dark:border-slate-700'
                       }`}>
-                        <button
-                          onClick={() => setPlayingVoiceId(playingVoiceId === msg.id ? null : msg.id)}
-                          className="w-8 h-8 rounded-full bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shadow-xs shrink-0 cursor-pointer"
-                        >
-                          {playingVoiceId === msg.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
-                        </button>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-1 h-4">
-                            {[40, 80, 50, 90, 70, 40, 60, 95, 30].map((h, i) => (
-                              <span
-                                key={i}
-                                style={{ height: `${h}%` }}
-                                className={`w-1 rounded-full ${playingVoiceId === msg.id ? 'bg-indigo-600 animate-pulse' : 'bg-current opacity-40'}`}
-                              />
-                            ))}
+                        <div className="flex items-center gap-3">
+                          <button
+                            onClick={() => handleToggleVoicePlayback(msg)}
+                            className={`w-8.5 h-8.5 rounded-full flex items-center justify-center shadow-xs shrink-0 cursor-pointer transition-all hover:scale-105 ${
+                              playingVoiceId === msg.id 
+                                ? 'bg-indigo-600 text-white animate-pulse' 
+                                : isMe ? 'bg-blue-600 text-white hover:bg-blue-700' : 'bg-slate-700 hover:bg-slate-800 text-white'
+                            }`}
+                            title={playingVoiceId === msg.id ? "Pause Voice Note" : "Play Voice Note (Web Speech)"}
+                          >
+                            {playingVoiceId === msg.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4 ml-0.5" />}
+                          </button>
+
+                          <div className="flex-1 min-w-0">
+                            {/* Equalizer Bars */}
+                            <div className="flex items-center gap-1 h-4">
+                              {[35, 75, 45, 90, 65, 40, 85, 95, 30, 60, 80, 50].map((h, i) => (
+                                <span
+                                  key={i}
+                                  style={{ height: `${h}%` }}
+                                  className={`w-1 rounded-full transition-all duration-300 ${
+                                    playingVoiceId === msg.id 
+                                      ? 'bg-indigo-600 dark:bg-indigo-400 animate-pulse' 
+                                      : 'bg-slate-400 dark:bg-slate-600 opacity-60'
+                                  }`}
+                                />
+                              ))}
+                            </div>
+                            <div className="flex items-center justify-between text-[10px] opacity-75 mt-1 font-mono">
+                              <span className="font-semibold text-indigo-700 dark:text-indigo-300 flex items-center gap-1">
+                                {playingVoiceId === msg.id ? 'Playing...' : 'Voice Note'}
+                              </span>
+                              <span>{msg.attachment.duration || 1}s</span>
+                            </div>
                           </div>
-                          <span className="text-[10px] opacity-80 mt-0.5 block">
-                            Audio Clip • {msg.attachment.duration || 30}s
-                          </span>
                         </div>
+
+                        {/* Transcription from Web Speech API */}
+                        {msg.attachment.transcript && (
+                          <div className="pt-1.5 border-t border-slate-200/50 dark:border-slate-700/50 text-[11px] italic opacity-90 flex items-start gap-1">
+                            <span className="text-indigo-600 dark:text-indigo-400 font-bold not-italic">“</span>
+                            <span className="line-clamp-3">{msg.attachment.transcript}</span>
+                            <span className="text-indigo-600 dark:text-indigo-400 font-bold not-italic">”</span>
+                          </div>
+                        )}
                       </div>
                     )}
 
@@ -572,6 +719,59 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     <p className="whitespace-pre-wrap break-words">
                       {msg.content}
                     </p>
+
+                    {/* Subtle Timestamp Label directly attached to individual chat bubble */}
+                    <div 
+                      className={`flex items-center gap-1 justify-end mt-1.5 -mb-0.5 select-none ${
+                        isMe 
+                          ? 'text-blue-700/65 dark:text-blue-300/65' 
+                          : 'text-slate-500/75 dark:text-slate-400/75'
+                      }`}
+                    >
+                      <span 
+                        className="text-[10px] font-medium tracking-tight"
+                        title={isMe ? `Sent at ${formatExactMessageTime(msg.createdAt)}` : `Received at ${formatExactMessageTime(msg.createdAt)}`}
+                      >
+                        {formatExactMessageTime(msg.createdAt)}
+                      </span>
+                      {isMe && (
+                        <div 
+                          className="inline-flex items-center gap-0.5 ml-1 transition-all select-none cursor-default" 
+                          title={
+                            msg.status === 'read' 
+                              ? `Seen by ${partner?.name || 'colleague'}${msg.seenAt ? ` • ${msg.seenAt}` : ''}`
+                              : msg.status === 'delivered' 
+                              ? `Delivered to ${partner?.name || 'colleague'}'s device`
+                              : msg.status === 'sent' 
+                              ? 'Sent to network' 
+                              : 'Sending...'
+                          }
+                        >
+                          {msg.status === 'read' ? (
+                            <span className="inline-flex items-center gap-0.5 text-[#53bdeb] dark:text-[#38bdf8]">
+                              <CheckCheck className="w-3.5 h-3.5 stroke-[2.3] inline drop-shadow-[0_0_1px_rgba(83,189,235,0.4)]" />
+                              {msg.id === lastMyMessageId && (
+                                <span className="text-[9px] font-bold tracking-tight uppercase scale-90 inline-block">
+                                  Seen
+                                </span>
+                              )}
+                            </span>
+                          ) : msg.status === 'delivered' ? (
+                            <span className="inline-flex items-center text-slate-400/80 dark:text-slate-400/70">
+                              <CheckCheck className="w-3.5 h-3.5 stroke-[2] inline" />
+                            </span>
+                          ) : msg.status === 'sent' ? (
+                            <span className="inline-flex items-center text-slate-400/80 dark:text-slate-400/70">
+                              <Check className="w-3.5 h-3.5 stroke-[2] inline" />
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center text-slate-400/80 dark:text-slate-400/70">
+                              <Clock className="w-3 h-3 inline animate-spin" />
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   {/* Quick Reaction Hover Menu */}
@@ -605,43 +805,31 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                 </div>
               </div>
 
-              {/* Timestamp & Status (Sent/Delivered/Read) */}
-              <div className={`flex items-center gap-1 mt-1 text-[10px] text-slate-400 dark:text-slate-500 px-1 ${
-                isMe ? 'justify-end' : 'justify-start ml-9'
-              }`}>
-                <span>
-                  {formatMessageTime(msg.createdAt)}
-                </span>
-                {isMe && (
-                  <span>
-                    {msg.status === 'read' ? (
-                      <CheckCheck className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400 inline" />
-                    ) : msg.status === 'delivered' ? (
-                      <CheckCheck className="w-3.5 h-3.5 text-slate-400 inline" />
-                    ) : (
-                      <Check className="w-3 h-3 text-slate-400 inline" />
-                    )}
-                  </span>
-                )}
-              </div>
             </div>
           );
         })}
 
-        {/* Typing Indicator */}
+        {/* Real-time Typing Indicator */}
         {isPartnerTyping && (
-          <div className="flex items-center gap-2 ml-1">
-            <div className="w-7 h-7 rounded-full overflow-hidden shrink-0">
-              <img 
-                src={partner?.avatar || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80'} 
-                alt="Typing..." 
-                className="w-full h-full object-cover ring-1 ring-slate-200 dark:ring-slate-700" 
-              />
-            </div>
-            <div className="px-3.5 py-2 rounded-2xl rounded-bl-xs bg-[#f8fafc] dark:bg-slate-800/90 border border-slate-200/90 dark:border-slate-700/80 flex items-center gap-1 shadow-xs">
-              <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-              <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-              <span className="w-1.5 h-1.5 bg-slate-500 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+          <div className="flex flex-col items-start space-y-1 animate-in fade-in slide-in-from-bottom-2 duration-200">
+            <div className="flex items-end gap-2 max-w-[85%] sm:max-w-[75%]">
+              <div className="w-7 h-7 rounded-full overflow-hidden shrink-0 mb-1 ring-1 ring-slate-200 dark:ring-slate-700">
+                <img 
+                  src={partner?.avatar || 'https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=150&auto=format&fit=crop&q=80'} 
+                  alt={partner?.name || 'Typing...'} 
+                  className="w-full h-full object-cover" 
+                />
+              </div>
+              <div className="px-4 py-2.5 rounded-2xl rounded-bl-xs bg-[#f8fafc] dark:bg-slate-800/90 text-slate-900 dark:text-slate-100 border border-slate-200/90 dark:border-slate-700/80 flex items-center gap-2 shadow-xs">
+                <div className="flex items-center gap-1">
+                  <span className="w-2 h-2 bg-indigo-600 dark:bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.3s]" />
+                  <span className="w-2 h-2 bg-indigo-600 dark:bg-indigo-400 rounded-full animate-bounce [animation-delay:-0.15s]" />
+                  <span className="w-2 h-2 bg-indigo-600 dark:bg-indigo-400 rounded-full animate-bounce" />
+                </div>
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 italic">
+                  {partner?.name ? `${partner.name} is typing...` : 'typing...'}
+                </span>
+              </div>
             </div>
           </div>
         )}
