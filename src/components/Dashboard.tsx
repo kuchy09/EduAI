@@ -5,7 +5,7 @@ import {
   Sparkles, Clock, Star, PlayCircle, Flame, BookOpen, 
   CheckCircle2, Target, ArrowRight, Radio, Compass,
   BookMarked, Brain, Headphones, ChevronRight, Layers,
-  RefreshCw, Award, Zap
+  RefreshCw, Award, Zap, X, Check
 } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
 import { DailyReadingGoalCard } from './DailyReadingGoalCard';
@@ -13,6 +13,7 @@ import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
 import { fetchUserDashboardMetrics, UserStatsSummary } from '../lib/userHomeDataService';
 import { isAppOnline } from '../lib/offlineManager';
 import { useUserAvatar } from '../lib/userAvatarService';
+import { safeStorage } from '../lib/safeStorage';
 
 interface DashboardProps {
   books: Book[];
@@ -186,84 +187,311 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
     }
   };
 
-  const firstName = profile?.full_name?.split(' ')[0] || user?.user_metadata?.full_name?.split(' ')[0] || 'Learner';
+  const fullName = profile?.full_name || user?.user_metadata?.full_name || (user?.email ? user.email.split('@')[0] : 'Alex Morgan');
+  const firstName = fullName.split(' ')[0] || 'Learner';
   const displayField = isSchool
     ? 'General Studies'
     : fieldOfStudy;
-  
+
+  const defaultSubject = userSubjects.length > 0 
+    ? (userSubjects[0].charAt(0).toUpperCase() + userSubjects[0].slice(1))
+    : (displayField || 'Computer Science & AI');
+
+  const [activeSubject, setActiveSubject] = useState<string>(() => {
+    return safeStorage.getItem('edu_ai_active_subject') || defaultSubject;
+  });
+
+  const [completedModules, setCompletedModules] = useState<number>(() => {
+    const saved = safeStorage.getItem('edu_ai_weekly_modules');
+    if (saved) {
+      const num = parseInt(saved, 10);
+      if (!isNaN(num) && num >= 0) return num;
+    }
+    return 4; // Starter weekly completed modules
+  });
+
+  const [isSubjectModalOpen, setIsSubjectModalOpen] = useState(false);
+  const weeklyTarget = 5;
+
+  const handleCompleteModule = () => {
+    const nextVal = completedModules + 1;
+    setCompletedModules(nextVal);
+    safeStorage.setItem('edu_ai_weekly_modules', String(nextVal));
+  };
+
+  const availableSubjects = Array.from(new Set([
+    activeSubject,
+    ...userSubjects.map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)),
+    'Computer Science & AI',
+    'Interactive Design Systems',
+    'Data Structures & Algorithms',
+    'Cognitive Psychology',
+    'Business & Innovation'
+  ])).filter(Boolean);
+
   const insight = fieldInsights[displayField as keyof typeof fieldInsights] || {
     quote: "Education is the most powerful weapon which you can use to change the world.",
     author: "Nelson Mandela"
   };
 
-  const personalizedMessage = continueReading.length > 0 
-    ? `You're making great progress on "${continueReading[0].title}". You've completed ${continueReading[0].readProgress}% — keep the momentum going!`
-    : `Ready to explore ${displayField || 'new concepts'} today? As ${insight.author} said: "${insight.quote}"`;
-
   return (
     <div className="p-4 sm:p-8 max-w-6xl mx-auto space-y-6 sm:space-y-8">
-      {/* Hero Welcome & AI Personalized Banner */}
+      {/* Compact Subject Check & User Welcome Header */}
       <motion.div 
-        initial={{ opacity: 0, y: 10 }}
+        initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="liquid-glass-specular bg-gradient-to-br from-brand-600 via-indigo-700 to-indigo-900 rounded-3xl p-6 sm:p-8 text-white flex flex-col md:flex-row items-center justify-between gap-6 sm:gap-8 relative overflow-hidden border border-white/20 shadow-xl"
+        className="group relative overflow-hidden rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 p-4 sm:p-5 shadow-sm hover:shadow transition-all duration-300"
       >
-        <div className="absolute top-0 right-0 w-80 h-80 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/3 pointer-events-none"></div>
-        <div className="absolute bottom-0 left-1/3 w-60 h-60 bg-brand-400/20 rounded-full blur-2xl pointer-events-none"></div>
-        
-        <div className="relative z-10 space-y-4 max-w-2xl">
-          <div className="flex items-center gap-3.5">
+        {/* Subtle accent specular gradient bar */}
+        <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-brand-500 via-indigo-500 to-emerald-500" />
+        <div className="absolute -right-12 -top-12 w-36 h-36 bg-brand-500/5 dark:bg-brand-500/10 rounded-full blur-2xl pointer-events-none" />
+
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+          {/* Left: Avatar + Subject Check Badge + User's Name + Welcome sentence */}
+          <div className="flex items-start sm:items-center gap-3.5">
+            {/* User Avatar / Initials */}
             <button 
               onClick={() => onNavigate?.('profile')}
-              className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-2xl ring-2 ring-white/40 p-0.5 shadow-lg overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all bg-white/20 group"
+              className="relative w-11 h-11 sm:w-12 sm:h-12 rounded-xl ring-2 ring-brand-500/20 dark:ring-brand-400/20 p-0.5 shadow-sm overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform bg-slate-100 dark:bg-slate-800"
               title="View & Edit Profile"
             >
               {avatarUrl && !avatarFailed ? (
                 <img 
                   src={avatarUrl} 
-                  alt="Profile" 
-                  className="w-full h-full object-cover rounded-xl" 
+                  alt={fullName} 
+                  className="w-full h-full object-cover rounded-[10px]" 
                   onError={() => setAvatarFailed(true)}
                 />
               ) : (
-                <div className="w-full h-full bg-gradient-to-tr from-white/30 to-white/10 backdrop-blur-md rounded-xl flex items-center justify-center font-bold text-lg text-white">
+                <div className="w-full h-full bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-[10px] flex items-center justify-center font-bold text-sm sm:text-base text-white">
                   {firstName.charAt(0).toUpperCase()}
                 </div>
               )}
             </button>
-            <div>
-              <div className="inline-flex items-center gap-2 px-3 py-0.5 bg-white/20 rounded-full text-[11px] font-medium backdrop-blur-sm shadow-inner mb-1">
-                <Sparkles className="w-3 h-3 text-amber-300" />
-                <span>AI Personalized Reading Feed</span>
+
+            {/* Content text */}
+            <div className="space-y-1">
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Subject Check Pill */}
+                <button
+                  onClick={() => setIsSubjectModalOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer group/btn"
+                  title="Click to perform Subject Check & view modules"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 group-hover/btn:scale-110 transition-transform" />
+                  <span>Subject Check:</span>
+                  <span className="font-bold underline decoration-emerald-400/40">{activeSubject}</span>
+                </button>
+
+                {/* User's Name */}
+                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                  • <strong className="font-semibold text-slate-700 dark:text-slate-300">{fullName}</strong>
+                </span>
               </div>
-              <h2 className="text-2xl sm:text-3xl font-display font-bold tracking-tight">
-                {greeting}, {firstName}.
+
+              {/* Exact user request sentence: "Welcome to Edu AI. You've completed.....modules this week" */}
+              <h2 className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 flex flex-wrap items-center gap-1.5 leading-snug">
+                <span>Welcome to Edu AI.</span>
+                <span className="text-brand-600 dark:text-brand-400 font-bold">
+                  You've completed {completedModules} modules this week
+                </span>
+                <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                  ({Math.round((completedModules / weeklyTarget) * 100)}% of weekly goal)
+                </span>
               </h2>
+
+              <p className="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2">
+                <span>
+                  {completedModules >= weeklyTarget 
+                    ? '🎉 Weekly module milestone achieved!' 
+                    : `${weeklyTarget - completedModules} more module${weeklyTarget - completedModules === 1 ? '' : 's'} to hit your 5-module target.`}
+                </span>
+                {continueReading.length > 0 && (
+                  <span className="hidden sm:inline text-slate-400 dark:text-slate-600">
+                    • In progress: <strong className="font-medium text-slate-700 dark:text-slate-300">"{continueReading[0].title}"</strong>
+                  </span>
+                )}
+              </p>
             </div>
           </div>
-          <p className="text-brand-100 text-base sm:text-lg leading-relaxed italic">
-            "{personalizedMessage}"
-          </p>
-          
-          <div className="flex flex-wrap items-center gap-3 pt-1">
-            <button 
-              onClick={() => onNavigate?.('learning-path')} 
-              className="bg-white text-brand-900 px-5 py-2.5 rounded-full font-semibold text-xs sm:text-sm hover:bg-brand-50 transition-all shadow-md inline-flex items-center gap-2 cursor-pointer active:scale-95"
+
+          {/* Right section ("and more"): Quick stats + action triggers */}
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800">
+            {/* Mini Progress & Streak Pills */}
+            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-xs">
+              <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold" title="Reading streak">
+                <Flame className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
+                <span>{metrics.streakDays}d</span>
+              </div>
+              <div className="w-px h-3.5 bg-slate-200 dark:bg-slate-700" />
+              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+                <Target className="w-3.5 h-3.5 text-brand-500" />
+                <span className="font-medium">{completedModules}/{weeklyTarget} modules</span>
+              </div>
+            </div>
+
+            {/* Quick Action: Subject Check Modal */}
+            <button
+              onClick={() => setIsSubjectModalOpen(true)}
+              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+              title="Inspect modules and subjects"
             >
-              <Compass className="w-4 h-4 text-brand-600" />
-              View Learning Path
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
+              <span>Subject Check</span>
             </button>
-            {continueReading.length > 0 && (
-              <button 
-                onClick={() => onBookSelect(continueReading[0])} 
-                className="bg-white/15 backdrop-blur-md text-white border border-white/30 px-5 py-2.5 rounded-full font-medium text-xs sm:text-sm hover:bg-white/25 transition-all inline-flex items-center gap-2 cursor-pointer active:scale-95"
+
+            {continueReading.length > 0 ? (
+              <button
+                onClick={() => onBookSelect(continueReading[0])}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-brand-600 hover:bg-brand-700 text-white shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                title={`Continue reading "${continueReading[0].title}"`}
               >
-                <PlayCircle className="w-4 h-4 text-amber-300" />
-                Resume "{continueReading[0].title.slice(0, 20)}..."
+                <PlayCircle className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Resume</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => onNavigate?.('learning-path')}
+                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-brand-600 hover:bg-brand-700 text-white shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+              >
+                <Compass className="w-3.5 h-3.5" />
+                <span>Learning Path</span>
               </button>
             )}
           </div>
         </div>
+
+        {/* Interactive Subject Check Modal / Drawer Overlay */}
+        <AnimatePresence>
+          {isSubjectModalOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 space-y-3 overflow-hidden"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="p-1 rounded-md bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300">
+                    <CheckCircle2 className="w-4 h-4" />
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-100">
+                    Subject Check & Module Syllabus
+                  </h3>
+                  <span className="text-[11px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-medium">
+                    {activeSubject}
+                  </span>
+                </div>
+                <button
+                  onClick={() => setIsSubjectModalOpen(false)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Subject switcher pills */}
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 mr-1">Switch Subject:</span>
+                {availableSubjects.map((subj) => (
+                  <button
+                    key={subj}
+                    onClick={() => {
+                      setActiveSubject(subj);
+                      safeStorage.setItem('edu_ai_active_subject', subj);
+                    }}
+                    className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-all cursor-pointer ${
+                      activeSubject === subj
+                        ? 'bg-brand-600 text-white shadow-sm'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {subj}
+                  </button>
+                ))}
+              </div>
+
+              {/* This Week's 5 Modules Checklist */}
+              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-1">
+                {[
+                  { num: 1, title: 'Foundations & Concepts', desc: 'Core theory & context' },
+                  { num: 2, title: 'Applied Case Analysis', desc: 'Practical walkthroughs' },
+                  { num: 3, title: 'Framework Study', desc: 'Key architecture models' },
+                  { num: 4, title: 'Exercises & Practice', desc: 'Problem sets & notes' },
+                  { num: 5, title: 'Weekly Assessment', desc: 'Final mastery review' },
+                ].map((mod) => {
+                  const isDone = mod.num <= completedModules;
+                  const isCurrent = mod.num === completedModules + 1;
+                  return (
+                    <div
+                      key={mod.num}
+                      className={`p-2.5 rounded-xl border text-left transition-all ${
+                        isDone
+                          ? 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800/60'
+                          : isCurrent
+                          ? 'bg-brand-50/70 dark:bg-brand-950/30 border-brand-300 dark:border-brand-700 ring-1 ring-brand-400/30'
+                          : 'bg-slate-50 dark:bg-slate-800/40 border-slate-200/60 dark:border-slate-800 opacity-60'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          Module 0{mod.num}
+                        </span>
+                        {isDone ? (
+                          <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                        ) : isCurrent ? (
+                          <span className="w-2 h-2 rounded-full bg-brand-500 animate-pulse" />
+                        ) : (
+                          <span className="w-2 h-2 rounded-full bg-slate-300 dark:bg-slate-600" />
+                        )}
+                      </div>
+                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 line-clamp-1">
+                        {mod.title}
+                      </p>
+                      <p className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                        {isDone ? 'Completed ✓' : isCurrent ? 'In progress' : 'Upcoming'}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Action buttons inside the Subject Check modal */}
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCompleteModule}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Complete Next Module (+1)</span>
+                  </button>
+                  {completedModules > 0 && (
+                    <button
+                      onClick={() => {
+                        setCompletedModules(0);
+                        safeStorage.setItem('edu_ai_weekly_modules', '0');
+                      }}
+                      className="px-2.5 py-1.5 rounded-lg text-xs font-medium text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    >
+                      Reset Week
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => onNavigate?.('learning-path')}
+                    className="text-xs font-semibold text-brand-600 dark:text-brand-400 hover:underline flex items-center gap-1"
+                  >
+                    <span>Full Curriculum</span>
+                    <ArrowRight className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </motion.div>
 
       {/* Daily Reading Goal Widget (Realtime Synced with Cloud) */}

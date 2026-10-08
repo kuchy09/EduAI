@@ -38,13 +38,16 @@ const isRealKey = Boolean(
   !supabaseApiKey.includes('your_')
 );
 
+import { safeStorage } from './safeStorage';
+
 export function clearStaleSupabaseTokens() {
   if (typeof window === 'undefined') return;
   try {
-    if (window.localStorage) {
+    const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
+    if (ls) {
       const keysToRemove: string[] = [];
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
+      for (let i = 0; i < ls.length; i++) {
+        const key = ls.key(i);
         if (
           key && (
             key.startsWith('sb-') || 
@@ -59,7 +62,7 @@ export function clearStaleSupabaseTokens() {
       }
       keysToRemove.forEach((key) => {
         try {
-          localStorage.removeItem(key);
+          ls.removeItem(key);
         } catch (_) {}
       });
     }
@@ -68,10 +71,11 @@ export function clearStaleSupabaseTokens() {
   }
 
   try {
-    if (window.sessionStorage) {
+    const ss = (function() { try { return window.sessionStorage; } catch (_) { return null; } })();
+    if (ss) {
       const keysToRemove: string[] = [];
-      for (let i = 0; i < sessionStorage.length; i++) {
-        const key = sessionStorage.key(i);
+      for (let i = 0; i < ss.length; i++) {
+        const key = ss.key(i);
         if (
           key && (
             key.startsWith('sb-') || 
@@ -86,7 +90,7 @@ export function clearStaleSupabaseTokens() {
       }
       keysToRemove.forEach((key) => {
         try {
-          sessionStorage.removeItem(key);
+          ss.removeItem(key);
         } catch (_) {}
       });
     }
@@ -96,10 +100,12 @@ export function clearStaleSupabaseTokens() {
 }
 
 export function sanitizeStoredSupabaseSession() {
-  if (typeof window === 'undefined' || !window.localStorage) return;
+  if (typeof window === 'undefined') return;
   try {
-    for (let i = 0; i < localStorage.length; i++) {
-      const key = localStorage.key(i);
+    const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
+    if (!ls) return;
+    for (let i = 0; i < ls.length; i++) {
+      const key = ls.key(i);
       if (
         key && (
           key.startsWith('sb-') || 
@@ -109,12 +115,12 @@ export function sanitizeStoredSupabaseSession() {
           key.includes('-auth-token')
         )
       ) {
-        const item = localStorage.getItem(key);
+        const item = ls.getItem(key);
         if (!item) continue;
         try {
           const parsed = JSON.parse(item);
           if (!parsed || typeof parsed !== 'object') {
-            localStorage.removeItem(key);
+            ls.removeItem(key);
             continue;
           }
           // If the stored item lacks a valid refresh_token or has placeholder strings
@@ -125,12 +131,12 @@ export function sanitizeStoredSupabaseSession() {
             parsed.refresh_token.includes('placeholder') ||
             parsed.refresh_token.includes('your_')
           ) {
-            localStorage.removeItem(key);
+            ls.removeItem(key);
             continue;
           }
         } catch {
           // Corrupt JSON
-          localStorage.removeItem(key);
+          ls.removeItem(key);
         }
       }
     }
@@ -216,6 +222,7 @@ sanitizeStoredSupabaseSession();
 export const supabase = (isRealUrl && isRealKey)
   ? createClient(supabaseUrl, supabaseApiKey, {
       auth: {
+        storage: safeStorage,
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,

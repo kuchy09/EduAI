@@ -159,7 +159,14 @@ export function openDB(): Promise<IDBDatabase> {
  * Register Service Worker for offline shell and asset caching
  */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
+  // In development, preview frames, or iframes, never register service workers to prevent navigation and storage interception loops
+  if (
+    typeof window === 'undefined' || 
+    !('serviceWorker' in navigator) ||
+    window.location.hostname.includes('run.app') ||
+    window.location.hostname.includes('localhost') ||
+    window.self !== window.top
+  ) {
     return null;
   }
 
@@ -374,26 +381,27 @@ export async function getAllReadingProgressLocal(): Promise<Record<string, Readi
   }
 
   // Augment with localStorage keys if any exist
-  if (typeof window !== 'undefined' && window.localStorage) {
+  if (typeof window !== 'undefined') {
     try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && key.startsWith('book_progress_')) {
-          const bookId = key.replace('book_progress_', '');
-          if (!result[bookId]) {
-            const val = parseInt(localStorage.getItem(key) || '0', 10);
-            result[bookId] = {
-              bookId,
-              progress: val,
-              lastReadAt: Date.now(),
-              updatedAt: Date.now()
-            };
+      const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
+      if (ls) {
+        for (let i = 0; i < ls.length; i++) {
+          const key = ls.key(i);
+          if (key && key.startsWith('book_progress_')) {
+            const bookId = key.replace('book_progress_', '');
+            if (!result[bookId]) {
+              const val = parseInt(ls.getItem(key) || '0', 10);
+              result[bookId] = {
+                bookId,
+                progress: val,
+                lastReadAt: Date.now(),
+                updatedAt: Date.now()
+              };
+            }
           }
         }
       }
-    } catch {
-      // Ignore
-    }
+    } catch (_) {}
   }
 
   return result;

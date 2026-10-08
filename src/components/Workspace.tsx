@@ -1,7 +1,9 @@
-import { Upload, FileText, Image as ImageIcon, File, Loader2, Download, Trash2, FolderArchive, ArrowRight, HardDrive, FileArchive, Video, LayoutGrid, List, FolderPlus, Folder, Plus } from 'lucide-react';
+import { Upload, FileText, Image as ImageIcon, File, Loader2, Download, Trash2, FolderArchive, ArrowRight, HardDrive, FileArchive, Video, LayoutGrid, List, FolderPlus, Folder, Plus, PenLine, X, Sparkles } from 'lucide-react';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { motion, AnimatePresence } from 'motion/react';
+import { FloatingEditorToolbar, TextStylePreset, TextAlignment } from './FloatingEditorToolbar';
+import { triggerCapsuleFeedback } from '../lib/feedback';
 
 interface WorkspaceFolder {
   id: string;
@@ -38,6 +40,15 @@ export function Workspace() {
   const [isCreateFolderModalOpen, setIsCreateFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+
+  // Quick Study Note Scratchpad State (with FloatingEditorToolbar)
+  const [isNoteScratchpadOpen, setIsNoteScratchpadOpen] = useState(false);
+  const [scratchpadNoteText, setScratchpadNoteText] = useState('');
+  const [scratchpadTitle, setScratchpadTitle] = useState('');
+  const [scratchpadStyle, setScratchpadStyle] = useState<TextStylePreset>('Style 01');
+  const [scratchpadAlign, setScratchpadAlign] = useState<TextAlignment>('left');
+  const [scratchpadBold, setScratchpadBold] = useState(false);
+  const [scratchpadItalic, setScratchpadItalic] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -380,8 +391,18 @@ export function Workspace() {
         </div>
         <div className="flex items-center gap-2">
            <button
+            onClick={() => {
+              triggerCapsuleFeedback({ pitch: 620, volume: 0.14, hapticDuration: 10 });
+              setIsNoteScratchpadOpen(true);
+            }}
+            className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 px-4 py-2.5 rounded-xl font-medium transition-colors cursor-pointer"
+          >
+            <PenLine className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+            Study Note
+          </button>
+           <button
             onClick={() => setIsCreateFolderModalOpen(true)}
-            className="flex items-center gap-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 px-4 py-2.5 rounded-xl font-medium transition-colors"
+            className="flex items-center gap-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-200 px-4 py-2.5 rounded-xl font-medium transition-colors cursor-pointer"
           >
             <FolderPlus className="w-5 h-5 text-slate-400" />
             New Folder
@@ -389,7 +410,7 @@ export function Workspace() {
            <button 
             onClick={() => fileInputRef.current?.click()}
             disabled={isUploading}
-            className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-5 py-2.5 rounded-xl font-medium transition-colors"
+            className="flex items-center gap-2 bg-brand-600 hover:bg-brand-700 text-white px-5 py-2.5 rounded-xl font-medium transition-colors cursor-pointer"
           >
             {isUploading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Upload className="w-5 h-5" />}
             {isUploading ? 'Uploading...' : 'Upload File'}
@@ -623,6 +644,128 @@ export function Workspace() {
                   </button>
                 </div>
               </form>
+            </motion.div>
+          </>
+        )}
+      </AnimatePresence>
+
+      {/* Quick Study Note Scratchpad Modal with FloatingEditorToolbar */}
+      <AnimatePresence>
+        {isNoteScratchpadOpen && (
+          <>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsNoteScratchpadOpen(false)}
+              className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-50 transition-opacity"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl shadow-2xl z-50 overflow-hidden flex flex-col p-6 gap-4"
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-brand-500/10 text-brand-600 dark:text-brand-400 flex items-center justify-center font-bold">
+                    <PenLine className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">Study Note Scratchpad</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Rich text editor with style presets</p>
+                  </div>
+                </div>
+                <button
+                  onClick={() => setIsNoteScratchpadOpen(false)}
+                  className="p-1.5 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <input
+                type="text"
+                value={scratchpadTitle}
+                onChange={(e) => setScratchpadTitle(e.target.value)}
+                placeholder="Note Title (e.g., Quantum Mechanics Summary)"
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/50 text-slate-900 dark:text-white font-medium text-sm outline-none focus:border-brand-500"
+              />
+
+              {/* Floating Text Editor Toolbar */}
+              <div className="flex justify-center -mb-2">
+                <FloatingEditorToolbar
+                  currentStyle={scratchpadStyle}
+                  onStyleChange={setScratchpadStyle}
+                  alignment={scratchpadAlign}
+                  onAlignmentChange={setScratchpadAlign}
+                  isBold={scratchpadBold}
+                  onToggleBold={() => setScratchpadBold(b => !b)}
+                  isItalic={scratchpadItalic}
+                  onToggleItalic={() => setScratchpadItalic(i => !i)}
+                  onActionTrigger={() => {
+                    if ('speechSynthesis' in window && scratchpadNoteText) {
+                      window.speechSynthesis.cancel();
+                      window.speechSynthesis.speak(new SpeechSynthesisUtterance(scratchpadNoteText));
+                    }
+                  }}
+                  actionTooltip="Listen to Note"
+                />
+              </div>
+
+              <textarea
+                value={scratchpadNoteText}
+                onChange={(e) => setScratchpadNoteText(e.target.value)}
+                placeholder="Write your study notes, key takeaways, and flashcard concepts here..."
+                rows={5}
+                style={{ textAlign: scratchpadAlign }}
+                className={`w-full p-4 rounded-2xl resize-none outline-none border transition-colors ${
+                  scratchpadBold ? 'font-bold' : ''
+                } ${scratchpadItalic ? 'italic' : ''} ${
+                  scratchpadStyle === 'Style 01' 
+                    ? 'font-serif text-sm leading-relaxed' 
+                    : scratchpadStyle === 'Style 02' 
+                      ? 'font-sans font-bold text-base' 
+                      : scratchpadStyle === 'Style 03' 
+                        ? 'font-serif italic text-sm border-l-4 border-brand-500' 
+                        : 'font-mono text-xs'
+                } bg-white dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 text-slate-900 dark:text-white focus:border-brand-500`}
+              />
+
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-xs text-slate-400">Auto-saved to local workspace</span>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setIsNoteScratchpadOpen(false)}
+                    className="px-3.5 py-1.5 text-xs font-semibold rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (!scratchpadNoteText.trim() && !scratchpadTitle.trim()) return;
+                      const stored = (() => {
+                        try { return JSON.parse(localStorage.getItem('workspace_notes') || '[]'); } catch { return []; }
+                      })();
+                      stored.unshift({
+                        id: crypto.randomUUID(),
+                        title: scratchpadTitle.trim() || 'Untitled Study Note',
+                        note: scratchpadNoteText.trim(),
+                        style: scratchpadStyle,
+                        createdAt: new Date().toISOString()
+                      });
+                      try { localStorage.setItem('workspace_notes', JSON.stringify(stored)); } catch {}
+                      triggerCapsuleFeedback({ pitch: 700, volume: 0.16, hapticDuration: 12 });
+                      setIsNoteScratchpadOpen(false);
+                      setScratchpadNoteText('');
+                      setScratchpadTitle('');
+                    }}
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-full text-xs font-semibold shadow-md shadow-brand-500/25 transition-all cursor-pointer"
+                  >
+                    Save Note
+                  </button>
+                </div>
+              </div>
             </motion.div>
           </>
         )}

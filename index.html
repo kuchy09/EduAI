@@ -8,92 +8,125 @@
     <meta property="og:title" content="Edu AI" />
     <meta property="og:description" content="Library and educational application with an AI assistant." />
 
-    <!-- Storage Defense & Service Worker Cleanup Polyfill -->
+    <!-- Storage Defense Polyfill for Sandbox iFrames -->
     <script>
       (function() {
-        // 1. Safe in-memory storage polyfill if localStorage/sessionStorage are blocked in iframes
-        function makeMemoryStorage() {
-          var store = {};
+        try {
+          var savedTheme = localStorage.getItem('theme');
+          if (savedTheme === 'dark' || (!savedTheme && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {}
+      })();
+    </script>
+    <script>
+      (function() {
+        var localMem = {};
+        var sessionMem = {};
+
+        function createMockStorage(store) {
           return {
-            getItem: function(key) { return store.hasOwnProperty(key) ? store[key] : null; },
-            setItem: function(key, val) { store[key] = String(val); },
-            removeItem: function(key) { delete store[key]; },
-            clear: function() { store = {}; },
+            getItem: function(k) { return store.hasOwnProperty(k) ? store[k] : null; },
+            setItem: function(k, v) { store[k] = String(v); },
+            removeItem: function(k) { delete store[k]; },
+            clear: function() { for (var k in store) delete store[k]; },
             get length() { return Object.keys(store).length; },
-            key: function(idx) { return Object.keys(store)[idx] || null; }
+            key: function(i) { return Object.keys(store)[i] || null; }
           };
         }
 
+        var mockLocal = createMockStorage(localMem);
+        var mockSession = createMockStorage(sessionMem);
+
+        // Safely test whether native localStorage works
+        var localWorking = false;
         try {
-          var test = '__edu_test__';
-          window.localStorage.setItem(test, '1');
-          window.localStorage.removeItem(test);
-        } catch (e) {
+          var k = '__edu_probe__';
+          window.localStorage.setItem(k, '1');
+          window.localStorage.removeItem(k);
+          localWorking = true;
+        } catch (_) {
+          localWorking = false;
+        }
+
+        if (!localWorking) {
           try {
             Object.defineProperty(window, 'localStorage', {
-              value: makeMemoryStorage(),
-              configurable: true,
-              writable: true
+              value: mockLocal,
+              writable: true,
+              configurable: true
+            });
+          } catch (_) {}
+          try {
+            Object.defineProperty(Window.prototype, 'localStorage', {
+              get: function() { return mockLocal; },
+              configurable: true
             });
           } catch (_) {}
         }
 
+        var sessionWorking = false;
         try {
-          var testSession = '__edu_session_test__';
-          window.sessionStorage.setItem(testSession, '1');
-          window.sessionStorage.removeItem(testSession);
-        } catch (e) {
+          var sk = '__edu_sprobe__';
+          window.sessionStorage.setItem(sk, '1');
+          window.sessionStorage.removeItem(sk);
+          sessionWorking = true;
+        } catch (_) {
+          sessionWorking = false;
+        }
+
+        if (!sessionWorking) {
           try {
             Object.defineProperty(window, 'sessionStorage', {
-              value: makeMemoryStorage(),
-              configurable: true,
-              writable: true
+              value: mockSession,
+              writable: true,
+              configurable: true
+            });
+          } catch (_) {}
+          try {
+            Object.defineProperty(Window.prototype, 'sessionStorage', {
+              get: function() { return mockSession; },
+              configurable: true
             });
           } catch (_) {}
         }
 
-        // 2. Unregister stale service workers and clear caches in development / iframe
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.getRegistrations().then(function(regs) {
-            for (var i = 0; i < regs.length; i++) {
-              regs[i].unregister().catch(function() {});
-            }
-          }).catch(function() {});
-        }
-        if ('caches' in window) {
-          caches.keys().then(function(keys) {
-            for (var i = 0; i < keys.length; i++) {
-              caches.delete(keys[i]).catch(function() {});
-            }
-          }).catch(function() {});
-        }
-
-        // 3. Client error reporting & visible recovery trigger if scripts fail
-        window.__eduClientErrors = [];
+        // Global uncaught error display banner fallback
         window.addEventListener('error', function(e) {
-          window.__eduClientErrors.push({
-            type: 'error',
-            message: e.message || String(e),
-            filename: e.filename,
-            lineno: e.lineno
-          });
+          var details = (e && e.message) ? e.message : String(e);
+          var str = (details + ' ' + (e.filename || '')).toLowerCase();
+          if (str.indexOf('websocket') !== -1 || str.indexOf('vite') !== -1 || str.indexOf('hmr') !== -1) {
+            e.preventDefault && e.preventDefault();
+            return;
+          }
           try {
             fetch('/api/client-log', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ type: 'uncaught_error', message: e.message, filename: e.filename, lineno: e.lineno })
+              body: JSON.stringify({ 
+                type: 'uncaught_error', 
+                message: details, 
+                filename: e.filename, 
+                lineno: e.lineno, 
+                colno: e.colno,
+                stack: e.error ? e.error.stack : null 
+              })
             }).catch(function() {});
           } catch (_) {}
         });
 
         window.addEventListener('unhandledrejection', function(e) {
-          var reason = e.reason ? (e.reason.message || String(e.reason)) : 'Unhandled rejection';
-          window.__eduClientErrors.push({ type: 'unhandledrejection', message: reason });
+          var reason = e.reason ? (e.reason.stack || e.reason.message || String(e.reason)) : 'Unhandled rejection';
+          var str = String(reason).toLowerCase();
+          if (str.indexOf('websocket') !== -1 || str.indexOf('vite') !== -1 || str.indexOf('hmr') !== -1) {
+            e.preventDefault && e.preventDefault();
+            return;
+          }
           try {
             fetch('/api/client-log', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ type: 'unhandled_rejection', message: reason })
+              body: JSON.stringify({ type: 'unhandled_rejection', reason: reason })
             }).catch(function() {});
           } catch (_) {}
         });
@@ -101,86 +134,7 @@
     </script>
   </head>
   <body class="bg-slate-50 dark:bg-slate-950 font-sans antialiased text-slate-900 dark:text-slate-100">
-    <div id="root">
-      <!-- High-fidelity, immediate initial splash screen to prevent white screen flash -->
-      <div id="edu-loading-splash" style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background-color: #0b0f19; color: #ffffff; font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; padding: 24px; text-align: center;">
-        <div style="position: relative; width: 68px; height: 68px; margin-bottom: 24px;">
-          <div style="position: absolute; inset: 0; border-radius: 20px; background: linear-gradient(135deg, #7c3aed, #4f46e5); opacity: 0.8; filter: blur(12px);"></div>
-          <div style="position: relative; width: 100%; height: 100%; border-radius: 20px; background: linear-gradient(135deg, #8b5cf6, #6366f1); display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 25px -5px rgba(124, 58, 237, 0.5);">
-            <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z"></path>
-              <path d="M6 6h10"></path>
-              <path d="M6 10h7"></path>
-            </svg>
-          </div>
-        </div>
-        <h1 style="font-size: 22px; font-weight: 700; margin: 0 0 8px 0; letter-spacing: -0.02em; color: #ffffff;">Edu AI</h1>
-        <p style="font-size: 13.5px; color: #94a3b8; margin: 0 0 24px 0; max-width: 320px; line-height: 1.5;">Preparing your library, study guides, and Sage AI tutor...</p>
-        <div style="width: 140px; height: 3px; background-color: #1e293b; border-radius: 9999px; overflow: hidden; position: relative;">
-          <div style="position: absolute; inset: 0; background: linear-gradient(90deg, #8b5cf6, #38bdf8); border-radius: 9999px; width: 40%; animation: edu-shimmer 1.4s ease-in-out infinite alternate;"></div>
-        </div>
-        <style>
-          @keyframes edu-shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(250%); }
-          }
-        </style>
-        <noscript>
-          <p style="color: #f87171; margin-top: 20px; font-size: 13px;">JavaScript is required to run Edu AI. Please enable JavaScript in your browser.</p>
-        </noscript>
-      </div>
-    </div>
+    <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <script>
-      (function() {
-        // Watchdog: If splash screen is still attached after 3500ms, provide instant recovery actions
-        setTimeout(function() {
-          var splash = document.getElementById('edu-loading-splash');
-          if (splash && splash.parentElement) {
-            var recoveryContainer = document.getElementById('edu-splash-recovery');
-            if (!recoveryContainer) {
-              recoveryContainer = document.createElement('div');
-              recoveryContainer.id = 'edu-splash-recovery';
-              recoveryContainer.style.marginTop = '28px';
-              recoveryContainer.style.display = 'flex';
-              recoveryContainer.style.flexDirection = 'column';
-              recoveryContainer.style.alignItems = 'center';
-              recoveryContainer.style.gap = '10px';
-              recoveryContainer.innerHTML = [
-                '<p style="color: #cbd5e1; font-size: 13px; margin: 0 0 8px 0;">Connection taking a moment? You can continue directly:</p>',
-                '<div style="display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;">',
-                '  <button id="edu-btn-force-start" style="background: #7c3aed; color: #ffffff; border: none; padding: 8px 18px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 12px rgba(124,58,237,0.35);">Open Guest Mode</button>',
-                '  <button id="edu-btn-reset-cache" style="background: rgba(255,255,255,0.08); color: #cbd5e1; border: 1px solid rgba(255,255,255,0.15); padding: 8px 16px; border-radius: 10px; font-size: 13px; cursor: pointer;">Reset Storage & Reload</button>',
-                '</div>'
-              ].join('');
-              splash.appendChild(recoveryContainer);
-
-              var btnForce = document.getElementById('edu-btn-force-start');
-              if (btnForce) {
-                btnForce.onclick = function() {
-                  try {
-                    localStorage.setItem('edu_ai_guest_mode', 'true');
-                    sessionStorage.setItem('edu_ai_guest_mode', 'true');
-                  } catch (_) {}
-                  window.location.reload();
-                };
-              }
-
-              var btnReset = document.getElementById('edu-btn-reset-cache');
-              if (btnReset) {
-                btnReset.onclick = function() {
-                  try {
-                    localStorage.clear();
-                    sessionStorage.clear();
-                    localStorage.setItem('edu_ai_guest_mode', 'true');
-                  } catch (_) {}
-                  window.location.href = window.location.origin;
-                };
-              }
-            }
-          }
-        }, 3500);
-      })();
-    </script>
   </body>
 </html>

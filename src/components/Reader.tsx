@@ -21,6 +21,7 @@ import { triggerCapsuleFeedback } from '../lib/feedback';
 import { QuoteCardModal } from './QuoteCardModal';
 import { QuickDictionaryPopover } from './QuickDictionaryPopover';
 import { ReaderAiHoverTutor } from './ReaderAiHoverTutor';
+import { FloatingEditorToolbar, TextStylePreset, TextAlignment } from './FloatingEditorToolbar';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 
@@ -187,7 +188,32 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     else if (fontSize === 'xl') localStorage.setItem('fontSize', 'Large');
     else localStorage.setItem('fontSize', 'Medium');
   }, [fontSize]);
-  const [theme, setTheme] = useState<'sepia' | 'dark' | 'amoled'>('sepia');
+  const getInitialTheme = (): 'sepia' | 'dark' | 'amoled' => {
+    try {
+      const saved = localStorage.getItem('edu_reader_theme');
+      if (saved === 'sepia' || saved === 'dark' || saved === 'amoled') return saved;
+      const appTheme = localStorage.getItem('theme');
+      if (appTheme === 'dark' || document.documentElement.classList.contains('dark')) return 'dark';
+    } catch {}
+    return 'sepia';
+  };
+  const [theme, setTheme] = useState<'sepia' | 'dark' | 'amoled'>(getInitialTheme);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('edu_reader_theme', theme);
+    } catch {}
+  }, [theme]);
+
+  // Note Scratchpad Composer Modal State with Floating Text Editor Toolbar
+  const [noteComposerOpen, setNoteComposerOpen] = useState(false);
+  const [noteDraftText, setNoteDraftText] = useState('');
+  const [noteDraftSnippet, setNoteDraftSnippet] = useState('');
+  const [noteStyle, setNoteStyle] = useState<TextStylePreset>('Style 01');
+  const [noteAlign, setNoteAlign] = useState<TextAlignment>('left');
+  const [noteBold, setNoteBold] = useState(false);
+  const [noteItalic, setNoteItalic] = useState(false);
+
   const getInitialViewMode = (): 'slide' | 'scroll' => {
     try {
       const saved = localStorage.getItem('edu_reader_view_mode');
@@ -246,9 +272,13 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
   };
 
   const handleCycleTheme = () => {
-    if (theme === 'sepia') setTheme('dark');
-    else if (theme === 'dark') setTheme('amoled');
-    else setTheme('sepia');
+    const nextTheme: 'sepia' | 'dark' | 'amoled' = 
+      theme === 'sepia' ? 'dark' : theme === 'dark' ? 'amoled' : 'sepia';
+    setTheme(nextTheme);
+    try {
+      localStorage.setItem('edu_reader_theme', nextTheme);
+    } catch {}
+    triggerCapsuleFeedback({ pitch: nextTheme === 'dark' ? 520 : nextTheme === 'amoled' ? 440 : 680, volume: 0.16, hapticDuration: 12 });
   };
 
   const settingsDropdownRef = useRef<HTMLDivElement>(null);
@@ -1051,10 +1081,17 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           onTouchMove={handleTouchMove}
           onTouchEnd={handleTouchEnd}
           onDoubleClick={handleDoubleClick}
-          className={`flex-1 flex overflow-hidden bg-stone-100 items-center justify-center relative ${showSidebar ? 'mr-0 lg:mr-80' : ''} transition-all duration-300`}
+          className={`flex-1 flex overflow-hidden items-center justify-center relative ${showSidebar ? 'mr-0 lg:mr-80' : ''} transition-all duration-300 ${
+            theme === 'dark' ? 'bg-[#1C1C1E]' : theme === 'amoled' ? 'bg-black' : 'bg-[#F4ECD8]'
+          }`}
         >
           {book ? (
-            <div ref={pdfContainerRef} className="flex-1 h-full overflow-y-auto bg-stone-100 flex justify-center pb-20">
+            <div 
+              ref={pdfContainerRef} 
+              className={`flex-1 h-full overflow-y-auto flex justify-center pb-28 pt-2 transition-colors duration-250 ${
+                theme === 'dark' ? 'bg-[#1C1C1E]' : theme === 'amoled' ? 'bg-black' : 'bg-[#F4ECD8]'
+              }`}
+            >
               <Document
                 file={
                   cachedBlobUrl ||
@@ -1146,19 +1183,19 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
               
             </div>
           ) : (
-            <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto px-4 py-8 sm:px-6 sm:py-12 lg:py-20 lg:px-20 transition-colors duration-250 ${themeClasses[theme]}`}>
+            <div ref={scrollContainerRef} className={`flex-1 overflow-y-auto px-4 py-8 sm:px-6 sm:py-12 lg:py-20 lg:px-20 pb-32 transition-colors duration-250 ${themeClasses[theme]}`}>
               <div className="max-w-2xl mx-auto space-y-6 sm:space-y-8">
-                <h2 className="text-2xl sm:text-3xl font-display font-bold mb-6 sm:mb-8 font-sans tracking-tight text-stone-900 border-b border-stone-200/40 pb-4">Chapter 1: The Foundations</h2>
+                <h2 className="text-2xl sm:text-3xl font-display font-bold mb-6 sm:mb-8 font-serif tracking-tight border-b border-current/15 pb-4">Chapter 1: The Foundations</h2>
                 
                 <div className={`space-y-6 sm:space-y-8 ${fontSizeClasses[fontSize]}`}>
-                  <p className="first-letter:text-5xl md:first-letter:text-6xl first-letter:font-bold first-letter:mr-2 first-letter:float-left first-letter:text-stone-900">
+                  <p className="first-letter:text-5xl md:first-letter:text-6xl first-letter:font-bold first-letter:mr-2 first-letter:float-left first-letter:text-current font-serif">
                     {renderTextWithHighlights("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur.")}
                   </p>
                   <p>
                     {renderTextWithHighlights("Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum. Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.")}
                   </p>
                   
-                  <div className={`p-6 md:p-8 rounded-2xl border-l-4 border-brand-500 italic my-8 md:my-10 font-sans shadow-sm ${theme === 'dark' ? 'bg-stone-800 text-stone-200' : 'bg-stone-100/70 text-stone-700'}`}>
+                  <div className={`p-6 md:p-8 rounded-2xl border-l-4 border-brand-500 italic my-8 md:my-10 font-sans shadow-sm ${theme === 'dark' ? 'bg-[#2C2C2E] text-[#E5E5EA]' : theme === 'amoled' ? 'bg-[#141414] text-[#E5E5EA]' : 'bg-[#EAE0C8] text-[#2C2925]'}`}>
                     "{renderTextWithHighlights(`The principles of ${book.category} explored in ${book.title} represent a cornerstone of modern educational frameworks.`)}"
                   </div>
 
@@ -1177,6 +1214,17 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           )}
         </main>
       </div>
+
+      {/* Smooth linear fade gradient so page text scrolling beneath dock fades out cleanly (Reference: file 1000052645.jpg) */}
+      <div 
+        className={`pointer-events-none fixed bottom-0 inset-x-0 h-36 z-30 transition-colors duration-300 ${
+          theme === 'dark' 
+            ? 'bg-gradient-to-t from-[#1C1C1E] via-[#1C1C1E]/85 to-transparent' 
+            : theme === 'amoled' 
+              ? 'bg-gradient-to-t from-black via-black/90 to-transparent' 
+              : 'bg-gradient-to-t from-[#F4ECD8] via-[#F4ECD8]/85 to-transparent'
+        }`} 
+      />
 
       {/* Floating Liquid Glass Bottom Control Dock & Page Progress Indicator */}
       <div className="fixed bottom-4 sm:bottom-6 inset-x-0 z-40 flex flex-col items-center justify-center pointer-events-none px-4 gap-2">
@@ -1266,24 +1314,27 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
 
             {/* 4. Typography Controller (Tt Icon) */}
             <button
-              onClick={() => setShowSettingsDropdown(prev => !prev)}
-              className="p-2 rounded-full liquid-glass-card hover:scale-105 active:scale-95 text-stone-700 dark:text-stone-200 transition-all cursor-pointer shadow-sm border border-white/50 dark:border-white/10 flex items-center justify-center font-serif font-bold text-xs"
-              title="Typography & Text Settings"
+              onClick={() => {
+                triggerCapsuleFeedback({ pitch: 650, volume: 0.14, hapticDuration: 10 });
+                setShowSettingsDropdown(prev => !prev);
+              }}
+              className="w-8 h-8 rounded-full liquid-glass-card hover:scale-105 active:scale-95 text-stone-700 dark:text-stone-200 transition-all cursor-pointer shadow-sm border border-white/50 dark:border-white/10 flex items-center justify-center font-serif font-bold text-xs"
+              title="Typography & Text Settings (Tt)"
             >
-              <Type className="w-3.5 h-3.5" />
+              <span className="font-serif font-bold text-xs tracking-tight">Tt</span>
             </button>
           </motion.div>
         </div>
       </div>
 
-      {/* Contextual Text Selection Menu (Liquid Glass Card Overlay) */}
+      {/* Contextual Text Selection Menu (Liquid Glass Card Overlay - Reference: file 1000052646.jpg) */}
       {selectionRange && (
         <motion.div 
           initial={{ opacity: 0, scale: 0.92, y: 10 }}
           animate={{ opacity: 1, scale: 1, y: 0 }}
           exit={{ opacity: 0, scale: 0.92 }}
           transition={{ type: 'spring', stiffness: 450, damping: 26 }}
-          className="fixed z-50 liquid-glass-dock text-stone-800 dark:text-stone-100 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.25)] flex flex-col font-sans w-60 overflow-hidden border border-white/70 dark:border-white/15"
+          className="fixed z-50 liquid-glass-dock text-stone-800 dark:text-stone-100 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.25)] flex flex-col font-sans w-64 overflow-hidden border border-white/70 dark:border-white/15"
           style={{
             left: `${selectionRange.x}px`,
             top: `${selectionRange.y}px`,
@@ -1292,32 +1343,25 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           {/* Top specular reflection line */}
           <div className="absolute top-0 inset-x-4 h-[1px] bg-gradient-to-r from-transparent via-white/90 to-transparent pointer-events-none" />
 
-          {/* Quick Horizontal Action Row (Top) */}
-          <div className="flex items-center justify-between px-3 py-2.5 border-b border-stone-200/50 dark:border-stone-700/50 bg-white/40 dark:bg-black/20">
+          {/* Quick Horizontal Action Row (Top: Note, Highlight, Copy) */}
+          <div className="flex items-center justify-around px-3 py-2.5 border-b border-stone-200/50 dark:border-stone-700/50 bg-white/40 dark:bg-black/20">
+            {/* 1. [Note] */}
             <button 
               onClick={() => {
-                setToastMessage('Note added to workspace');
-                setShowToast(true);
+                triggerCapsuleFeedback({ pitch: 600, volume: 0.15, hapticDuration: 12 });
+                setNoteDraftSnippet(selectionRange.text);
+                setNoteDraftText('');
+                setNoteComposerOpen(true);
                 setSelectionRange(null);
-                setTimeout(() => setShowToast(false), 2500);
               }}
               className="flex flex-col items-center gap-1 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+              title="Create Study Note"
             >
               <FileText className="w-4 h-4 text-stone-600 dark:text-stone-300" />
               <span className="text-[9px] font-medium text-stone-500 dark:text-stone-400">Note</span>
             </button>
 
-            <button 
-              onClick={() => {
-                handleOpenDictionary(selectionRange.text, selectionRange.x, selectionRange.y);
-              }}
-              className="flex flex-col items-center gap-1 hover:scale-105 active:scale-95 transition-transform cursor-pointer text-brand-600 dark:text-brand-400"
-              title="Quick Dictionary Definition"
-            >
-              <BookOpen className="w-4 h-4" />
-              <span className="text-[9px] font-semibold">Define</span>
-            </button>
-
+            {/* 2. [Highlight] with circular multi-color wheel indicator */}
             <div className="relative group flex flex-col items-center gap-1 hover:scale-105 transition-transform cursor-pointer">
               <div className="w-4.5 h-4.5 rounded-full border-2 border-stone-300 dark:border-stone-600 overflow-hidden relative shadow-sm" title="Highlight">
                 <div className="absolute inset-0 bg-gradient-to-tr from-yellow-300 via-pink-400 to-sky-400 animate-pulse"></div>
@@ -1345,17 +1389,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
               </div>
             </div>
 
-            <button 
-              onClick={() => {
-                handleOpenQuoteCard(selectionRange.text);
-              }}
-              className="flex flex-col items-center gap-1 hover:scale-105 active:scale-95 transition-transform cursor-pointer text-indigo-600 dark:text-indigo-400"
-              title="Generate shareable quote image card"
-            >
-              <QuoteIcon className="w-4 h-4 fill-current" />
-              <span className="text-[9px] font-semibold">Card</span>
-            </button>
-
+            {/* 3. [Copy] */}
             <button 
               onClick={() => {
                 navigator.clipboard.writeText(selectionRange.text);
@@ -1365,6 +1399,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                 setTimeout(() => setShowToast(false), 2000);
               }}
               className="flex flex-col items-center gap-1 hover:scale-105 active:scale-95 transition-transform cursor-pointer"
+              title="Copy highlighted text"
             >
               <Copy className="w-4 h-4 text-stone-600 dark:text-stone-300" />
               <span className="text-[9px] font-medium text-stone-500 dark:text-stone-400">Copy</span>
@@ -1373,36 +1408,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
 
           {/* Vertical Feature List (Bottom) */}
           <div className="flex flex-col py-1">
-            <button 
-              onClick={() => {
-                handleOpenDictionary(selectionRange.text, selectionRange.x, selectionRange.y);
-              }}
-              className="flex items-center justify-between px-4 py-2 hover:bg-brand-50/50 dark:hover:bg-brand-950/40 text-xs sm:text-sm font-semibold text-brand-700 dark:text-brand-300 transition-colors text-left w-full cursor-pointer group"
-            >
-              <div className="flex items-center gap-2.5">
-                <BookOpen className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400" />
-                <span>Quick Dictionary</span>
-              </div>
-              <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded-full bg-brand-100 dark:bg-brand-900/60 text-brand-700 dark:text-brand-300 border border-brand-300/60 dark:border-brand-700/60 group-hover:scale-105 transition-transform">
-                Instant
-              </span>
-            </button>
-
-            <button 
-              onClick={() => {
-                handleOpenQuoteCard(selectionRange.text);
-              }}
-              className="flex items-center justify-between px-4 py-2 hover:bg-indigo-50/50 dark:hover:bg-indigo-950/40 text-xs sm:text-sm font-medium text-indigo-700 dark:text-indigo-300 transition-colors text-left w-full cursor-pointer group"
-            >
-              <div className="flex items-center gap-2.5">
-                <QuoteIcon className="w-3.5 h-3.5 fill-current text-indigo-600 dark:text-indigo-400" />
-                <span>Create Quote Card</span>
-              </div>
-              <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded-full bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 border border-indigo-300/60 dark:border-indigo-700/60 group-hover:scale-105 transition-transform">
-                HD
-              </span>
-            </button>
-
+            {/* Translate (preserves in-book context) */}
             <button 
               onClick={() => {
                 const textToTranslate = selectionRange.text;
@@ -1414,16 +1420,39 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
               className="flex items-center gap-2.5 px-4 py-2 hover:bg-black/5 dark:hover:bg-white/5 text-xs sm:text-sm font-medium text-stone-700 dark:text-stone-200 transition-colors text-left w-full cursor-pointer"
             >
               <span className="text-stone-400 text-xs font-serif italic">A文</span>
-              Translate with Sage
+              <span>Translate</span>
             </button>
+
+            {/* Dictionary (context-aware terminology) */}
+            <button 
+              onClick={() => {
+                handleOpenDictionary(selectionRange.text, selectionRange.x, selectionRange.y);
+              }}
+              className="flex items-center justify-between px-4 py-2 hover:bg-brand-50/50 dark:hover:bg-brand-950/40 text-xs sm:text-sm font-semibold text-brand-700 dark:text-brand-300 transition-colors text-left w-full cursor-pointer group"
+            >
+              <div className="flex items-center gap-2.5">
+                <BookOpen className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400" />
+                <span>Dictionary</span>
+              </div>
+              <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded-full bg-brand-100 dark:bg-brand-900/60 text-brand-700 dark:text-brand-300 border border-brand-300/60 dark:border-brand-700/60 group-hover:scale-105 transition-transform">
+                Context
+              </span>
+            </button>
+
+            {/* Share */}
             <button 
               onClick={() => {
                 handleOpenQuoteCard(selectionRange.text);
               }}
-              className="flex items-center gap-2.5 px-4 py-2 hover:bg-black/5 dark:hover:bg-white/5 text-xs sm:text-sm font-medium text-stone-700 dark:text-stone-200 transition-colors text-left w-full cursor-pointer"
+              className="flex items-center justify-between px-4 py-2 hover:bg-black/5 dark:hover:bg-white/5 text-xs sm:text-sm font-medium text-stone-700 dark:text-stone-200 transition-colors text-left w-full cursor-pointer"
             >
-              <Share className="w-3.5 h-3.5 text-stone-400" />
-              Share Quote
+              <div className="flex items-center gap-2.5">
+                <Share className="w-3.5 h-3.5 text-stone-400" />
+                <span>Share</span>
+              </div>
+              <span className="text-[9px] uppercase font-bold px-1.5 py-0.5 rounded-full bg-stone-100 dark:bg-stone-800 text-stone-600 dark:text-stone-400 border border-stone-200 dark:border-stone-700">
+                Card
+              </span>
             </button>
           </div>
           
@@ -1448,6 +1477,149 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           </div>
         </motion.div>
       )}
+
+      {/* Smart Note Scratchpad Modal with Floating Text Editor Toolbar (Reference: 1000052647.jpg) */}
+      <AnimatePresence>
+        {noteComposerOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 15 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 15 }}
+              className={`w-full max-w-lg rounded-3xl p-5 sm:p-6 shadow-2xl border flex flex-col gap-4 relative overflow-hidden backdrop-blur-2xl ${
+                theme === 'dark' 
+                  ? 'bg-[#1C1C1E]/95 border-[#2C2C2E] text-stone-100 shadow-[0_25px_60px_rgba(0,0,0,0.8)]' 
+                  : theme === 'amoled' 
+                    ? 'bg-black/95 border-stone-800 text-stone-100 shadow-[0_25px_60px_rgba(0,0,0,0.95)]' 
+                    : 'bg-white/95 border-stone-200 text-stone-900 shadow-2xl'
+              }`}
+            >
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="w-8 h-8 rounded-full bg-brand-500/15 text-brand-600 dark:text-brand-400 flex items-center justify-center font-serif font-bold text-sm">
+                    N
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold">Study Note & Annotation</h3>
+                    <p className="text-[11px] opacity-60 truncate max-w-[240px]">{book.title}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setNoteComposerOpen(false)}
+                  className="p-1.5 rounded-full hover:bg-black/5 dark:hover:bg-white/10 opacity-70 hover:opacity-100 transition-colors cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Excerpt Reference Card */}
+              {noteDraftSnippet && (
+                <div className={`p-3 rounded-2xl border text-xs italic ${
+                  theme === 'dark' 
+                    ? 'bg-[#2C2C2E]/60 border-stone-700/60 text-stone-300' 
+                    : theme === 'amoled' 
+                      ? 'bg-stone-900/60 border-stone-800 text-stone-300' 
+                      : 'bg-stone-100/80 border-stone-200 text-stone-700'
+                }`}>
+                  <span className="font-semibold text-brand-600 dark:text-brand-400 not-italic mr-1.5">Excerpt:</span>
+                  "{noteDraftSnippet.slice(0, 180)}{noteDraftSnippet.length > 180 ? '...' : ''}"
+                </div>
+              )}
+
+              {/* Floating Text Editor Toolbar (Anchored directly over editing zone) */}
+              <div className="flex justify-center -mb-2">
+                <FloatingEditorToolbar
+                  currentStyle={noteStyle}
+                  onStyleChange={setNoteStyle}
+                  alignment={noteAlign}
+                  onAlignmentChange={setNoteAlign}
+                  isBold={noteBold}
+                  onToggleBold={() => setNoteBold(b => !b)}
+                  isItalic={noteItalic}
+                  onToggleItalic={() => setNoteItalic(i => !i)}
+                  onActionTrigger={() => {
+                    if ('speechSynthesis' in window && noteDraftText) {
+                      window.speechSynthesis.cancel();
+                      window.speechSynthesis.speak(new SpeechSynthesisUtterance(noteDraftText));
+                    }
+                  }}
+                  actionTooltip="Listen to Note Audio"
+                />
+              </div>
+
+              {/* Textarea Editing Zone */}
+              <div className="relative">
+                <textarea
+                  value={noteDraftText}
+                  onChange={(e) => setNoteDraftText(e.target.value)}
+                  placeholder="Capture concepts, formulas, or personal takeaways from this chapter..."
+                  rows={4}
+                  style={{ textAlign: noteAlign }}
+                  className={`w-full p-4 rounded-2xl resize-none outline-none border transition-colors ${
+                    noteBold ? 'font-bold' : ''
+                  } ${noteItalic ? 'italic' : ''} ${
+                    noteStyle === 'Style 01' 
+                      ? 'font-serif text-sm leading-relaxed' 
+                      : noteStyle === 'Style 02' 
+                        ? 'font-sans font-bold text-base' 
+                        : noteStyle === 'Style 03' 
+                          ? 'font-serif italic text-sm border-l-4 border-brand-500' 
+                          : 'font-mono text-xs'
+                  } ${
+                    theme === 'dark' 
+                      ? 'bg-[#2C2C2E]/40 border-stone-700/60 text-stone-100 focus:border-brand-500' 
+                      : theme === 'amoled' 
+                        ? 'bg-stone-900/40 border-stone-800 text-stone-100 focus:border-brand-500' 
+                        : 'bg-white border-stone-200 text-stone-900 focus:border-brand-500'
+                  }`}
+                />
+              </div>
+
+              {/* Modal Actions */}
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-[11px] opacity-60">Syncs to your Study Workspace</span>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setNoteComposerOpen(false)}
+                    className="px-3 py-1.5 text-xs font-semibold rounded-full opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const noteText = noteDraftText.trim() || noteDraftSnippet;
+                      if (!noteText) return;
+                      const storedNotes = (() => {
+                        try { return JSON.parse(localStorage.getItem('workspace_notes') || '[]'); } catch { return []; }
+                      })();
+                      const newNote = {
+                        id: crypto.randomUUID(),
+                        bookId: book.id,
+                        bookTitle: book.title,
+                        snippet: noteDraftSnippet,
+                        note: noteDraftText.trim(),
+                        style: noteStyle,
+                        createdAt: new Date().toISOString()
+                      };
+                      storedNotes.unshift(newNote);
+                      try { localStorage.setItem('workspace_notes', JSON.stringify(storedNotes)); } catch {}
+                      triggerCapsuleFeedback({ pitch: 720, volume: 0.18, hapticDuration: 14 });
+                      setToastMessage('Note saved to Study Workspace!');
+                      setShowToast(true);
+                      setNoteComposerOpen(false);
+                      setTimeout(() => setShowToast(false), 3000);
+                    }}
+                    className="px-4 py-2 bg-brand-600 hover:bg-brand-500 text-white rounded-full text-xs font-semibold shadow-md shadow-brand-500/25 transition-all cursor-pointer hover:scale-105 active:scale-95"
+                  >
+                    Save Note
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Quick Dictionary Popover Overlay */}
       {dictionaryTarget && (

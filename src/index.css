@@ -1,9 +1,10 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Lora:ital,wght@0,400..700;1,400..700&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&family=Space+Grotesk:wght@500;600;700&display=swap');
 @import "tailwindcss";
 @custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Newsreader", "Lora", Georgia, Cambria, "Times New Roman", Times, serif;
   --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --color-brand-50: #f5f3ff;
   --color-brand-100: #ede9fe;
@@ -12,16 +13,16 @@
   --color-brand-900: #4c1d95;
   
   --color-slate-50: #ffffff;
-  --color-slate-100: #f9f9f9;
-  --color-slate-200: #e5e5e5;
-  --color-slate-300: #d4d4d4;
-  --color-slate-400: #a3a3a3;
-  --color-slate-500: #737373;
-  --color-slate-600: #525252;
-  --color-slate-700: #363636;
-  --color-slate-800: #262626;
-  --color-slate-900: #0a0a0a;
-  --color-slate-950: #000000;
+  --color-slate-100: #f5f5f7;
+  --color-slate-200: #e5e5ea;
+  --color-slate-300: #d1d1d6;
+  --color-slate-400: #8e8e93;
+  --color-slate-500: #636366;
+  --color-slate-600: #48484a;
+  --color-slate-700: #3a3a3c;
+  --color-slate-800: #2c2c2e;
+  --color-slate-900: #1c1c1e;
+  --color-slate-950: #121214;
 }
 
 /* Liquid Glass System Utilities */
@@ -48,35 +49,33 @@
 }
 
 html.dark .liquid-glass-dock {
-  background: rgba(11, 13, 19, 0.88);
+  background: rgba(28, 28, 30, 0.88);
   backdrop-filter: blur(28px) saturate(180%);
   -webkit-backdrop-filter: blur(28px) saturate(180%);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   box-shadow: 
     0 20px 48px -8px rgba(0, 0, 0, 0.8),
     0 4px 16px -2px rgba(0, 0, 0, 0.6),
-    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.12),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.16),
     inset 0 -1px 2px 0 rgba(0, 0, 0, 0.6);
 }
 
 .liquid-glass-pill {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95) 0%, rgba(243, 240, 255, 0.85) 100%);
+  background: rgba(255, 255, 255, 0.96);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(196, 181, 253, 0.7);
+  border: 1px solid rgba(226, 232, 240, 0.9);
   box-shadow: 
-    0 4px 14px 0 rgba(124, 58, 237, 0.14),
-    inset 0 1px 1.5px 0 rgba(255, 255, 255, 1),
-    inset 0 -1px 1px 0 rgba(167, 139, 250, 0.2);
+    0 2px 8px 0 rgba(0, 0, 0, 0.06),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 1);
 }
 
 html.dark .liquid-glass-pill {
-  background: linear-gradient(135deg, rgba(30, 27, 75, 0.85) 0%, rgba(17, 20, 29, 0.9) 100%);
-  border: 1px solid rgba(129, 140, 248, 0.35);
+  background: rgba(44, 44, 46, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow: 
-    0 4px 16px 0 rgba(99, 102, 241, 0.25),
-    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.15),
-    inset 0 -1px 1px 0 rgba(0, 0, 0, 0.6);
+    0 2px 10px 0 rgba(0, 0, 0, 0.5),
+    inset 0 1px 1.5px 0 rgba(255, 255, 255, 0.15);
 }
 
 .liquid-glass-card {
@@ -90,13 +89,13 @@ html.dark .liquid-glass-pill {
 }
 
 html.dark .liquid-glass-card {
-  background: rgba(17, 20, 29, 0.82);
+  background: rgba(28, 28, 30, 0.82);
   backdrop-filter: blur(20px) saturate(160%);
   -webkit-backdrop-filter: blur(20px) saturate(160%);
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   box-shadow: 
     0 12px 36px -6px rgba(0, 0, 0, 0.6),
-    inset 0 1px 1px 0 rgba(255, 255, 255, 0.06);
+    inset 0 1px 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .liquid-glass-specular {

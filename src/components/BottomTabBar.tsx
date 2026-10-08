@@ -81,12 +81,7 @@ export function BottomTabBar({ currentView, onChangeView }: BottomTabBarProps) {
                       damping: 28,
                       mass: 0.7,
                     }}
-                  >
-                    {/* Top specular reflection rim */}
-                    <div className="absolute top-0 inset-x-2 sm:inset-x-3 h-[45%] bg-gradient-to-b from-white/95 dark:from-white/30 to-transparent rounded-t-full pointer-events-none" />
-                    {/* Subtle internal radial aura */}
-                    <div className="absolute inset-0 bg-gradient-to-tr from-brand-500/15 via-transparent to-indigo-500/15 rounded-full pointer-events-none" />
-                  </motion.div>
+                  />
                 )}
 
                 {/* Animated Icon */}
@@ -106,7 +101,7 @@ export function BottomTabBar({ currentView, onChangeView }: BottomTabBarProps) {
                   <Icon 
                     className={`w-4 h-4 sm:w-5 sm:h-5 transition-colors duration-200 ${
                       isActive 
-                        ? 'text-brand-600 dark:text-brand-300 stroke-[2.4] drop-shadow-[0_2px_8px_rgba(124,58,237,0.4)]' 
+                        ? 'text-brand-600 dark:text-brand-300 stroke-[2.4]' 
                         : 'stroke-[1.9] opacity-75 group-hover:opacity-100'
                     }`} 
                   />

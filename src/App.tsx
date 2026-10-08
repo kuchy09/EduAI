@@ -361,17 +361,9 @@ export default function App() {
     return () => clearInterval(timer);
   }, [loading]);
 
-  // Startup Watchdog, HTML Splash Cleanup, & Health Checks
+  // Startup Watchdog & Health Checks
   useEffect(() => {
-    // 1. Remove initial static HTML splash screen if present in DOM
-    if (typeof document !== 'undefined') {
-      const splash = document.getElementById('edu-loading-splash');
-      if (splash && splash.parentElement) {
-        splash.remove();
-      }
-    }
-
-    // 2. Initial health check
+    // 1. Initial health check
     checkSystemHealth(true);
 
     // 3. Periodic health verification (every 50s)
@@ -813,7 +805,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-            className="fixed inset-0 z-50 bg-white"
+            className="fixed inset-0 z-50 bg-[#F4ECD8] dark:bg-[#1C1C1E] transition-colors duration-250"
           >
             <Reader 
               book={activeBook} 
@@ -830,10 +822,10 @@ export default function App() {
         ) : (
           <motion.div
             key="main-view"
-            initial={{ opacity: 0 }}
+            initial={false}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
-            transition={{ duration: 0.3 }}
+            transition={{ duration: 0.2 }}
             className="flex min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-50 border-x border-slate-50 dark:border-slate-950 w-full max-w-full overflow-x-hidden"
           >
             <Sidebar 
