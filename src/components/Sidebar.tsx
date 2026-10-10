@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun } from 'lucide-react';
+import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
@@ -11,12 +11,19 @@ interface SidebarProps {
   onChangeView: (view: ViewState) => void;
   isOpen: boolean;
   onClose: () => void;
+  user?: any;
+  isGuest?: boolean;
+  onSignOut?: () => void;
 }
 
-export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarProps) {
-  const [user, setUser] = useState<any>(null);
+export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: propUser, isGuest, onSignOut }: SidebarProps) {
+  const [user, setUser] = useState<any>(propUser || null);
   const avatarUrl = useUserAvatar(user);
   const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    if (propUser !== undefined) setUser(propUser);
+  }, [propUser]);
 
   useEffect(() => {
     setAvatarFailed(false);
@@ -217,37 +224,51 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
             </span>
           </button>
 
-          <button 
-            onClick={() => onChangeView('profile')}
-            className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-2xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
-              currentView === 'profile'
-                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm overflow-hidden">
-              {avatarUrl && !avatarFailed ? (
-                <img 
-                  src={avatarUrl} 
-                  alt="Profile" 
-                  className="w-full h-full object-cover" 
-                  onError={() => setAvatarFailed(true)}
-                />
-              ) : user?.email ? (
-                user.email.charAt(0).toUpperCase()
-              ) : (
-                <User className="w-4 h-4 text-white" />
-              )}
-            </div>
-            <div className="text-left flex-1 min-w-0">
-              <p className="text-slate-900 dark:text-white font-medium text-xs sm:text-sm truncate">
-                {user?.user_metadata?.full_name || 'Edu AI Learner'}
-              </p>
-              <p className="text-slate-400 dark:text-slate-500 text-[11px] truncate">
-                {user?.email || 'Active Account'}
-              </p>
-            </div>
-          </button>
+          <div className="flex items-center gap-1.5 w-full">
+            <button 
+              onClick={() => onChangeView('profile')}
+              className={`flex-1 flex items-center gap-2.5 px-3 py-2 rounded-2xl text-xs sm:text-sm font-medium transition-all cursor-pointer min-w-0 ${
+                currentView === 'profile'
+                  ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shadow-xs'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800/60 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm overflow-hidden">
+                {avatarUrl && !avatarFailed ? (
+                  <img 
+                    src={avatarUrl} 
+                    alt="Profile" 
+                    className="w-full h-full object-cover" 
+                    onError={() => setAvatarFailed(true)}
+                  />
+                ) : user?.email ? (
+                  user.email.charAt(0).toUpperCase()
+                ) : (
+                  <User className="w-4 h-4 text-white" />
+                )}
+              </div>
+              <div className="text-left flex-1 min-w-0">
+                <p className="text-slate-900 dark:text-white font-medium text-xs sm:text-sm truncate">
+                  {user?.user_metadata?.full_name || 'Edu AI Learner'}
+                </p>
+                <p className="text-slate-400 dark:text-slate-500 text-[11px] truncate">
+                  {user?.email || (isGuest ? 'Guest Learner' : 'Active Account')}
+                </p>
+              </div>
+            </button>
+
+            {onSignOut && (
+              <button
+                type="button"
+                onClick={onSignOut}
+                className="p-2 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl transition-colors cursor-pointer shrink-0"
+                title="Sign Out"
+                aria-label="Sign Out"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            )}
+          </div>
         </div>
       </aside>
     </>

@@ -163,6 +163,7 @@ export default function App() {
 
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSageSidebarOpen, setIsSageSidebarOpen] = useState(false);
   const getPersistedBooks = (baseBooks: Book[]): Book[] => {
     let overrides: Record<string, any> = {};
     try {
@@ -411,6 +412,22 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) {
+      try {
+        const storedDemo = safeStorage.getItem('edu_demo_user');
+        if (storedDemo) {
+          const parsed = JSON.parse(storedDemo);
+          if (parsed?.user) {
+            setSession(parsed);
+            setProfile({
+              id: parsed.user.id,
+              full_name: parsed.user.user_metadata?.full_name || 'Alex Johnson',
+              email: parsed.user.email,
+              education_level: parsed.user.user_metadata?.education_level || 'High School',
+              role: parsed.user.user_metadata?.role || 'student'
+            });
+          }
+        }
+      } catch (_) {}
       setLoading(false);
       return;
     }
@@ -689,6 +706,33 @@ export default function App() {
     safeSessionStorage.setItem('edu_ai_guest_mode', 'true');
   }, []);
 
+  const handleSignOut = useCallback(async () => {
+    if (supabase) {
+      try {
+        await supabase.auth.signOut({ scope: 'local' });
+      } catch (err) {
+        console.warn('Sign out notice:', err);
+      }
+    }
+
+    clearStaleSupabaseTokens();
+    try {
+      safeStorage.removeItem('edu_ai_guest_mode');
+      safeSessionStorage.removeItem('edu_ai_guest_mode');
+      safeStorage.setItem('edu_ai_guest_mode', 'false');
+      safeSessionStorage.setItem('edu_ai_guest_mode', 'false');
+      safeStorage.removeItem('edu_search_prefill');
+      safeStorage.removeItem('edu_demo_user');
+    } catch (_) {}
+
+    setSession(null);
+    setProfile(null);
+    setBookmarks([]);
+    setActiveBook(null);
+    setIsGuest(false);
+    setCurrentView('dashboard');
+  }, []);
+
   if (loading) {
     return (
       <div className="min-h-screen bg-slate-950 text-white flex flex-col items-center justify-center p-6 relative overflow-hidden font-sans">
@@ -788,9 +832,30 @@ export default function App() {
     );
   }
 
-  // If supabase is configured and no active session or guest mode, display authentication
-  if (supabase && !session && !isGuest) {
-    return <Auth onContinueAsGuest={handleContinueAsGuest} />;
+  // Display authentication if user is not signed in and has not chosen guest mode
+  if (!session && !isGuest) {
+    return (
+      <Auth 
+        onContinueAsGuest={handleContinueAsGuest} 
+        onLoginSuccess={(newSession) => {
+          setSession(newSession);
+          setIsGuest(false);
+          try {
+            safeStorage.setItem('edu_ai_guest_mode', 'false');
+            safeSessionStorage.setItem('edu_ai_guest_mode', 'false');
+          } catch (_) {}
+          if (newSession?.user) {
+            setProfile({
+              id: newSession.user.id,
+              full_name: newSession.user.user_metadata?.full_name || 'Edu AI Learner',
+              email: newSession.user.email,
+              education_level: newSession.user.user_metadata?.education_level || 'General',
+              role: newSession.user.user_metadata?.role || 'student'
+            });
+          }
+        }}
+      />
+    );
   }
 
   return (
@@ -834,6 +899,9 @@ export default function App() {
               }} 
               isOpen={isSidebarOpen}
               onClose={() => setIsSidebarOpen(false)}
+              user={session?.user}
+              isGuest={isGuest}
+              onSignOut={handleSignOut}
             />
             
             <main className="flex-1 flex flex-col min-w-0 max-w-full w-full relative overflow-x-hidden">
@@ -852,6 +920,9 @@ export default function App() {
                 }}
                 user={session?.user}
                 books={books}
+                onToggleSageSidebar={() => setIsSageSidebarOpen(prev => !prev)}
+                isSageSidebarOpen={isSageSidebarOpen}
+                onSignOut={handleSignOut}
               />
 
               <OfflineBanner onNavigate={(view) => changeView(view as any)} />
@@ -911,15 +982,22 @@ export default function App() {
                       />
                     )}
                     {currentView === 'learning-path' && <LearningPath user={session?.user} />}
-                    {currentView === 'ai-tutor' && <AiTutor user={session?.user} />}
+                    {currentView === 'ai-tutor' && (
+                      <AiTutor 
+                        user={session?.user} 
+                        isSidebarOpen={isSageSidebarOpen}
+                        onToggleSidebar={() => setIsSageSidebarOpen(prev => !prev)}
+                        onSidebarStateChange={(open) => setIsSageSidebarOpen(open)}
+                      />
+                    )}
                     {currentView === 'quizzes' && <Quizzes user={session?.user} books={books} />}
                     {currentView === 'community' && <Community />}
                     {currentView === 'users-portal' && <UserPortal user={session?.user} profile={profile} onStartChat={(userId) => changeView('chat')} onNavigate={(view) => changeView(view as any)} />}
                     {currentView === 'chat' && <Chat user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} />}
-                    {currentView === 'settings' && <Settings onNavigate={(view) => changeView(view as any)} />}
-                    {currentView === 'support' && <Settings initialTab="support" onNavigate={(view) => changeView(view as any)} />}
-                    {currentView === 'developer' && <Settings initialTab="developer" onNavigate={(view) => changeView(view as any)} />}
-                    {currentView === 'profile' && <Profile />}
+                    {currentView === 'settings' && <Settings user={session?.user} onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
+                    {currentView === 'support' && <Settings user={session?.user} initialTab="support" onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
+                    {currentView === 'developer' && <Settings user={session?.user} initialTab="developer" onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
+                    {currentView === 'profile' && <Profile user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
                     {currentView === 'workspace' && <Workspace />}
                     {currentView === 'admin' && (
                       <Admin 

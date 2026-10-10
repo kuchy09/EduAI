@@ -2,7 +2,8 @@ import {
   Search, Bell, MoreHorizontal, Book as BookIcon, Map, FileQuestion, 
   Headphones, ShoppingBag, X, CheckCircle2, Sparkles, ArrowRight,
   BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp,
-  MessageCircle, Moon, Sun, User, Camera, Loader2, Mic, MicOff
+  MessageCircle, Moon, Sun, User, Camera, Loader2, Mic, MicOff,
+  Settings as SettingsIcon, Shield, MessageSquare, LogOut
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -24,9 +25,56 @@ interface HeaderProps {
   onAddBookToLibrary?: (book: Book) => void;
   user?: any;
   books: Book[];
+  onToggleSageSidebar?: () => void;
+  isSageSidebarOpen?: boolean;
+  onSignOut?: () => void;
 }
 
 export type SearchTabFilter = 'all' | 'library' | 'store' | 'related' | 'audiobooks' | 'paths' | 'quizzes';
+
+export function SideNavToggleIcon({ 
+  className = "w-8 h-8 sm:w-8.5 sm:h-8.5",
+  title,
+  ...props
+}: React.SVGProps<SVGSVGElement> & { className?: string; title?: string }) {
+  return (
+    <svg 
+      viewBox="0 0 100 100" 
+      fill="none" 
+      xmlns="http://www.w3.org/2000/svg"
+      className={className}
+      {...props}
+    >
+      {title && <title>{title}</title>}
+      <defs>
+        <linearGradient id="sideNavIconGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stopColor="#8A95FF" />
+          <stop offset="48%" stopColor="#5863FE" />
+          <stop offset="100%" stopColor="#242CFE" />
+        </linearGradient>
+      </defs>
+      {/* Left panel of split icon */}
+      <path
+        d="M 34,8 L 60,8 Q 63,8 63,11 L 63,89 Q 63,92 60,92 L 34,92 Q 8,92 8,66 L 8,34 Q 8,8 34,8 Z"
+        fill="url(#sideNavIconGradient)"
+      />
+      {/* Right panel of split icon */}
+      <path
+        d="M 69,11 Q 69,8 72,8 Q 92,8 92,34 L 92,66 Q 92,92 72,92 Q 69,92 69,89 Z"
+        fill="url(#sideNavIconGradient)"
+      />
+      {/* Right-pointing chevron in left panel */}
+      <path
+        d="M 36,37.5 L 49.5,50 L 36,62.5"
+        fill="none"
+        stroke="#FFFFFF"
+        strokeWidth="9.2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 const VIEW_TITLES: Record<string, { title: string; subtitle?: string; icon?: any }> = {
   'ai-tutor': { title: 'Sage AI Tutor', subtitle: 'Interactive Study Engine', icon: Sparkles },
@@ -41,11 +89,11 @@ const VIEW_TITLES: Record<string, { title: string; subtitle?: string; icon?: any
   'users-portal': { title: 'Find Members & Friends', subtitle: 'Connect with Learners', icon: Compass },
   'notifications': { title: 'Notifications', subtitle: 'Activity & Updates', icon: Bell },
   'workspace': { title: 'Study Workspace', subtitle: 'Notes, Highlights & Flashcards', icon: BookmarkCheck },
-  'settings': { title: 'Settings', subtitle: 'Preferences & Configurations', icon: MoreHorizontal },
-  'support': { title: 'Settings', subtitle: 'Support, FAQs & Assistance', icon: HelpCircle },
-  'developer': { title: 'Settings', subtitle: 'Developer & System Architect', icon: HardDriveDownload },
+  'settings': { title: 'Settings', subtitle: 'Preferences & Configurations', icon: SettingsIcon },
+  'support': { title: 'Support & Help', subtitle: 'Support, FAQs & Assistance', icon: HelpCircle },
+  'developer': { title: 'Developer Portal', subtitle: 'Developer & System Architect', icon: HardDriveDownload },
   'profile': { title: 'User Profile', subtitle: 'Account & Learning Track', icon: Compass },
-  'admin': { title: 'Admin Platform', subtitle: 'System & Catalog Management', icon: MoreHorizontal },
+  'admin': { title: 'Admin Platform', subtitle: 'System & Catalog Management', icon: Shield },
 };
 
 export function Header({ 
@@ -55,13 +103,36 @@ export function Header({
   onNavigate, 
   onAddBookToLibrary, 
   user, 
-  books 
+  books,
+  onToggleSageSidebar,
+  isSageSidebarOpen: propIsSageSidebarOpen,
+  onSignOut
 }: HeaderProps) {
   const [query, setQuery] = useState('');
   const [isFocused, setIsFocused] = useState(false);
   const [searchFilter, setSearchFilter] = useState<SearchTabFilter>('all');
   const [addedBookIds, setAddedBookIds] = useState<Set<string>>(new Set());
   const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
+  const [internalSageSidebarOpen, setInternalSageSidebarOpen] = useState(false);
+
+  // Sync Sage AI sidebar status
+  useEffect(() => {
+    const handleSageStatus = (e: any) => {
+      if (typeof e?.detail?.isOpen === 'boolean') {
+        setInternalSageSidebarOpen(e.detail.isOpen);
+      }
+    };
+    window.addEventListener('sage-sidebar-state-change', handleSageStatus);
+    return () => window.removeEventListener('sage-sidebar-state-change', handleSageStatus);
+  }, []);
+
+  const isSageOpen = propIsSageSidebarOpen !== undefined ? propIsSageSidebarOpen : internalSageSidebarOpen;
+
+  const handleToggleSage = () => {
+    window.dispatchEvent(new CustomEvent('toggle-sage-sidebar'));
+    onToggleSageSidebar?.();
+  };
+
   const [unreadNotifCount, setUnreadNotifCount] = useState(() => {
     return getStoredNotifications().filter(n => !n.isRead).length;
   });
@@ -520,16 +591,24 @@ export function Header({
   return (
     <header className="h-14 sm:h-16 liquid-glass-card border-b border-white/60 dark:border-white/10 flex items-center justify-between px-2.5 sm:px-4 md:px-8 sticky top-0 z-[100] shadow-[0_4px_20px_-4px_rgba(0,0,0,0.06)] w-full max-w-full overflow-visible">
       <div className="flex items-center flex-1 max-w-2xl relative gap-1.5 sm:gap-2.5 min-w-0 overflow-visible">
-        <button 
+        <SideNavToggleIcon 
           onClick={() => {
             setIsFocused(false);
             onMenuClick();
           }} 
-          className="p-1.5 sm:p-2 text-slate-700 dark:text-slate-200 liquid-glass-card hover:scale-105 active:scale-95 rounded-full shadow-sm hover:shadow-md transition-all shrink-0 cursor-pointer flex items-center justify-center group w-8.5 h-8.5 sm:w-9 sm:h-9 border border-white/60 dark:border-white/10"
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              setIsFocused(false);
+              onMenuClick();
+            }
+          }}
+          className="w-8 h-8 sm:w-8.5 sm:h-8.5 shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-all duration-200 drop-shadow-[0_2px_8px_rgba(36,44,254,0.25)] hover:drop-shadow-[0_4px_12px_rgba(36,44,254,0.38)] focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-xl select-none"
           title="Open Navigation"
-        >
-          <MoreHorizontal className="w-4.5 h-4.5 sm:w-5 sm:h-5 group-hover:scale-110 transition-transform" />
-        </button>
+          aria-label="Open Navigation Menu"
+          role="button"
+          tabIndex={0}
+        />
         
         {/* Search bar is ONLY displayed on the Home page (dashboard) */}
         {isHomePage ? (
@@ -1104,19 +1183,54 @@ export function Header({
           /* Contextual View Title & Badge for Non-Home Pages (Sage, Audiobooks, Library, etc.) */
           <div className="flex items-center gap-2.5 min-w-0 py-0.5 ml-1">
             {currentViewInfo?.icon && (
-              <div className="w-8 h-8 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400 shrink-0 shadow-xs">
-                <currentViewInfo.icon className="w-4 h-4" />
+              <div 
+                role={currentView === 'ai-tutor' ? "button" : undefined}
+                tabIndex={currentView === 'ai-tutor' ? 0 : undefined}
+                onClick={currentView === 'ai-tutor' ? handleToggleSage : undefined}
+                onKeyDown={currentView === 'ai-tutor' ? (e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    handleToggleSage();
+                  }
+                } : undefined}
+                className={`w-8 h-8 rounded-xl flex items-center justify-center shrink-0 shadow-xs transition-all ${
+                  currentView === 'ai-tutor'
+                    ? isSageOpen
+                      ? 'bg-brand-600 dark:bg-brand-500 text-white shadow-md shadow-brand-500/25 ring-2 ring-brand-400/50 cursor-pointer scale-105 active:scale-95 border border-brand-500'
+                      : 'bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 hover:text-indigo-700 dark:hover:text-indigo-300 hover:scale-105 active:scale-95 cursor-pointer hover:shadow-md'
+                    : 'bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60 flex items-center justify-center text-indigo-600 dark:text-indigo-400'
+                }`}
+                title={currentView === 'ai-tutor' ? (isSageOpen ? "Close Sage Chat History" : "Open Sage Chat History") : undefined}
+                aria-label={currentView === 'ai-tutor' ? (isSageOpen ? "Close Sage Chat History" : "Open Sage Chat History") : undefined}
+              >
+                <currentViewInfo.icon className={`w-4 h-4 transition-transform ${currentView === 'ai-tutor' ? 'hover:scale-110' : ''}`} />
               </div>
             )}
             <div className="min-w-0">
               <div className="flex items-center gap-2">
-                <h1 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate tracking-tight">
+                <h1 
+                  className={`text-sm sm:text-base font-bold text-slate-900 dark:text-white truncate tracking-tight ${
+                    currentView === 'ai-tutor' ? 'cursor-pointer hover:text-brand-600 dark:hover:text-brand-400 transition-colors' : ''
+                  }`}
+                  onClick={currentView === 'ai-tutor' ? handleToggleSage : undefined}
+                  title={currentView === 'ai-tutor' ? "Toggle Sage Chat History" : undefined}
+                >
                   {currentViewInfo?.title || 'Edu AI'}
                 </h1>
                 {currentView === 'ai-tutor' && (
-                  <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-gradient-to-r from-indigo-500/10 to-purple-500/10 dark:from-indigo-500/20 dark:to-purple-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-700/60 shrink-0">
-                    AI Engine
-                  </span>
+                  <button
+                    type="button"
+                    onClick={handleToggleSage}
+                    className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full transition-all flex items-center gap-1 cursor-pointer shrink-0 ${
+                      isSageOpen
+                        ? 'bg-brand-600 text-white border border-brand-500 shadow-xs ring-1 ring-brand-400/40'
+                        : 'bg-gradient-to-r from-indigo-500/10 to-purple-500/10 dark:from-indigo-500/20 dark:to-purple-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-700/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 hover:scale-105 active:scale-95'
+                    }`}
+                    title={isSageOpen ? "Hide Sage Chat History" : "Open Sage Chat History"}
+                  >
+                    <MessageSquare className="w-2.5 h-2.5" />
+                    <span>{isSageOpen ? 'Hide History' : 'Chat History'}</span>
+                  </button>
                 )}
                 {currentView === 'audiobooks' && (
                   <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-purple-50 dark:bg-purple-950/50 text-purple-600 dark:text-purple-400 border border-purple-200/60 dark:border-purple-800/60 shrink-0">
@@ -1126,7 +1240,7 @@ export function Header({
               </div>
               {currentViewInfo?.subtitle && (
                 <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate hidden sm:block">
-                  {currentViewInfo.subtitle}
+                  {currentView === 'ai-tutor' ? (isSageOpen ? 'Click icon to hide session history' : 'Click icon to open Sage Chat history') : currentViewInfo.subtitle}
                 </p>
               )}
             </div>
@@ -1293,6 +1407,21 @@ export function Header({
                     <span>Preferences & Settings</span>
                   </div>
                 </button>
+
+                {onSignOut && (
+                  <button
+                    onClick={() => {
+                      setIsProfileMenuOpen(false);
+                      onSignOut();
+                    }}
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2.5">
+                      <LogOut className="w-4 h-4 text-red-500" />
+                      <span>Sign Out</span>
+                    </div>
+                  </button>
+                )}
               </div>
 
               {/* Theme Locality: Dark & Light Mode Toggle inside User Profile Locality */}
@@ -1341,8 +1470,8 @@ export function Header({
           </button>
         )}
 
-        {/* Notifications & Broadcasts - ONLY on Home Page */}
-        {isHomePage && (
+        {/* Notifications & Broadcasts Button in Header Bar */}
+        {currentView !== 'reader' && (
           <button 
             onClick={() => {
               triggerCapsuleFeedback({ pitch: 580, volume: 0.18, hapticDuration: 12 });

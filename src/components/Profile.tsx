@@ -3,13 +3,28 @@ import React, { useEffect, useState, useRef } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl } from '../lib/userAvatarService';
 
-export function Profile() {
-  const [user, setUser] = useState<any>(null);
-  const [profile, setProfile] = useState<any>(null);
+export interface ProfileProps {
+  user?: any;
+  profile?: any;
+  onNavigate?: (view: string) => void;
+  onSignOut?: () => void;
+}
+
+export function Profile({ user: propUser, profile: propProfile, onNavigate, onSignOut }: ProfileProps = {}) {
+  const [user, setUser] = useState<any>(propUser || null);
+  const [profile, setProfile] = useState<any>(propProfile || null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarUrl = useUserAvatar(user);
   const [avatarFailed, setAvatarFailed] = useState(false);
+
+  useEffect(() => {
+    if (propUser) setUser(propUser);
+  }, [propUser]);
+
+  useEffect(() => {
+    if (propProfile) setProfile(propProfile);
+  }, [propProfile]);
 
   useEffect(() => {
     setAvatarFailed(false);
@@ -383,18 +398,28 @@ export function Profile() {
       </div>
       
       {/* Sign Out Button */}
-      <div className="flex justify-end pt-4 border-t border-slate-200">
+      <div className="flex justify-end pt-4 border-t border-slate-200 dark:border-slate-800">
         <button 
           onClick={async () => {
+            if (onSignOut) {
+              onSignOut();
+              return;
+            }
             const { supabase, clearStaleSupabaseTokens } = await import('../lib/supabase');
             if (supabase) {
               try {
-                await supabase.auth.signOut();
+                await supabase.auth.signOut({ scope: 'local' });
               } catch (_) {}
             }
             clearStaleSupabaseTokens();
+            try {
+              localStorage.removeItem('edu_ai_guest_mode');
+              sessionStorage.removeItem('edu_ai_guest_mode');
+              localStorage.setItem('edu_ai_guest_mode', 'false');
+            } catch (_) {}
+            if (onNavigate) onNavigate('dashboard');
           }}
-          className="flex items-center gap-2 px-5 py-2.5 text-red-600 hover:bg-red-50 rounded-xl font-medium transition-colors text-sm"
+          className="flex items-center gap-2 px-5 py-2.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl font-medium transition-colors text-sm cursor-pointer shadow-xs"
         >
           <LogOut className="w-4 h-4" />
           Sign Out

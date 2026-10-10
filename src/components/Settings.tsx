@@ -11,9 +11,11 @@ export type SettingsTab = 'appearance' | 'notifications' | 'privacy' | 'offline'
 export interface SettingsProps {
   initialTab?: SettingsTab;
   onNavigate?: (view: any) => void;
+  user?: any;
+  onSignOut?: () => void;
 }
 
-export function Settings({ initialTab = 'appearance', onNavigate }: SettingsProps = {}) {
+export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOut }: SettingsProps = {}) {
   const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
 
   useEffect(() => {
@@ -88,14 +90,24 @@ export function Settings({ initialTab = 'appearance', onNavigate }: SettingsProp
   };
 
   const handleSignOut = async () => {
+    if (onSignOut) {
+      onSignOut();
+      return;
+    }
     if (supabase) {
       try {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
       } catch (e) {
         console.warn('Sign out error handled:', e);
       }
     }
     clearStaleSupabaseTokens();
+    try {
+      localStorage.removeItem('edu_ai_guest_mode');
+      sessionStorage.removeItem('edu_ai_guest_mode');
+      localStorage.setItem('edu_ai_guest_mode', 'false');
+    } catch (_) {}
+    if (onNavigate) onNavigate('dashboard');
   };
 
   return (
@@ -108,8 +120,13 @@ export function Settings({ initialTab = 'appearance', onNavigate }: SettingsProp
       <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="md:col-span-1 space-y-4">
           <div className="space-y-1">
-            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 pb-1">
-              Preferences
+            <div className="text-[10px] font-bold text-slate-400 dark:text-slate-500 uppercase tracking-wider px-3 pb-1 flex items-center justify-between">
+              <span>Preferences</span>
+              {activeTab === 'notifications' && (
+                <span className="text-[10px] font-medium normal-case text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                  <Bell className="w-3 h-3" /> Notifications active
+                </span>
+              )}
             </div>
             <button 
               onClick={() => setActiveTab('appearance')}
@@ -119,9 +136,15 @@ export function Settings({ initialTab = 'appearance', onNavigate }: SettingsProp
             </button>
             <button 
               onClick={() => setActiveTab('notifications')}
-              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'notifications' ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-semibold' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'notifications' ? 'bg-slate-100 dark:bg-slate-800 text-slate-900 dark:text-white font-semibold shadow-xs' : 'text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800/60'}`}
             >
-              <Bell className="w-4 h-4" /> Notifications
+              <div className="flex items-center gap-3">
+                <Bell className={`w-4 h-4 ${activeTab === 'notifications' ? 'text-indigo-600 dark:text-indigo-400' : ''}`} />
+                <span>Notifications</span>
+              </div>
+              <span className="text-[10px] px-1.5 py-0.5 rounded-md font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-800/50">
+                Alerts
+              </span>
             </button>
             <button 
               onClick={() => setActiveTab('privacy')}

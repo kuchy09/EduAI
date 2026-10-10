@@ -10,6 +10,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
+import { safeStorage } from '../lib/safeStorage';
 
 interface Message {
   id: string;
@@ -26,14 +27,54 @@ interface ChatSession {
 
 interface AiTutorProps {
   user: any;
+  isSidebarOpen?: boolean;
+  onToggleSidebar?: () => void;
+  onSidebarStateChange?: (open: boolean) => void;
 }
 
-export function AiTutor({ user }: AiTutorProps) {
+export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateChange }: AiTutorProps) {
   const [input, setInput] = useState('');
   const [provider, setProvider] = useState<'gemini' | 'anthropic'>('gemini');
-  const [learningActive] = useState(() => JSON.parse(localStorage.getItem('privacy_data') ?? 'true'));
+  const [learningActive] = useState(() => {
+    try {
+      return JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
+    } catch {
+      return true;
+    }
+  });
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(false);
+
+  // Sync with prop when changed from outside
+  useEffect(() => {
+    if (typeof isSidebarOpen === 'boolean') {
+      if (window.innerWidth < 768) {
+        setIsMobileSidebarOpen(isSidebarOpen);
+      } else {
+        setIsDesktopSidebarOpen(isSidebarOpen);
+      }
+    }
+  }, [isSidebarOpen]);
+
+  // Listen to custom event from the div button in the Header above
+  useEffect(() => {
+    const handleToggle = () => {
+      if (window.innerWidth < 768) {
+        setIsMobileSidebarOpen(prev => !prev);
+      } else {
+        setIsDesktopSidebarOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('toggle-sage-sidebar', handleToggle);
+    return () => window.removeEventListener('toggle-sage-sidebar', handleToggle);
+  }, []);
+
+  // Broadcast state change back to Header & App
+  useEffect(() => {
+    const isOpen = isMobileSidebarOpen || isDesktopSidebarOpen;
+    window.dispatchEvent(new CustomEvent('sage-sidebar-state-change', { detail: { isOpen } }));
+    onSidebarStateChange?.(isOpen);
+  }, [isMobileSidebarOpen, isDesktopSidebarOpen, onSidebarStateChange]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
@@ -458,60 +499,6 @@ export function AiTutor({ user }: AiTutorProps) {
 
       {/* Main Study Companion Panel - Cool, Smooth & Modern Box */}
       <div className="flex-1 flex flex-col h-full bg-gradient-to-b from-slate-50/90 via-white to-slate-50/70 dark:from-slate-900/90 dark:via-slate-900 dark:to-slate-950 relative overflow-hidden">
-        
-        {/* Navigation Heading Banner */}
-        <div className="liquid-glass-card liquid-glass-specular flex items-center justify-between px-4 sm:px-6 py-3.5 border-b border-slate-200/60 dark:border-white/10 shrink-0 z-10 sticky top-0 shadow-xs backdrop-blur-xl">
-          <div className="flex items-center gap-2.5">
-            <button
-              onClick={() => setIsMobileSidebarOpen(true)}
-              className="md:hidden p-2 rounded-xl text-slate-500 hover:text-slate-800 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0 transition-colors cursor-pointer"
-              title="Show chats"
-            >
-              <Menu className="w-4 h-4" />
-            </button>
-            <button
-              onClick={() => setIsDesktopSidebarOpen(!isDesktopSidebarOpen)}
-              className="hidden md:flex p-2 rounded-xl text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700 shrink-0 transition-colors cursor-pointer"
-              title="Toggle sidebar"
-            >
-              <Menu className="w-4 h-4" />
-            </button>
-
-            <div className="flex items-center gap-2.5">
-              <div className="relative">
-                <div className="w-9 h-9 rounded-2xl bg-gradient-to-tr from-brand-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-brand-500/20">
-                  <AstroidIcon className="w-5 h-5" />
-                </div>
-                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-white dark:border-slate-900 rounded-full" />
-              </div>
-              
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-slate-900 dark:text-white text-sm leading-none font-display">Sage AI</span>
-                  <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-brand-50 dark:bg-brand-950/60 text-brand-700 dark:text-brand-400 border border-brand-200/60 dark:border-brand-800/60">
-                    Tutor
-                  </span>
-                </div>
-                <span className="text-[11px] text-slate-400 dark:text-slate-300 block truncate max-w-[140px] sm:max-w-[240px] mt-0.5">
-                  {activeSession?.title || 'Active thread'}
-                </span>
-              </div>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="hidden sm:flex items-center gap-2 text-[11px] font-medium px-3 py-1.5 bg-white/80 dark:bg-slate-800/80 backdrop-blur-md text-slate-600 dark:text-slate-300 rounded-full border border-slate-200/80 dark:border-slate-700 shadow-xs">
-              <div className={`w-2 h-2 rounded-full ${learningActive ? 'bg-indigo-500 shadow-xs' : 'bg-slate-300'}`}></div>
-              <span>{learningActive ? 'Adaptive Context' : 'Private'}</span>
-            </div>
-
-            <div className="flex items-center gap-1.5 text-[11px] font-semibold px-3 py-1.5 bg-white/80 dark:bg-slate-800/80 backdrop-blur-md text-slate-700 dark:text-slate-200 rounded-full border border-slate-200/80 dark:border-slate-700 shadow-xs">
-              <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="hidden sm:inline">{provider === 'gemini' ? 'Gemini 3.6 Flash' : 'Claude 3.7'}</span>
-              <span className="sm:hidden">{provider === 'gemini' ? 'Gemini' : 'Claude'}</span>
-            </div>
-          </div>
-        </div>
 
         {/* Message Container Scroller */}
         <div className="flex-1 overflow-y-auto pt-6 pb-48 px-4 md:px-10 scroll-smooth relative">

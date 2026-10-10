@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
+import { safeStorage } from '../lib/safeStorage';
 import { Mail, Phone, Lock, Hash, Loader2, BookOpen, Compass, ArrowRight, Sparkles } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -8,9 +9,10 @@ type AuthState = 'sign_in' | 'sign_up' | 'verify_otp';
 
 interface AuthProps {
   onContinueAsGuest?: () => void;
+  onLoginSuccess?: (session: any) => void;
 }
 
-export function Auth({ onContinueAsGuest }: AuthProps = {}) {
+export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
   const [mode, setMode] = useState<AuthMode>('email');
   const [state, setState] = useState<AuthState>('sign_in');
   const [isLoading, setIsLoading] = useState(false);
@@ -167,7 +169,34 @@ export function Auth({ onContinueAsGuest }: AuthProps = {}) {
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase) return setError('Supabase not configured');
+    if (!supabase) {
+      setIsLoading(true);
+      setError(null);
+      setTimeout(() => {
+        const mockUser = {
+          id: 'demo-student-' + Date.now(),
+          email: email.trim() || 'student@edu-ai.learn',
+          user_metadata: {
+            full_name: fullName.trim() || (email ? email.split('@')[0] : 'Alex Johnson'),
+            education_level: educationLevel || 'High School',
+            role: role || 'student',
+            country: country || 'Kenya',
+            curriculum: curriculum || 'CBC'
+          }
+        };
+        const mockSession = { user: mockUser, access_token: 'local_token' };
+        try {
+          safeStorage.setItem('edu_demo_user', JSON.stringify(mockSession));
+        } catch (_) {}
+        setIsLoading(false);
+        if (onLoginSuccess) {
+          onLoginSuccess(mockSession);
+        } else if (onContinueAsGuest) {
+          onContinueAsGuest();
+        }
+      }, 300);
+      return;
+    }
     
     try {
       setIsLoading(true);
@@ -245,7 +274,33 @@ export function Auth({ onContinueAsGuest }: AuthProps = {}) {
 
   const handlePhoneAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase) return setError('Supabase not configured');
+    if (!supabase) {
+      setIsLoading(true);
+      setError(null);
+      setTimeout(() => {
+        const mockUser = {
+          id: 'demo-phone-user-' + Date.now(),
+          phone: phone || '+254700000000',
+          email: `${phone.replace(/\D/g, '') || 'student'}@edu-ai.learn`,
+          user_metadata: {
+            full_name: 'Student Learner',
+            education_level: 'High School',
+            role: 'student'
+          }
+        };
+        const mockSession = { user: mockUser, access_token: 'local_token' };
+        try {
+          safeStorage.setItem('edu_demo_user', JSON.stringify(mockSession));
+        } catch (_) {}
+        setIsLoading(false);
+        if (onLoginSuccess) {
+          onLoginSuccess(mockSession);
+        } else if (onContinueAsGuest) {
+          onContinueAsGuest();
+        }
+      }, 300);
+      return;
+    }
 
     try {
       setIsLoading(true);
@@ -584,8 +639,38 @@ export function Auth({ onContinueAsGuest }: AuthProps = {}) {
             </div>
           )}
 
-          {onContinueAsGuest && (
-            <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 text-center">
+          <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 text-center space-y-2.5">
+            {onLoginSuccess && (
+              <button
+                type="button"
+                onClick={() => {
+                  const demoSession = {
+                    user: {
+                      id: 'demo-alex-johnson',
+                      email: 'alex.johnson@edu-ai.learn',
+                      user_metadata: {
+                        full_name: 'Alex Johnson',
+                        education_level: 'High School',
+                        role: 'student',
+                        country: 'Kenya',
+                        curriculum: 'CBC'
+                      }
+                    },
+                    access_token: 'demo_token'
+                  };
+                  try {
+                    safeStorage.setItem('edu_demo_user', JSON.stringify(demoSession));
+                  } catch (_) {}
+                  onLoginSuccess(demoSession);
+                }}
+                className="w-full py-2.5 px-4 rounded-xl border border-indigo-200 hover:border-indigo-400 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300 transition-all font-medium text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer shadow-xs"
+              >
+                <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                <span>Sign In as Demo Student</span>
+              </button>
+            )}
+
+            {onContinueAsGuest && (
               <button
                 type="button"
                 onClick={onContinueAsGuest}
@@ -595,11 +680,11 @@ export function Auth({ onContinueAsGuest }: AuthProps = {}) {
                 <span>Explore Applet as Guest</span>
                 <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
               </button>
-              <p className="text-[11px] text-slate-400 mt-2">
-                Preview all reader features, AI tools, and curriculum library instantly
-              </p>
-            </div>
-          )}
+            )}
+            <p className="text-[11px] text-slate-400">
+              Preview all reader features, AI tools, and curriculum library instantly
+            </p>
+          </div>
           
           {mode === 'phone' && state === 'verify_otp' && (
             <div className="mt-4 text-center text-sm">
