@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { safeStorage } from '../lib/safeStorage';
 import { 
   FileQuestion, Play, Trophy, Sparkles, BookOpen, Clock, 
   CheckCircle2, AlertCircle, RefreshCw, ChevronRight, Lock, 
@@ -28,7 +29,7 @@ interface QuizzesProps {
 
 export function Quizzes({ user, books = [] }: QuizzesProps) {
   const [quizzes, setQuizzes] = useState<Quiz[]>(() => {
-    const saved = localStorage.getItem('generated_quizzes');
+    const saved = safeStorage.getItem('generated_quizzes');
     if (saved) {
       try {
         return JSON.parse(saved);
@@ -133,7 +134,7 @@ export function Quizzes({ user, books = [] }: QuizzesProps) {
 
   // Save quizzes to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('generated_quizzes', JSON.stringify(quizzes));
+    safeStorage.setItem('generated_quizzes', JSON.stringify(quizzes));
   }, [quizzes]);
 
   // Read all subjects and calculate reading progress statistics

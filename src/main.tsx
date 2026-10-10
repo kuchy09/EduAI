@@ -37,7 +37,7 @@ if (rootElement) {
       <div style="min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #0b0f19; color: white; padding: 24px; font-family: ui-sans-serif, system-ui, sans-serif; text-align: center;">
         <h2 style="font-size: 20px; font-weight: bold; margin-bottom: 8px;">Edu AI Recovery</h2>
         <p style="color: #94a3b8; font-size: 14px; max-width: 360px; margin-bottom: 20px; line-height: 1.5;">A display issue occurred during startup. Click below to refresh your library.</p>
-        <button onclick="try{localStorage.clear();sessionStorage.clear();}catch(e){}location.href=location.origin;" style="padding: 10px 22px; background: #7c3aed; color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; font-size: 14px;">
+        <button onclick="try{window.location.reload();}catch(e){}" style="padding: 10px 22px; background: #7c3aed; color: white; border: none; border-radius: 12px; font-weight: 600; cursor: pointer; font-size: 14px;">
           Reset & Open Edu AI
         </button>
       </div>

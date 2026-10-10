@@ -76,6 +76,27 @@ export const safeStorage = {
     try {
       this.setItem(key, JSON.stringify(value));
     } catch (_) {}
+  },
+
+  key(index: number): string | null {
+    if (canUseLocal) {
+      try {
+        return window.localStorage.key(index);
+      } catch (_) {}
+    }
+    const localKeys = Array.from(memoryStore.keys())
+      .filter(k => k.startsWith('local:'))
+      .map(k => k.slice(6));
+    return localKeys[index] ?? null;
+  },
+
+  get length(): number {
+    if (canUseLocal) {
+      try {
+        return window.localStorage.length;
+      } catch (_) {}
+    }
+    return Array.from(memoryStore.keys()).filter(k => k.startsWith('local:')).length;
   }
 };
 
@@ -136,5 +157,26 @@ export const safeSessionStorage = {
     try {
       this.setItem(key, JSON.stringify(value));
     } catch (_) {}
+  },
+
+  key(index: number): string | null {
+    if (canUseSession) {
+      try {
+        return window.sessionStorage.key(index);
+      } catch (_) {}
+    }
+    const sessionKeys = Array.from(memoryStore.keys())
+      .filter(k => k.startsWith('session:'))
+      .map(k => k.slice(8));
+    return sessionKeys[index] ?? null;
+  },
+
+  get length(): number {
+    if (canUseSession) {
+      try {
+        return window.sessionStorage.length;
+      } catch (_) {}
+    }
+    return Array.from(memoryStore.keys()).filter(k => k.startsWith('session:')).length;
   }
 };

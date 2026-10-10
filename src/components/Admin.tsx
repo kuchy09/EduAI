@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
+import { safeStorage } from '../lib/safeStorage';
 import { 
   Upload, FileText, CheckCircle, AlertCircle, Loader2, BookOpen, 
   Trash2, Search, Palette, Eye, Sparkles, Filter, CheckCircle2 
@@ -113,7 +114,7 @@ export function Admin({ appBooks, onUpdateBook }: AdminProps) {
       // Apply any persisted cover overrides from localStorage
       let overrides: Record<string, any> = {};
       try {
-        overrides = JSON.parse(localStorage.getItem('edu_ai_book_cover_overrides') || '{}');
+        overrides = JSON.parse(safeStorage.getItem('edu_ai_book_cover_overrides') || '{}');
       } catch (e) {
         console.warn('Failed to parse cover overrides cache:', e);
       }

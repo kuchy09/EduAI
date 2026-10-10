@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { safeStorage } from './safeStorage';
 import { ChatUser, FriendStatus, UserRole } from '../components/chat/types';
 import { INITIAL_USERS } from '../components/chat/initialData';
 
@@ -74,7 +75,7 @@ export async function syncCurrentUserToSupabase(
 
   // Sync to localStorage
   try {
-    const cachedUsers: ChatUser[] = JSON.parse(localStorage.getItem('eduai_chat_users') || '[]');
+    const cachedUsers: ChatUser[] = JSON.parse(safeStorage.getItem('eduai_chat_users') || '[]');
     const existingIdx = cachedUsers.findIndex(u => u.id === user.id);
     const convertedChatUser: ChatUser = {
       id: user.id,
@@ -97,7 +98,7 @@ export async function syncCurrentUserToSupabase(
     } else {
       cachedUsers.push(convertedChatUser);
     }
-    localStorage.setItem('eduai_chat_users', JSON.stringify(cachedUsers));
+    safeStorage.setItem('eduai_chat_users', JSON.stringify(cachedUsers));
   } catch (e) {}
 
   if (!supabase) return false;
@@ -217,7 +218,7 @@ export async function fetchSearchableUsersFromSupabase(
     baseList = [...mappedRemote, ...missingInitial];
   } else {
     // Fallback to local storage merged with initial dataset
-    const stored = localStorage.getItem('eduai_chat_users');
+    const stored = safeStorage.getItem('eduai_chat_users');
     let list: ChatUser[] = INITIAL_USERS;
     if (stored) {
       try {
@@ -296,9 +297,9 @@ export async function sendSupabaseFriendRequest(
 
   // Local fallback storage
   try {
-    const cachedUsers: ChatUser[] = JSON.parse(localStorage.getItem('eduai_chat_users') || '[]');
+    const cachedUsers: ChatUser[] = JSON.parse(safeStorage.getItem('eduai_chat_users') || '[]');
     const updated = cachedUsers.map(u => u.id === receiverId ? { ...u, friendStatus: 'pending_sent' as FriendStatus } : u);
-    localStorage.setItem('eduai_chat_users', JSON.stringify(updated));
+    safeStorage.setItem('eduai_chat_users', JSON.stringify(updated));
   } catch (e) {}
 
   return { success: true, message: 'Friend request recorded successfully' };
@@ -340,10 +341,10 @@ export async function respondToSupabaseFriendRequest(
 
   // Local fallback
   try {
-    const cachedUsers: ChatUser[] = JSON.parse(localStorage.getItem('eduai_chat_users') || '[]');
+    const cachedUsers: ChatUser[] = JSON.parse(safeStorage.getItem('eduai_chat_users') || '[]');
     const newStatus: FriendStatus = action === 'accepted' ? 'friends' : 'none';
     const updated = cachedUsers.map(u => u.id === targetUserId ? { ...u, friendStatus: newStatus } : u);
-    localStorage.setItem('eduai_chat_users', JSON.stringify(updated));
+    safeStorage.setItem('eduai_chat_users', JSON.stringify(updated));
   } catch (e) {}
 
   return { success: true, message: `Friendship ${action}` };
@@ -367,9 +368,9 @@ export async function cancelOrRemoveSupabaseFriendship(
 
   // Local fallback
   try {
-    const cachedUsers: ChatUser[] = JSON.parse(localStorage.getItem('eduai_chat_users') || '[]');
+    const cachedUsers: ChatUser[] = JSON.parse(safeStorage.getItem('eduai_chat_users') || '[]');
     const updated = cachedUsers.map(u => u.id === targetUserId ? { ...u, friendStatus: 'none' as FriendStatus } : u);
-    localStorage.setItem('eduai_chat_users', JSON.stringify(updated));
+    safeStorage.setItem('eduai_chat_users', JSON.stringify(updated));
   } catch (e) {}
 
   return { success: true };

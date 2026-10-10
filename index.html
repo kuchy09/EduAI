@@ -2,23 +2,13 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
     <title>Edu AI - Library and Educational Application</title>
     <meta name="description" content="Library and educational application with an AI assistant." />
     <meta property="og:title" content="Edu AI" />
     <meta property="og:description" content="Library and educational application with an AI assistant." />
 
-    <!-- Storage Defense Polyfill for Sandbox iFrames -->
-    <script>
-      (function() {
-        try {
-          var savedTheme = localStorage.getItem('theme');
-          if (savedTheme === 'dark' || (!savedTheme && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
-            document.documentElement.classList.add('dark');
-          }
-        } catch (_) {}
-      })();
-    </script>
+    <!-- Storage Defense & Mobile iFrame Polyfill -->
     <script>
       (function() {
         var localMem = {};
@@ -63,6 +53,9 @@
               configurable: true
             });
           } catch (_) {}
+          try {
+            window.localStorage = mockLocal;
+          } catch (_) {}
         }
 
         var sessionWorking = false;
@@ -89,7 +82,18 @@
               configurable: true
             });
           } catch (_) {}
+          try {
+            window.sessionStorage = mockSession;
+          } catch (_) {}
         }
+
+        // Safe theme initialization now that storage is defended
+        try {
+          var savedTheme = window.localStorage ? window.localStorage.getItem('theme') : null;
+          if (savedTheme === 'dark' || (!savedTheme && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {}
 
         // Global uncaught error display banner fallback
         window.addEventListener('error', function(e) {

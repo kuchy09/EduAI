@@ -123,7 +123,7 @@ export function DailyReadingGoalCard() {
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`rounded-3xl p-6 sm:p-7 border transition-all duration-300 shadow-sm relative overflow-hidden bg-white dark:bg-slate-900 ${
+        className={`rounded-3xl p-6 sm:p-7 border transition-all duration-300 shadow-sm relative overflow-hidden bg-white dark:bg-slate-900 scrollbar-none [color-scheme:light] dark:[color-scheme:dark] ${
           isCompleted 
             ? 'border-emerald-300/80 dark:border-emerald-500/30 shadow-emerald-500/10 ring-1 ring-emerald-400/30' 
             : 'border-slate-200/90 dark:border-slate-800 hover:border-brand-300 dark:hover:border-brand-500/40'
@@ -136,7 +136,7 @@ export function DailyReadingGoalCard() {
             <div className={`p-2.5 rounded-2xl flex items-center justify-center transition-colors ${
               isCompleted 
                 ? 'bg-emerald-500 text-white shadow-md shadow-emerald-500/20' 
-                : 'bg-brand-50 text-brand-600 border border-brand-100'
+                : 'bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 border border-brand-100 dark:border-brand-800/60'
             }`}>
               {isCompleted ? <Award className="w-5 h-5" /> : <Target className="w-5 h-5" />}
             </div>
@@ -205,8 +205,11 @@ export function DailyReadingGoalCard() {
             </div>
           </div>
 
-          {/* Progress Bar Container */}
-          <div className="relative w-full h-3 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden p-0.5 border border-slate-200/50 dark:border-slate-700/50">
+          {/* Progress Bar Container / Scroll Pad Track */}
+          <div 
+            className="relative w-full h-3 bg-slate-100 dark:bg-slate-800/90 rounded-full overflow-hidden p-0.5 border border-slate-200/80 dark:border-slate-700/80 shadow-inner"
+            style={{ colorScheme: 'dark light' }}
+          >
             <motion.div
               className={`h-full rounded-full transition-all duration-500 ${
                 isCompleted
@@ -220,20 +223,20 @@ export function DailyReadingGoalCard() {
           </div>
 
           {/* Motivational Status Text */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-slate-500 dark:text-slate-400">
             <div className="flex items-center gap-1.5">
               {isCompleted ? (
                 <>
-                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  <span className="font-semibold text-emerald-700">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="font-semibold text-emerald-700 dark:text-emerald-300">
                     Goal achieved today! Great dedication to your study routine.
                   </span>
                 </>
               ) : (
                 <>
-                  <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                  <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-slate-500 shrink-0" />
                   <span>
-                    <strong className="text-slate-700 font-semibold">{remaining} {goal.type === 'time' ? 'minutes' : 'pages'}</strong> remaining today to keep your streak!
+                    <strong className="text-slate-700 dark:text-slate-200 font-semibold">{remaining} {goal.type === 'time' ? 'minutes' : 'pages'}</strong> remaining today to keep your streak!
                   </span>
                 </>
               )}
@@ -243,7 +246,7 @@ export function DailyReadingGoalCard() {
             {currentValue > 0 && (
               <button
                 onClick={handleResetToday}
-                className="text-[11px] text-slate-400 hover:text-slate-600 inline-flex items-center gap-1 self-start sm:self-auto hover:underline"
+                className="text-[11px] text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 inline-flex items-center gap-1 self-start sm:self-auto hover:underline"
               >
                 <RotateCcw className="w-3 h-3" />
                 Reset Today
@@ -253,7 +256,7 @@ export function DailyReadingGoalCard() {
         </div>
 
         {/* Action Row: Quick Log Buttons & 7-Day Activity Strip */}
-        <div className="mt-6 pt-5 border-t border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
+        <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 relative z-10">
           
           {/* Quick Manual Log Buttons */}
           <div className="flex items-center flex-wrap gap-1.5 w-full sm:w-auto">
@@ -360,23 +363,23 @@ export function DailyReadingGoalCard() {
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="relative w-full max-w-md bg-white rounded-3xl p-6 sm:p-7 shadow-2xl border border-slate-200 z-10 space-y-6"
+              className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-7 shadow-2xl border border-slate-200 dark:border-slate-800 z-10 space-y-6"
             >
-              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
                 <div className="flex items-center gap-2.5">
-                  <div className="p-2 bg-brand-50 text-brand-600 rounded-xl">
+                  <div className="p-2 bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 rounded-xl">
                     <Target className="w-5 h-5" />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900">Configure Daily Goal</h3>
-                    <p className="text-xs text-slate-500">Choose your measurement metric and daily target</p>
+                    <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100">Configure Daily Goal</h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">Choose your measurement metric and daily target</p>
                   </div>
                 </div>
               </div>
 
               {/* Goal Type Selector */}
               <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   Measurement Mode
                 </label>
                 <div className="grid grid-cols-2 gap-3">
@@ -389,13 +392,13 @@ export function DailyReadingGoalCard() {
                     }}
                     className={`flex flex-col items-center justify-center p-4 rounded-2xl border transition-all text-center ${
                       tempType === 'time'
-                        ? 'border-brand-600 bg-brand-50/60 text-brand-900 font-semibold ring-2 ring-brand-500/20'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-slate-50/50'
+                        ? 'border-brand-600 dark:border-brand-500 bg-brand-50/60 dark:bg-brand-950/40 text-brand-900 dark:text-brand-200 font-semibold ring-2 ring-brand-500/20'
+                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 bg-slate-50/50 dark:bg-slate-800/40'
                     }`}
                   >
-                    <Clock className={`w-5 h-5 mb-1.5 ${tempType === 'time' ? 'text-brand-600' : 'text-slate-400'}`} />
+                    <Clock className={`w-5 h-5 mb-1.5 ${tempType === 'time' ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-500'}`} />
                     <span className="text-sm">Time-Based</span>
-                    <span className="text-[11px] text-slate-400">Minutes per day</span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">Minutes per day</span>
                   </button>
 
                   <button
@@ -407,20 +410,20 @@ export function DailyReadingGoalCard() {
                     }}
                     className={`flex flex-col items-center justify-center p-4 rounded-2xl border transition-all text-center ${
                       tempType === 'pages'
-                        ? 'border-brand-600 bg-brand-50/60 text-brand-900 font-semibold ring-2 ring-brand-500/20'
-                        : 'border-slate-200 hover:border-slate-300 text-slate-600 bg-slate-50/50'
+                        ? 'border-brand-600 dark:border-brand-500 bg-brand-50/60 dark:bg-brand-950/40 text-brand-900 dark:text-brand-200 font-semibold ring-2 ring-brand-500/20'
+                        : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 text-slate-600 dark:text-slate-300 bg-slate-50/50 dark:bg-slate-800/40'
                     }`}
                   >
-                    <BookOpen className={`w-5 h-5 mb-1.5 ${tempType === 'pages' ? 'text-brand-600' : 'text-slate-400'}`} />
+                    <BookOpen className={`w-5 h-5 mb-1.5 ${tempType === 'pages' ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-500'}`} />
                     <span className="text-sm">Page-Based</span>
-                    <span className="text-[11px] text-slate-400">Pages per day</span>
+                    <span className="text-[11px] text-slate-400 dark:text-slate-500">Pages per day</span>
                   </button>
                 </div>
               </div>
 
               {/* Target Presets */}
               <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   Target Presets ({tempType === 'time' ? 'Minutes' : 'Pages'})
                 </label>
                 <div className="grid grid-cols-3 gap-2">
@@ -436,8 +439,8 @@ export function DailyReadingGoalCard() {
                         }}
                         className={`py-2 px-3 text-xs font-bold rounded-xl border transition-all ${
                           isSelected
-                            ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                            : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                            ? 'bg-slate-900 dark:bg-brand-600 text-white border-slate-900 dark:border-brand-500 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800/80 hover:bg-slate-100 dark:hover:bg-slate-700/80 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700'
                         }`}
                       >
                         {preset} {tempType === 'time' ? 'mins' : 'pgs'}
@@ -449,7 +452,7 @@ export function DailyReadingGoalCard() {
 
               {/* Custom Target Input */}
               <div className="space-y-2">
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
                   Custom Target ({tempType === 'time' ? 'Minutes' : 'Pages'})
                 </label>
                 <div className="relative">
@@ -465,10 +468,10 @@ export function DailyReadingGoalCard() {
                         setTempTarget(parsed);
                       }
                     }}
-                    className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-semibold focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all text-sm"
+                    className="w-full px-4 py-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-slate-900 dark:text-slate-100 font-semibold focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all text-sm"
                     placeholder={`Enter custom ${tempType === 'time' ? 'minutes' : 'pages'}`}
                   />
-                  <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 uppercase">
+                  <div className="absolute right-3.5 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase">
                     {tempType === 'time' ? 'Mins' : 'Pages'}
                   </div>
                 </div>
@@ -479,7 +482,7 @@ export function DailyReadingGoalCard() {
                 <button
                   type="button"
                   onClick={() => setIsConfigOpen(false)}
-                  className="flex-1 py-3 px-4 rounded-xl border border-slate-200 text-slate-700 font-semibold text-sm hover:bg-slate-50 transition-colors"
+                  className="flex-1 py-3 px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                 >
                   Cancel
                 </button>

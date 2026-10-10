@@ -4,6 +4,7 @@ import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { useUserAvatar } from '../lib/userAvatarService';
+import { safeStorage } from '../lib/safeStorage';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -23,8 +24,8 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
 
   const [isDark, setIsDark] = useState(() => {
     if (typeof window !== 'undefined') {
-      const saved = ((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light';
-      return saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
+      const saved = safeStorage.getItem('theme') || 'light';
+      return saved === 'dark' || (saved === 'system' && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
     }
     return false;
   });
@@ -32,7 +33,7 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose }: SidebarP
   const toggleTheme = () => {
     const nextDark = !isDark;
     setIsDark(nextDark);
-    localStorage.setItem('theme', nextDark ? 'dark' : 'light');
+    safeStorage.setItem('theme', nextDark ? 'dark' : 'light');
     document.documentElement.classList.toggle('dark', nextDark);
     triggerCapsuleFeedback({ pitch: nextDark ? 480 : 720, volume: 0.16, hapticDuration: 12 });
     window.dispatchEvent(new Event('theme_changed'));

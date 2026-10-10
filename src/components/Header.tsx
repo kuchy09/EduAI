@@ -2,7 +2,7 @@ import {
   Search, Bell, MoreHorizontal, Book as BookIcon, Map, FileQuestion, 
   Headphones, ShoppingBag, X, CheckCircle2, Sparkles, ArrowRight,
   BookmarkCheck, Compass, HelpCircle, HardDriveDownload, TrendingUp,
-  MessageCircle, Moon, Sun, User, Camera, Loader2
+  MessageCircle, Moon, Sun, User, Camera, Loader2, Mic, MicOff
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
@@ -13,6 +13,7 @@ import { getRelatedSearchSuggestions } from '../lib/searchSuggestions';
 import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { useUserAvatar, saveUserAvatarLocally } from '../lib/userAvatarService';
+import { safeStorage } from '../lib/safeStorage';
 import { supabase } from '../lib/supabase';
 
 interface HeaderProps {
@@ -66,7 +67,7 @@ export function Header({
   });
   const [isDarkTheme, setIsDarkTheme] = useState(() => {
     if (typeof window !== 'undefined') {
-      const saved = ((() => { try { return localStorage.getItem('theme'); } catch (e) { return null; } })()) || 'light';
+      const saved = safeStorage.getItem('theme') || 'light';
       return saved === 'dark' || (saved === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches) || document.documentElement.classList.contains('dark');
     }
     return false;
@@ -77,6 +78,26 @@ export function Header({
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const { cachedBookIds } = useOffline();
+
+  // Voice Search / Web SpeechRecognition API State
+  const [isListening, setIsListening] = useState(false);
+  const [voiceNotice, setVoiceNotice] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const voiceNoticeTimeoutRef = useRef<any>(null);
+
+  // Clean up speech recognition on unmount
+  useEffect(() => {
+    return () => {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.abort();
+        } catch (_) {}
+      }
+      if (voiceNoticeTimeoutRef.current) {
+        clearTimeout(voiceNoticeTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Close profile menu on outside click
   useEffect(() => {
@@ -168,7 +189,7 @@ export function Header({
   const handleToggleTheme = () => {
     const nextIsDark = !isDarkTheme;
     setIsDarkTheme(nextIsDark);
-    localStorage.setItem('theme', nextIsDark ? 'dark' : 'light');
+    safeStorage.setItem('theme', nextIsDark ? 'dark' : 'light');
     document.documentElement.classList.toggle('dark', nextIsDark);
     triggerCapsuleFeedback({ pitch: nextIsDark ? 480 : 720, volume: 0.16, hapticDuration: 12 });
     window.dispatchEvent(new Event('theme_changed'));
@@ -398,10 +419,99 @@ export function Header({
   };
 
   const handleAskAiAboutTopic = () => {
-    localStorage.setItem('ai_tutor_prefill', `Can you provide a comprehensive summary, key chapter concepts, and study guide questions for "${query}"?`);
+    safeStorage.setItem('ai_tutor_prefill', `Can you provide a comprehensive summary, key chapter concepts, and study guide questions for "${query}"?`);
     onNavigate('ai-tutor');
     setIsFocused(false);
     setQuery('');
+  };
+
+  const handleToggleVoiceSearch = (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (voiceNoticeTimeoutRef.current) {
+      clearTimeout(voiceNoticeTimeoutRef.current);
+    }
+
+    if (isListening) {
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (_) {}
+      }
+      setIsListening(false);
+      setVoiceNotice(null);
+      return;
+    }
+
+    const SpeechRecognitionClass = 
+      typeof window !== 'undefined' 
+        ? (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition 
+        : null;
+
+    if (!SpeechRecognitionClass) {
+      setVoiceNotice('Voice search is not supported in this browser.');
+      voiceNoticeTimeoutRef.current = setTimeout(() => setVoiceNotice(null), 3500);
+      return;
+    }
+
+    try {
+      const recognition = new SpeechRecognitionClass();
+      recognition.continuous = false;
+      recognition.interimResults = true;
+      recognition.lang = navigator.language || 'en-US';
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setIsFocused(true);
+        setVoiceNotice('Listening... Speak a book title, topic or author');
+        triggerCapsuleFeedback({ pitch: 620, volume: 0.2 });
+      };
+
+      recognition.onresult = (event: any) => {
+        let currentFinal = '';
+        let currentInterim = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const item = event.results[i];
+          if (item.isFinal) {
+            currentFinal += item[0].transcript + ' ';
+          } else {
+            currentInterim += item[0].transcript;
+          }
+        }
+
+        const spoken = (currentFinal || currentInterim).trim();
+        if (spoken) {
+          setQuery(spoken);
+        }
+      };
+
+      recognition.onerror = (err: any) => {
+        console.warn('SpeechRecognition error:', err?.error || err);
+        setIsListening(false);
+        if (err?.error === 'not-allowed' || err?.error === 'service-not-allowed') {
+          setVoiceNotice('Microphone access blocked. Please enable mic permissions.');
+        } else if (err?.error !== 'no-speech') {
+          setVoiceNotice(`Speech recognition error (${err?.error || 'failed'})`);
+        } else {
+          setVoiceNotice(null);
+        }
+        voiceNoticeTimeoutRef.current = setTimeout(() => setVoiceNotice(null), 3500);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+        voiceNoticeTimeoutRef.current = setTimeout(() => setVoiceNotice(null), 1500);
+      };
+
+      recognition.start();
+      recognitionRef.current = recognition;
+    } catch (err) {
+      console.warn('Could not start voice search:', err);
+      setIsListening(false);
+      setVoiceNotice('Could not start microphone');
+      voiceNoticeTimeoutRef.current = setTimeout(() => setVoiceNotice(null), 3500);
+    }
   };
 
   const isHomePage = currentView === 'dashboard';
@@ -424,7 +534,9 @@ export function Header({
         {/* Search bar is ONLY displayed on the Home page (dashboard) */}
         {isHomePage ? (
           <div ref={containerRef} className="relative flex-1 min-w-0 overflow-visible">
-            <Search className="w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-2.5 sm:left-3.5 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <Search className={`w-3.5 h-3.5 sm:w-4 sm:h-4 absolute left-2.5 sm:left-3.5 top-1/2 -translate-y-1/2 pointer-events-none transition-colors ${
+              isListening ? 'text-red-500 animate-pulse' : 'text-slate-400'
+            }`} />
             <input 
               type="text" 
               value={query}
@@ -432,24 +544,61 @@ export function Header({
               onFocus={() => setIsFocused(true)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && query.trim()) {
-                  localStorage.setItem('edu_search_prefill', query);
+                  safeStorage.setItem('edu_search_prefill', query);
                   onNavigate('library');
                   setIsFocused(false);
                 }
               }}
-              placeholder="Search books, syllabus, topics..." 
-              className="w-full h-8.5 sm:h-[38px] pl-8 sm:pl-10 pr-7 sm:pr-9 bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500 rounded-full text-xs sm:text-sm outline-none transition-all placeholder:text-slate-400 placeholder:truncate shadow-inner backdrop-blur-md min-w-0"
+              placeholder={isListening ? "Listening... Speak now" : "Search books, syllabus, topics..."} 
+              className={`w-full h-8.5 sm:h-[38px] pl-8 sm:pl-10 ${query ? 'pr-14 sm:pr-16' : 'pr-8 sm:pr-9'} bg-slate-100/60 dark:bg-slate-800/60 hover:bg-slate-100/90 dark:hover:bg-slate-800/90 focus:bg-white/95 dark:focus:bg-slate-900/95 border ${
+                isListening 
+                  ? 'border-red-500 ring-2 ring-red-500/30' 
+                  : 'border-slate-200/60 dark:border-slate-700/60 focus:border-brand-500'
+              } rounded-full text-xs sm:text-sm outline-none transition-all placeholder:text-slate-400 placeholder:truncate shadow-inner backdrop-blur-md min-w-0`}
             />
 
-          {query && (
+            {/* Clear Button */}
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="absolute right-7 sm:right-8 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition-colors"
+                title="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+
+            {/* Microphone Button (SpeechRecognition API) */}
             <button
-              onClick={() => setQuery('')}
-              className="absolute right-2 sm:right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 rounded-full hover:bg-slate-200/50 dark:hover:bg-slate-700/50 transition-colors"
-              title="Clear search"
+              type="button"
+              onClick={handleToggleVoiceSearch}
+              className={`absolute right-1.5 sm:right-2 top-1/2 -translate-y-1/2 p-1 sm:p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
+                isListening 
+                  ? 'bg-red-500 text-white shadow-md shadow-red-500/40 ring-2 ring-red-400/60 animate-pulse scale-105' 
+                  : 'text-slate-400 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-slate-200/50 dark:hover:bg-slate-700/50 active:scale-95'
+              }`}
+              title={isListening ? "Listening... Click to stop" : "Voice search (Click and speak)"}
+              aria-label={isListening ? "Stop listening" : "Search by voice"}
             >
-              <X className="w-3.5 h-3.5" />
+              {isListening ? (
+                <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-white animate-bounce" />
+              ) : (
+                <Mic className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              )}
             </button>
-          )}
+
+            {/* Voice Status Pill / Notice */}
+            {voiceNotice && (
+              <div className="absolute top-full left-0 mt-1.5 px-2.5 py-1 bg-slate-900/90 dark:bg-slate-950/95 text-white text-[11px] rounded-lg shadow-xl backdrop-blur-md z-[120] flex items-center gap-1.5 border border-white/10 animate-in fade-in slide-in-from-top-1">
+                {isListening ? (
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-ping shrink-0" />
+                ) : (
+                  <MicOff className="w-3 h-3 text-slate-400 shrink-0" />
+                )}
+                <span className="truncate max-w-[240px] sm:max-w-xs">{voiceNotice}</span>
+              </div>
+            )}
 
           {/* Search Dropdown */}
           {showDropdown && createPortal(
@@ -617,7 +766,7 @@ export function Header({
                         </div>
                         <button 
                           onClick={() => { 
-                            if (query) localStorage.setItem('edu_search_prefill', query);
+                            if (query) safeStorage.setItem('edu_search_prefill', query);
                             onNavigate('library'); 
                             setIsFocused(false); 
                           }}
@@ -682,7 +831,7 @@ export function Header({
                         </div>
                         <button 
                           onClick={() => { 
-                            if (query) localStorage.setItem('edu_search_prefill', query);
+                            if (query) safeStorage.setItem('edu_search_prefill', query);
                             onNavigate('book-store'); 
                             setIsFocused(false); 
                           }}
@@ -1015,7 +1164,7 @@ export function Header({
                 alt="Profile" 
                 className="w-full h-full object-cover rounded-full"
                 onError={() => {
-                  const fallbackData = localStorage.getItem('user_avatar_data_url');
+                  const fallbackData = safeStorage.getItem('user_avatar_data_url');
                   if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
                     saveUserAvatarLocally(fallbackData, fallbackData);
                     setAvatarImgFailed(false);
@@ -1050,7 +1199,7 @@ export function Header({
                       alt="Profile" 
                       className="w-full h-full object-cover" 
                       onError={() => {
-                        const fallbackData = localStorage.getItem('user_avatar_data_url');
+                        const fallbackData = safeStorage.getItem('user_avatar_data_url');
                         if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
                           saveUserAvatarLocally(fallbackData, fallbackData);
                           setAvatarImgFailed(false);
@@ -1204,7 +1353,7 @@ export function Header({
           >
             <Bell className="w-4 h-4 sm:w-4.5 sm:h-4.5" />
             {unreadNotifCount > 0 ? (
-              <span className="absolute -top-1 -right-1 min-w-[16px] sm:min-w-[18px] h-4 sm:h-[18px] px-1 bg-gradient-to-r from-rose-500 to-indigo-600 text-white text-[9px] sm:text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs animate-pulse">
+              <span className="absolute -top-1 -right-1 min-w-[16px] sm:min-w-[18px] h-4 sm:h-[18px] px-1 bg-red-600 text-white text-[9px] sm:text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
                 {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
               </span>
             ) : (

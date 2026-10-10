@@ -184,7 +184,7 @@ export default function App() {
         };
       }
 
-      const saved = ((() => { try { return localStorage.getItem(`book_progress_${b.id}`); } catch (e) { return null; } })());
+      const saved = safeStorage.getItem(`book_progress_${b.id}`);
       if (saved !== null) {
         return { ...bookWithCover, readProgress: parseInt(saved, 10) };
       }
@@ -754,7 +754,7 @@ export default function App() {
           </div>
 
           {/* Interactive Recovery Action Panel */}
-          <div className="pt-2 space-y-2.5">
+          <div className="pt-2 grid grid-cols-3 gap-2">
             <button
               onClick={() => {
                 setLoading(false);
@@ -762,28 +762,26 @@ export default function App() {
                 safeStorage.setItem('edu_ai_guest_mode', 'true');
                 safeSessionStorage.setItem('edu_ai_guest_mode', 'true');
               }}
-              className="w-full py-3 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-semibold text-sm transition-all shadow-lg shadow-brand-600/30 flex items-center justify-center gap-2 cursor-pointer active:scale-98"
+              className="py-2.5 px-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-semibold text-xs transition-all shadow-md shadow-brand-600/30 flex items-center justify-center gap-1.5 cursor-pointer active:scale-98 text-center"
             >
-              <ArrowRight className="w-4 h-4" />
-              Launch Library (Instant Guest Mode)
+              <ArrowRight className="w-3.5 h-3.5 shrink-0" />
+              <span className="truncate">Launch Guest</span>
             </button>
 
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => handleEmergencyRecovery('soft')}
-                className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <Wrench className="w-3.5 h-3.5 text-amber-400" />
-                Self-Repair
-              </button>
-              <button
-                onClick={() => handleEmergencyRecovery('full')}
-                className="flex-1 py-2.5 px-3 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-              >
-                <RefreshCw className="w-3.5 h-3.5 text-brand-400" />
-                Reset Storage
-              </button>
-            </div>
+            <button
+              onClick={() => handleEmergencyRecovery('soft')}
+              className="py-2.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
+            >
+              <Wrench className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+              <span className="truncate">Self-Repair</span>
+            </button>
+            <button
+              onClick={() => handleEmergencyRecovery('full')}
+              className="py-2.5 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-medium transition-all flex items-center justify-center gap-1.5 cursor-pointer text-center"
+            >
+              <RefreshCw className="w-3.5 h-3.5 shrink-0 text-brand-400" />
+              <span className="truncate">Reset Storage</span>
+            </button>
           </div>
         </div>
       </div>
@@ -826,7 +824,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.2 }}
-            className="flex min-h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-50 border-x border-slate-50 dark:border-slate-950 w-full max-w-full overflow-x-hidden"
+            className="flex min-h-screen min-h-[100dvh] flex-1 bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-50 border-x border-slate-50 dark:border-slate-950 w-full max-w-full overflow-x-hidden"
           >
             <Sidebar 
               currentView={currentView} 
@@ -1115,39 +1113,37 @@ export default function App() {
               </div>
 
               {/* Action Buttons */}
-              <div className="space-y-2 pt-1">
+              <div className="grid grid-cols-3 gap-2 pt-1">
                 <button
                   onClick={() => checkSystemHealth()}
                   disabled={systemHealth.status === 'checking'}
-                  className="w-full py-2.5 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl font-medium text-xs transition-colors flex items-center justify-center gap-2 cursor-pointer disabled:opacity-60"
+                  className="py-2.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl font-medium text-xs transition-colors flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-60 text-center"
                 >
-                  <RefreshCw className={`w-3.5 h-3.5 ${systemHealth.status === 'checking' ? 'animate-spin' : ''}`} />
-                  {systemHealth.status === 'checking' ? 'Testing Connection...' : 'Re-test System Health'}
+                  <RefreshCw className={`w-3.5 h-3.5 shrink-0 ${systemHealth.status === 'checking' ? 'animate-spin' : ''}`} />
+                  <span className="truncate">{systemHealth.status === 'checking' ? 'Testing...' : 'Re-test'}</span>
                 </button>
 
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={() => {
-                      handleEmergencyRecovery('soft');
-                      setIsDiagnosticsOpen(false);
-                    }}
-                    className="py-2.5 px-3 bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900/50 border border-brand-200 dark:border-brand-800/60 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Wrench className="w-3.5 h-3.5 text-brand-500" />
-                    Quick Self-Repair
-                  </button>
+                <button
+                  onClick={() => {
+                    handleEmergencyRecovery('soft');
+                    setIsDiagnosticsOpen(false);
+                  }}
+                  className="py-2.5 px-2 bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 hover:bg-brand-100 dark:hover:bg-brand-900/50 border border-brand-200 dark:border-brand-800/60 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                >
+                  <Wrench className="w-3.5 h-3.5 shrink-0 text-brand-500" />
+                  <span className="truncate">Self-Repair</span>
+                </button>
 
-                  <button
-                    onClick={() => {
-                      handleEmergencyRecovery('full');
-                      setIsDiagnosticsOpen(false);
-                    }}
-                    className="py-2.5 px-3 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 border border-rose-200 dark:border-rose-900/50 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <RefreshCw className="w-3.5 h-3.5 text-rose-500" />
-                    Reset App Cache
-                  </button>
-                </div>
+                <button
+                  onClick={() => {
+                    handleEmergencyRecovery('full');
+                    setIsDiagnosticsOpen(false);
+                  }}
+                  className="py-2.5 px-2 bg-rose-50 dark:bg-rose-950/30 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-900/40 border border-rose-200 dark:border-rose-900/50 rounded-xl text-xs font-medium transition-colors flex items-center justify-center gap-1.5 cursor-pointer text-center"
+                >
+                  <RefreshCw className="w-3.5 h-3.5 shrink-0 text-rose-500" />
+                  <span className="truncate">Reset Cache</span>
+                </button>
               </div>
             </motion.div>
           </div>

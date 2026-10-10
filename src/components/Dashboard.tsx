@@ -235,47 +235,50 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
   };
 
   return (
-    <div className="p-4 sm:p-8 max-w-6xl mx-auto space-y-6 sm:space-y-8">
-      {/* Compact Subject Check & User Welcome Header */}
+    <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 md:py-8 space-y-4 sm:space-y-6 md:space-y-8 min-w-0 transition-all duration-300">
+      {/* Elastic Adaptive Subject Check & User Welcome Header */}
       <motion.div 
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="group relative overflow-hidden rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 p-4 sm:p-5 shadow-sm hover:shadow transition-all duration-300"
+        whileHover={{ y: -1 }}
+        transition={{ type: 'spring', stiffness: 350, damping: 25 }}
+        className="group relative overflow-hidden rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 p-3 sm:p-5 md:p-6 lg:p-7 shadow-sm hover:shadow-md transition-all duration-300 w-full max-w-full min-w-0 box-border"
       >
         {/* Subtle accent specular gradient bar */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-brand-500 via-indigo-500 to-emerald-500" />
-        <div className="absolute -right-12 -top-12 w-36 h-36 bg-brand-500/5 dark:bg-brand-500/10 rounded-full blur-2xl pointer-events-none" />
+        <div className="absolute -right-8 -top-8 sm:-right-12 sm:-top-12 w-32 h-32 sm:w-48 sm:h-48 md:w-64 md:h-64 bg-brand-500/5 dark:bg-brand-500/10 rounded-full blur-2xl pointer-events-none" />
 
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Elastic responsive main flex row (phone: clean horizontal cluster, tablet/desktop: fluid row) */}
+        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-3.5 sm:gap-4 md:gap-5 lg:gap-6 w-full min-w-0">
           {/* Left: Avatar + Subject Check Badge + User's Name + Welcome sentence */}
-          <div className="flex items-start sm:items-center gap-3.5">
-            {/* User Avatar / Initials */}
+          <div className="flex items-start sm:items-center gap-2.5 sm:gap-4 md:gap-5 min-w-0 flex-1">
+            {/* User Avatar / Initials with elastic sizing */}
             <button 
               onClick={() => onNavigate?.('profile')}
-              className="relative w-11 h-11 sm:w-12 sm:h-12 rounded-xl ring-2 ring-brand-500/20 dark:ring-brand-400/20 p-0.5 shadow-sm overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform bg-slate-100 dark:bg-slate-800"
+              className="relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl sm:rounded-2xl ring-2 ring-brand-500/20 dark:ring-brand-400/20 p-0.5 shadow-sm overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform bg-slate-100 dark:bg-slate-800 inline-flex items-center justify-center align-middle"
               title="View & Edit Profile"
             >
               {avatarUrl && !avatarFailed ? (
                 <img 
                   src={avatarUrl} 
                   alt={fullName} 
-                  className="w-full h-full object-cover rounded-[10px]" 
+                  className="w-full h-full object-cover rounded-[10px] sm:rounded-[14px]" 
                   onError={() => setAvatarFailed(true)}
                 />
               ) : (
-                <div className="w-full h-full bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-[10px] flex items-center justify-center font-bold text-sm sm:text-base text-white">
+                <div className="w-full h-full bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-[10px] sm:rounded-[14px] flex items-center justify-center font-bold text-sm sm:text-base md:text-lg text-white">
                   {firstName.charAt(0).toUpperCase()}
                 </div>
               )}
             </button>
 
-            {/* Content text */}
-            <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
+            {/* Elastic content text column with min-w-0 to prevent flex blowouts */}
+            <div className="space-y-1 sm:space-y-1.5 min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2.5 min-w-0">
                 {/* Subject Check Pill */}
                 <button
                   onClick={() => setIsSubjectModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer group/btn"
+                  className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer group/btn shrink-0"
                   title="Click to perform Subject Check & view modules"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 group-hover/btn:scale-110 transition-transform" />
@@ -284,41 +287,51 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
                 </button>
 
                 {/* User's Name */}
-                <span className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                <span className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-400 truncate max-w-full">
                   • <strong className="font-semibold text-slate-700 dark:text-slate-300">{fullName}</strong>
                 </span>
               </div>
 
               {/* Exact user request sentence: "Welcome to Edu AI. You've completed.....modules this week" */}
-              <h2 className="text-base sm:text-lg font-semibold text-slate-900 dark:text-slate-100 flex flex-wrap items-center gap-1.5 leading-snug">
+              <h2 className="text-sm xs:text-base sm:text-lg md:text-xl font-semibold text-slate-900 dark:text-slate-100 flex flex-wrap items-baseline gap-x-2 gap-y-1 leading-snug sm:leading-tight">
                 <span>Welcome to Edu AI.</span>
                 <span className="text-brand-600 dark:text-brand-400 font-bold">
                   You've completed {completedModules} modules this week
                 </span>
-                <span className="text-xs font-normal text-slate-500 dark:text-slate-400">
+                <span className="text-[11px] sm:text-xs font-normal text-slate-500 dark:text-slate-400 shrink-0">
                   ({Math.round((completedModules / weeklyTarget) * 100)}% of weekly goal)
                 </span>
               </h2>
 
-              <p className="text-xs text-slate-600 dark:text-slate-400 flex items-center gap-2">
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span>
                   {completedModules >= weeklyTarget 
                     ? '🎉 Weekly module milestone achieved!' 
                     : `${weeklyTarget - completedModules} more module${weeklyTarget - completedModules === 1 ? '' : 's'} to hit your 5-module target.`}
                 </span>
                 {continueReading.length > 0 && (
-                  <span className="hidden sm:inline text-slate-400 dark:text-slate-600">
-                    • In progress: <strong className="font-medium text-slate-700 dark:text-slate-300">"{continueReading[0].title}"</strong>
+                  <span className="hidden sm:inline-flex items-center gap-1 text-slate-400 dark:text-slate-600 truncate max-w-xs md:max-w-sm lg:max-w-md">
+                    • In progress: <strong className="font-medium text-slate-700 dark:text-slate-300 truncate">"{continueReading[0].title}"</strong>
                   </span>
                 )}
               </p>
+
+              {/* Elastic fluid module progress bar */}
+              <div className="w-full max-w-md lg:max-w-lg bg-slate-100 dark:bg-slate-800/80 rounded-full h-1.5 sm:h-2 overflow-hidden mt-1.5">
+                <motion.div 
+                  className="h-full bg-gradient-to-r from-brand-500 via-indigo-500 to-emerald-500 rounded-full"
+                  initial={{ width: 0 }}
+                  animate={{ width: `${Math.min(100, Math.round((completedModules / weeklyTarget) * 100))}%` }}
+                  transition={{ type: 'spring', stiffness: 140, damping: 20 }}
+                />
+              </div>
             </div>
           </div>
 
-          {/* Right section ("and more"): Quick stats + action triggers */}
-          <div className="flex items-center gap-2 sm:gap-3 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-slate-100 dark:border-slate-800">
+          {/* Right section: Horizontally aligned on the same line */}
+          <div className="flex flex-row items-center gap-1.5 sm:gap-2.5 lg:gap-3 w-full sm:w-auto shrink-0 justify-start sm:justify-end flex-wrap sm:flex-nowrap pt-2 sm:pt-0 border-t border-slate-100 dark:border-slate-800/80 sm:border-0">
             {/* Mini Progress & Streak Pills */}
-            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-xs">
+            <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-50 dark:bg-slate-800/80 px-2 sm:px-2.5 md:px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-xs sm:text-sm shrink-0">
               <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold" title="Reading streak">
                 <Flame className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
                 <span>{metrics.streakDays}d</span>
@@ -326,24 +339,25 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
               <div className="w-px h-3.5 bg-slate-200 dark:bg-slate-700" />
               <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
                 <Target className="w-3.5 h-3.5 text-brand-500" />
-                <span className="font-medium">{completedModules}/{weeklyTarget} modules</span>
+                <span className="font-medium hidden sm:inline">{completedModules}/{weeklyTarget} modules</span>
+                <span className="font-medium sm:hidden">{completedModules}/{weeklyTarget}m</span>
               </div>
             </div>
 
             {/* Quick Action: Subject Check Modal */}
             <button
               onClick={() => setIsSubjectModalOpen(true)}
-              className="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95"
+              className="px-2.5 sm:px-3 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/60 transition-all cursor-pointer flex items-center gap-1.5 shadow-sm active:scale-95 shrink-0"
               title="Inspect modules and subjects"
             >
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-              <span>Subject Check</span>
+              <span className="hidden xs:inline">Subject Check</span>
             </button>
 
             {continueReading.length > 0 ? (
               <button
                 onClick={() => onBookSelect(continueReading[0])}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-brand-600 hover:bg-brand-700 text-white shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                className="px-3 sm:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-brand-600 hover:bg-brand-700 text-white shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95 shrink-0"
                 title={`Continue reading "${continueReading[0].title}"`}
               >
                 <PlayCircle className="w-3.5 h-3.5" />
@@ -352,10 +366,10 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
             ) : (
               <button
                 onClick={() => onNavigate?.('learning-path')}
-                className="px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-brand-600 hover:bg-brand-700 text-white shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
+                className="px-3 sm:px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-brand-600 hover:bg-brand-700 text-white shadow-sm hover:shadow transition-all cursor-pointer flex items-center gap-1.5 active:scale-95 shrink-0"
               >
                 <Compass className="w-3.5 h-3.5" />
-                <span>Learning Path</span>
+                <span className="hidden sm:inline">Learning Path</span>
               </button>
             )}
           </div>
@@ -411,8 +425,8 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
                 ))}
               </div>
 
-              {/* This Week's 5 Modules Checklist */}
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-2 pt-1">
+              {/* This Week's 5 Modules Checklist - Elastic Grid: Phone (1-2 col), Tablet (3 col), Computer (5 col) */}
+              <div className="grid grid-cols-1 xs:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-2 sm:gap-2.5 pt-1">
                 {[
                   { num: 1, title: 'Foundations & Concepts', desc: 'Core theory & context' },
                   { num: 2, title: 'Applied Case Analysis', desc: 'Practical walkthroughs' },

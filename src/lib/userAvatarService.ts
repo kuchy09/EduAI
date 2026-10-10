@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabase';
+import { safeStorage } from './safeStorage';
 
 export function getPublicAvatarUrl(keyOrUrl: string | null | undefined): string | null {
   if (!keyOrUrl || typeof keyOrUrl !== 'string') return null;
@@ -13,22 +14,22 @@ export function getPublicAvatarUrl(keyOrUrl: string | null | undefined): string 
 
 export function getStoredUserAvatar(user?: any): string | null {
   try {
-    // 1. Check direct base64 data URL in localStorage (fastest & 100% reliable)
-    const directDataUrl = localStorage.getItem('user_avatar_data_url');
+    // 1. Check direct base64 data URL in safeStorage (fastest & 100% reliable)
+    const directDataUrl = safeStorage.getItem('user_avatar_data_url');
     if (directDataUrl && (directDataUrl.startsWith('data:image') || directDataUrl.startsWith('blob:') || directDataUrl.startsWith('http'))) {
       return directDataUrl;
     }
 
-    // 2. Check direct cached full URL in localStorage
-    const cachedUrl = localStorage.getItem('user_custom_avatar');
+    // 2. Check direct cached full URL in safeStorage
+    const cachedUrl = safeStorage.getItem('user_custom_avatar');
     if (cachedUrl && cachedUrl.trim().length > 0) {
       if (!cachedUrl.includes('photo-1534528741775-53994a69daeb')) {
         return getPublicAvatarUrl(cachedUrl);
       }
     }
 
-    // 3. Check cached file key in localStorage
-    const cachedKey = localStorage.getItem('user_profile_avatar_key');
+    // 3. Check cached file key in safeStorage
+    const cachedKey = safeStorage.getItem('user_profile_avatar_key');
     if (cachedKey && cachedKey.trim().length > 0) {
       return getPublicAvatarUrl(cachedKey);
     }
@@ -42,7 +43,7 @@ export function getStoredUserAvatar(user?: any): string | null {
     }
 
     // 5. Check cached chat current user object (ignoring mock female stock avatar)
-    const chatCurrentUserRaw = localStorage.getItem('eduai_chat_current_user');
+    const chatCurrentUserRaw = safeStorage.getItem('eduai_chat_current_user');
     if (chatCurrentUserRaw) {
       try {
         const parsed = JSON.parse(chatCurrentUserRaw);
@@ -57,7 +58,7 @@ export function getStoredUserAvatar(user?: any): string | null {
     }
 
     // 6. Check cached chat users array
-    const chatUsersRaw = localStorage.getItem('eduai_chat_users');
+    const chatUsersRaw = safeStorage.getItem('eduai_chat_users');
     if (chatUsersRaw) {
       try {
         const parsed = JSON.parse(chatUsersRaw);
@@ -85,28 +86,28 @@ export function saveUserAvatarLocally(keyOrUrl: string, directDataUrl?: string) 
     // Save direct data URL if provided (always infallible and instant 0ms preview)
     if (directDataUrl) {
       try {
-        localStorage.setItem('user_avatar_data_url', directDataUrl);
+        safeStorage.setItem('user_avatar_data_url', directDataUrl);
       } catch (quotaErr) {
-        console.warn('[userAvatarService] localStorage quota warning for directDataUrl:', quotaErr);
+        console.warn('[userAvatarService] safeStorage quota warning for directDataUrl:', quotaErr);
       }
     } else if (keyOrUrl.startsWith('data:image') || keyOrUrl.startsWith('blob:')) {
       try {
-        localStorage.setItem('user_avatar_data_url', keyOrUrl);
+        safeStorage.setItem('user_avatar_data_url', keyOrUrl);
       } catch (quotaErr) {
-        console.warn('[userAvatarService] localStorage quota warning for keyOrUrl dataUrl:', quotaErr);
+        console.warn('[userAvatarService] safeStorage quota warning for keyOrUrl dataUrl:', quotaErr);
       }
     }
 
-    localStorage.setItem('user_custom_avatar', formattedUrl);
-    localStorage.setItem('user_profile_avatar_key', keyOrUrl);
+    safeStorage.setItem('user_custom_avatar', formattedUrl);
+    safeStorage.setItem('user_profile_avatar_key', keyOrUrl);
 
     // Sync into eduai_chat_current_user
     try {
-      const rawCurrent = localStorage.getItem('eduai_chat_current_user');
+      const rawCurrent = safeStorage.getItem('eduai_chat_current_user');
       if (rawCurrent) {
         const currentUser = JSON.parse(rawCurrent);
         currentUser.avatar = formattedUrl;
-        localStorage.setItem('eduai_chat_current_user', JSON.stringify(currentUser));
+        safeStorage.setItem('eduai_chat_current_user', JSON.stringify(currentUser));
       }
     } catch {
       // Ignore
@@ -114,7 +115,7 @@ export function saveUserAvatarLocally(keyOrUrl: string, directDataUrl?: string) 
 
     // Sync into eduai_chat_users
     try {
-      const raw = localStorage.getItem('eduai_chat_users');
+      const raw = safeStorage.getItem('eduai_chat_users');
       const users = raw ? JSON.parse(raw) : [];
       if (Array.isArray(users)) {
         let updated = false;
@@ -125,7 +126,7 @@ export function saveUserAvatarLocally(keyOrUrl: string, directDataUrl?: string) 
           }
         });
         if (updated) {
-          localStorage.setItem('eduai_chat_users', JSON.stringify(users));
+          safeStorage.setItem('eduai_chat_users', JSON.stringify(users));
         }
       }
     } catch {
@@ -142,17 +143,17 @@ export function saveUserAvatarLocally(keyOrUrl: string, directDataUrl?: string) 
 
 export function removeUserAvatarLocally() {
   try {
-    localStorage.removeItem('user_avatar_data_url');
-    localStorage.removeItem('user_custom_avatar');
-    localStorage.removeItem('user_profile_avatar_key');
+    safeStorage.removeItem('user_avatar_data_url');
+    safeStorage.removeItem('user_custom_avatar');
+    safeStorage.removeItem('user_profile_avatar_key');
 
     // Reset in chat
     try {
-      const rawCurrent = localStorage.getItem('eduai_chat_current_user');
+      const rawCurrent = safeStorage.getItem('eduai_chat_current_user');
       if (rawCurrent) {
         const currentUser = JSON.parse(rawCurrent);
         delete currentUser.avatar;
-        localStorage.setItem('eduai_chat_current_user', JSON.stringify(currentUser));
+        safeStorage.setItem('eduai_chat_current_user', JSON.stringify(currentUser));
       }
     } catch {}
 
@@ -195,13 +196,13 @@ export function useUserAvatar(user?: any): string | null {
           if (!error && data?.avatar_url && isMounted) {
             const resolved = getPublicAvatarUrl(data.avatar_url);
             if (resolved) {
-              const currentDataUrl = localStorage.getItem('user_avatar_data_url');
+              const currentDataUrl = safeStorage.getItem('user_avatar_data_url');
               // Only override state if we do not already have an instant data URL preview
               if (!currentDataUrl || (!currentDataUrl.startsWith('data:image') && !currentDataUrl.startsWith('blob:'))) {
                 setAvatarUrl(resolved);
               }
-              localStorage.setItem('user_custom_avatar', resolved);
-              localStorage.setItem('user_profile_avatar_key', data.avatar_url);
+              safeStorage.setItem('user_custom_avatar', resolved);
+              safeStorage.setItem('user_profile_avatar_key', data.avatar_url);
             }
           }
         } catch {

@@ -1,5 +1,6 @@
 import React, { Component, ErrorInfo, ReactNode } from 'react';
 import { AlertTriangle, RotateCcw, Home } from 'lucide-react';
+import { safeStorage, safeSessionStorage } from '../lib/safeStorage';
 
 interface Props {
   children: ReactNode;
@@ -38,13 +39,15 @@ export class ErrorBoundary extends Component<Props, State> {
 
   private handleReset = () => {
     try {
-      sessionStorage.removeItem('edu_ai_current_view');
-      sessionStorage.removeItem('edu_ai_active_book');
-      localStorage.removeItem('edu_ai_current_view');
-      localStorage.removeItem('edu_ai_active_book');
+      safeSessionStorage.removeItem('edu_ai_current_view');
+      safeSessionStorage.removeItem('edu_ai_active_book');
+      safeStorage.removeItem('edu_ai_current_view');
+      safeStorage.removeItem('edu_ai_active_book');
     } catch (_) {}
     this.setState({ hasError: false, error: null });
-    window.location.href = window.location.origin;
+    try {
+      window.location.reload();
+    } catch (_) {}
   };
 
   public render() {
@@ -82,12 +85,14 @@ export class ErrorBoundary extends Component<Props, State> {
               <button
                 onClick={() => {
                   try {
-                    sessionStorage.removeItem('edu_ai_current_view');
-                    sessionStorage.removeItem('edu_ai_active_book');
-                    localStorage.removeItem('edu_ai_current_view');
-                    localStorage.removeItem('edu_ai_active_book');
+                    safeSessionStorage.removeItem('edu_ai_current_view');
+                    safeSessionStorage.removeItem('edu_ai_active_book');
+                    safeStorage.removeItem('edu_ai_current_view');
+                    safeStorage.removeItem('edu_ai_active_book');
                   } catch (_) {}
-                  window.location.reload();
+                  try {
+                    window.location.reload();
+                  } catch (_) {}
                 }}
                 className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-medium rounded-xl text-sm transition-all flex items-center justify-center gap-2 cursor-pointer"
               >

@@ -1,6 +1,7 @@
 // Edu AI - High-Performance IndexedDB Storage & Local Sync Layer
 import { Book, Bookmark, Highlight } from '../types';
 import { supabase } from './supabase';
+import { safeStorage } from './safeStorage';
 
 const DB_NAME = 'EduAiOfflineDB';
 const DB_VERSION = 2;
@@ -230,14 +231,14 @@ export async function saveReadingProgressLocal(
     console.warn('[Edu AI IDB] Could not save progress to IndexedDB:', err);
   }
 
-  // 2. Mirror to localStorage as instant sync fallback
+  // 2. Mirror to safeStorage as instant sync fallback
   try {
-    localStorage.setItem(`book_progress_${bookId}`, boundedProgress.toString());
+    safeStorage.setItem(`book_progress_${bookId}`, boundedProgress.toString());
     if (currentPage) {
-      localStorage.setItem(`book_page_${bookId}`, currentPage.toString());
+      safeStorage.setItem(`book_page_${bookId}`, currentPage.toString());
     }
   } catch {
-    // Ignore storage quota limits on localStorage
+    // Ignore storage quota limits on safeStorage
   }
 
   // 3. Cloud synchronization
@@ -305,9 +306,9 @@ export async function getReadingProgressLocal(bookId: string): Promise<ReadingPr
         if (request.result) {
           resolve(request.result as ReadingProgressRecord);
         } else {
-          // Fallback to localStorage
-          const savedProgress = localStorage.getItem(`book_progress_${bookId}`);
-          const savedPage = localStorage.getItem(`book_page_${bookId}`);
+          // Fallback to safeStorage
+          const savedProgress = safeStorage.getItem(`book_progress_${bookId}`);
+          const savedPage = safeStorage.getItem(`book_page_${bookId}`);
           if (savedProgress !== null) {
             resolve({
               bookId,
@@ -324,7 +325,7 @@ export async function getReadingProgressLocal(bookId: string): Promise<ReadingPr
 
       request.onerror = () => {
         // Fallback on error
-        const savedProgress = localStorage.getItem(`book_progress_${bookId}`);
+        const savedProgress = safeStorage.getItem(`book_progress_${bookId}`);
         if (savedProgress !== null) {
           resolve({
             bookId,
@@ -338,7 +339,7 @@ export async function getReadingProgressLocal(bookId: string): Promise<ReadingPr
       };
     });
   } catch {
-    const savedProgress = localStorage.getItem(`book_progress_${bookId}`);
+    const savedProgress = safeStorage.getItem(`book_progress_${bookId}`);
     if (savedProgress !== null) {
       return {
         bookId,
@@ -424,8 +425,8 @@ export async function deleteReadingProgressLocal(bookId: string): Promise<void> 
   }
 
   try {
-    localStorage.removeItem(`book_progress_${bookId}`);
-    localStorage.removeItem(`book_page_${bookId}`);
+    safeStorage.removeItem(`book_progress_${bookId}`);
+    safeStorage.removeItem(`book_page_${bookId}`);
   } catch {
     // Ignore
   }
@@ -511,10 +512,10 @@ export async function saveHighlightLocal(highlight: Highlight): Promise<void> {
     console.warn('[Edu AI IDB] Failed to save highlight to IndexedDB:', err);
   }
 
-  // Fallback to localStorage cache
+  // Fallback to safeStorage cache
   try {
     const key = `edu_highlights_${highlight.bookId}`;
-    const raw = localStorage.getItem(key);
+    const raw = safeStorage.getItem(key);
     const list: Highlight[] = raw ? JSON.parse(raw) : [];
     const idx = list.findIndex((h) => h.id === highlight.id);
     if (idx >= 0) {
@@ -522,7 +523,7 @@ export async function saveHighlightLocal(highlight: Highlight): Promise<void> {
     } else {
       list.push(highlight);
     }
-    localStorage.setItem(key, JSON.stringify(list));
+    safeStorage.setItem(key, JSON.stringify(list));
   } catch {
     // Ignore
   }
@@ -559,10 +560,10 @@ export async function getHighlightsLocal(bookId?: string): Promise<Highlight[]> 
         }
       };
       request.onerror = () => {
-        // Fallback to localStorage
+        // Fallback to safeStorage
         if (bookId) {
           try {
-            const raw = localStorage.getItem(`edu_highlights_${bookId}`);
+            const raw = safeStorage.getItem(`edu_highlights_${bookId}`);
             resolve(raw ? JSON.parse(raw) : []);
           } catch {
             resolve([]);
@@ -575,7 +576,7 @@ export async function getHighlightsLocal(bookId?: string): Promise<Highlight[]> 
   } catch {
     if (bookId) {
       try {
-        const raw = localStorage.getItem(`edu_highlights_${bookId}`);
+        const raw = safeStorage.getItem(`edu_highlights_${bookId}`);
         return raw ? JSON.parse(raw) : [];
       } catch {
         return [];
@@ -604,10 +605,10 @@ export async function deleteHighlightLocal(id: string, bookId?: string): Promise
   if (bookId) {
     try {
       const key = `edu_highlights_${bookId}`;
-      const raw = localStorage.getItem(key);
+      const raw = safeStorage.getItem(key);
       if (raw) {
         const list: Highlight[] = JSON.parse(raw);
-        localStorage.setItem(key, JSON.stringify(list.filter((h) => h.id !== id)));
+        safeStorage.setItem(key, JSON.stringify(list.filter((h) => h.id !== id)));
       }
     } catch {
       // Ignore

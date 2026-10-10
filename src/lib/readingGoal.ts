@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { safeStorage } from './safeStorage';
 
 export type GoalType = 'time' | 'pages';
 
@@ -76,7 +77,7 @@ export function getDailyGoal(): DailyReadingGoal {
   const yesterdayStr = getYesterdayString();
 
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = safeStorage.getItem(STORAGE_KEY);
     if (!raw) {
       const initial: DailyReadingGoal = {
         type: 'time',
@@ -88,7 +89,7 @@ export function getDailyGoal(): DailyReadingGoal {
         lastCompletedDate: yesterdayStr,
         history: generateInitialHistory(todayStr, yesterdayStr),
       };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+      safeStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
       return initial;
     }
 
@@ -125,7 +126,7 @@ export function getDailyGoal(): DailyReadingGoal {
         type: parsed.type,
       };
 
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+      safeStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
     }
 
     return parsed;
@@ -145,7 +146,7 @@ export function getDailyGoal(): DailyReadingGoal {
 
 export function saveDailyGoal(goal: DailyReadingGoal, syncCloud = true): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(goal));
+    safeStorage.setItem(STORAGE_KEY, JSON.stringify(goal));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(GOAL_EVENT_NAME, { detail: goal }));
     }

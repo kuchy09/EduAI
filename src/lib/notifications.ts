@@ -1,4 +1,5 @@
 import { ViewState } from '../types';
+import { safeStorage } from './safeStorage';
 
 export type NotificationType = 'platform' | 'teacher' | 'ai_study' | 'peer' | 'system_alert';
 export type NotificationPriority = 'urgent' | 'high' | 'normal' | 'low';
@@ -199,14 +200,14 @@ const STORAGE_KEY = 'edu_ai_notifications_v3';
 
 export function getStoredNotifications(): AppNotification[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = safeStorage.getItem(STORAGE_KEY);
     if (!raw) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
+      safeStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
       return INITIAL_NOTIFICATIONS;
     }
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
+      safeStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
       return INITIAL_NOTIFICATIONS;
     }
     return parsed;
@@ -217,7 +218,7 @@ export function getStoredNotifications(): AppNotification[] {
 
 export function saveStoredNotifications(notifs: AppNotification[]) {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(notifs));
+    safeStorage.setItem(STORAGE_KEY, JSON.stringify(notifs));
     // Trigger custom event so header and other components update instantly
     window.dispatchEvent(new Event('notifications_updated'));
   } catch (e) {
