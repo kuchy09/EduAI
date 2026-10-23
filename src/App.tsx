@@ -868,7 +868,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-            className="fixed inset-0 z-50 bg-[#F4ECD8] dark:bg-[#1C1C1E] transition-colors duration-250"
+            className="fixed inset-0 z-50 bg-[#F4ECD8] dark:bg-[#121212] transition-colors duration-250 main-canvas-bg"
           >
             <Reader 
               book={activeBook} 
@@ -889,7 +889,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.2 }}
-            className="flex min-h-screen min-h-[100dvh] flex-1 bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-50 border-x border-slate-50 dark:border-slate-950 w-full max-w-full overflow-x-hidden"
+            className="flex min-h-screen min-h-[100dvh] flex-1 bg-slate-50 dark:bg-[#121212] font-sans text-slate-900 dark:text-[#EDEDED] border-x border-slate-50 dark:border-[#121212] w-full max-w-full overflow-x-hidden main-canvas-bg"
           >
             <Sidebar 
               currentView={currentView} 

@@ -884,15 +884,15 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
 
   const themeClasses: Record<string, string> = {
     sepia: 'bg-[#F4ECD8] text-[#2C2925]',
-    dark: 'bg-[#1C1C1E] text-[#D1D1D6]',
+    dark: 'bg-[#121212] text-[#EDEDED]',
     amoled: 'bg-black text-[#E5E5EA]'
   };
 
   return (
-    <div className={`fixed inset-0 z-50 flex flex-col ${fontFamily === 'serif' ? 'font-serif' : 'font-sans'} ${themeClasses[theme]} transition-colors duration-250`}>
+    <div className={`fixed inset-0 z-50 flex flex-col ${fontFamily === 'serif' ? 'font-serif' : 'font-sans'} ${themeClasses[theme]} transition-colors duration-250 main-canvas-bg`}>
       {/* Reader Header */}
       <header className={`h-16 backdrop-blur-2xl backdrop-saturate-150 border-b flex items-center justify-between px-4 sticky top-0 shrink-0 font-sans z-30 transition-colors duration-250 ${
-        theme === 'dark' ? 'bg-[#1C1C1E]/80 border-[#2C2C2E]/80 text-[#D1D1D6]' : 
+        theme === 'dark' ? 'bg-[#121212]/85 border-white/10 text-[#EDEDED]' : 
         theme === 'amoled' ? 'bg-black/80 border-stone-800 text-[#E5E5EA]' :
         'bg-[#F4ECD8]/85 border-stone-300/60 text-[#2C2925]'
       }`}>
@@ -1219,7 +1219,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
       <div 
         className={`pointer-events-none fixed bottom-0 inset-x-0 h-36 z-30 transition-colors duration-300 ${
           theme === 'dark' 
-            ? 'bg-gradient-to-t from-[#1C1C1E] via-[#1C1C1E]/85 to-transparent' 
+            ? 'bg-gradient-to-t from-[#121212] via-[#121212]/85 to-transparent' 
             : theme === 'amoled' 
               ? 'bg-gradient-to-t from-black via-black/90 to-transparent' 
               : 'bg-gradient-to-t from-[#F4ECD8] via-[#F4ECD8]/85 to-transparent'

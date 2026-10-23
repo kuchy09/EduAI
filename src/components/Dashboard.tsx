@@ -242,7 +242,7 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
         animate={{ opacity: 1, y: 0 }}
         whileHover={{ y: -1 }}
         transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-        className="group relative overflow-hidden rounded-2xl sm:rounded-3xl bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800/90 p-3 sm:p-5 md:p-6 lg:p-7 shadow-sm hover:shadow-md transition-all duration-300 w-full max-w-full min-w-0 box-border"
+        className="group relative overflow-hidden rounded-2xl sm:rounded-3xl bg-white dark:bg-[#181818] border border-slate-200/90 dark:border-[#282828] p-3 sm:p-5 md:p-6 lg:p-7 shadow-sm hover:shadow-md transition-all duration-300 w-full max-w-full min-w-0 box-border contrast-blocked-card plan-card"
       >
         {/* Subtle accent specular gradient bar */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-brand-500 via-indigo-500 to-emerald-500" />
@@ -255,7 +255,7 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
             {/* User Avatar / Initials with elastic sizing */}
             <button 
               onClick={() => onNavigate?.('profile')}
-              className="relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl sm:rounded-2xl ring-2 ring-brand-500/20 dark:ring-brand-400/20 p-0.5 shadow-sm overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform bg-slate-100 dark:bg-slate-800 inline-flex items-center justify-center align-middle"
+              className="relative w-10 h-10 sm:w-12 sm:h-12 md:w-14 md:h-14 rounded-xl sm:rounded-2xl ring-2 ring-brand-500/20 dark:ring-brand-400/20 p-0.5 shadow-sm overflow-hidden shrink-0 cursor-pointer hover:scale-105 active:scale-95 transition-transform bg-slate-100 dark:bg-[#202020] inline-flex items-center justify-center align-middle"
               title="View & Edit Profile"
             >
               {avatarUrl && !avatarFailed ? (
@@ -278,7 +278,7 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
                 {/* Subject Check Pill */}
                 <button
                   onClick={() => setIsSubjectModalOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200/80 dark:border-emerald-800/80 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer group/btn shrink-0"
+                  className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-0.5 sm:py-1 rounded-full text-[11px] sm:text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800/60 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition-colors cursor-pointer group/btn shrink-0"
                   title="Click to perform Subject Check & view modules"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 group-hover/btn:scale-110 transition-transform" />
@@ -287,37 +287,37 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
                 </button>
 
                 {/* User's Name */}
-                <span className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-400 truncate max-w-full">
-                  • <strong className="font-semibold text-slate-700 dark:text-slate-300">{fullName}</strong>
+                <span className="text-xs sm:text-sm font-medium text-slate-500 dark:text-[#A0A0A0] truncate max-w-full">
+                  • <strong className="font-semibold text-slate-700 dark:text-[#EDEDED]">{fullName}</strong>
                 </span>
               </div>
 
               {/* Exact user request sentence: "Welcome to Edu AI. You've completed.....modules this week" */}
-              <h2 className="text-sm xs:text-base sm:text-lg md:text-xl font-semibold text-slate-900 dark:text-slate-100 flex flex-wrap items-baseline gap-x-2 gap-y-1 leading-snug sm:leading-tight">
+              <h2 className="text-sm xs:text-base sm:text-lg md:text-xl font-semibold text-slate-900 dark:text-[#EDEDED] flex flex-wrap items-baseline gap-x-2 gap-y-1 leading-snug sm:leading-tight">
                 <span>Welcome to Edu AI.</span>
-                <span className="text-brand-600 dark:text-brand-400 font-bold">
+                <span className="text-brand-600 dark:text-[#8a70d6] font-bold">
                   You've completed {completedModules} modules this week
                 </span>
-                <span className="text-[11px] sm:text-xs font-normal text-slate-500 dark:text-slate-400 shrink-0">
+                <span className="text-[11px] sm:text-xs font-normal text-slate-500 dark:text-[#A0A0A0] shrink-0">
                   ({Math.round((completedModules / weeklyTarget) * 100)}% of weekly goal)
                 </span>
               </h2>
 
-              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-[#A0A0A0] flex flex-wrap items-center gap-x-2 gap-y-1">
                 <span>
                   {completedModules >= weeklyTarget 
                     ? '🎉 Weekly module milestone achieved!' 
                     : `${weeklyTarget - completedModules} more module${weeklyTarget - completedModules === 1 ? '' : 's'} to hit your 5-module target.`}
                 </span>
                 {continueReading.length > 0 && (
-                  <span className="hidden sm:inline-flex items-center gap-1 text-slate-400 dark:text-slate-600 truncate max-w-xs md:max-w-sm lg:max-w-md">
-                    • In progress: <strong className="font-medium text-slate-700 dark:text-slate-300 truncate">"{continueReading[0].title}"</strong>
+                  <span className="hidden sm:inline-flex items-center gap-1 text-slate-400 dark:text-[#8E8E93] truncate max-w-xs md:max-w-sm lg:max-w-md">
+                    • In progress: <strong className="font-medium text-slate-700 dark:text-[#EDEDED] truncate">"{continueReading[0].title}"</strong>
                   </span>
                 )}
               </p>
 
               {/* Elastic fluid module progress bar */}
-              <div className="w-full max-w-md lg:max-w-lg bg-slate-100 dark:bg-slate-800/80 rounded-full h-1.5 sm:h-2 overflow-hidden mt-1.5">
+              <div className="w-full max-w-md lg:max-w-lg bg-slate-100 dark:bg-[#242424] rounded-full h-1.5 sm:h-2 overflow-hidden mt-1.5">
                 <motion.div 
                   className="h-full bg-gradient-to-r from-brand-500 via-indigo-500 to-emerald-500 rounded-full"
                   initial={{ width: 0 }}
@@ -329,15 +329,15 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
           </div>
 
           {/* Right section: Horizontally aligned on the same line */}
-          <div className="flex flex-row items-center gap-1.5 sm:gap-2.5 lg:gap-3 w-full sm:w-auto shrink-0 justify-start sm:justify-end flex-wrap sm:flex-nowrap pt-2 sm:pt-0 border-t border-slate-100 dark:border-slate-800/80 sm:border-0">
+          <div className="flex flex-row items-center gap-1.5 sm:gap-2.5 lg:gap-3 w-full sm:w-auto shrink-0 justify-start sm:justify-end flex-wrap sm:flex-nowrap pt-2 sm:pt-0 border-t border-slate-100 dark:border-[#282828] sm:border-0">
             {/* Mini Progress & Streak Pills */}
-            <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-50 dark:bg-slate-800/80 px-2 sm:px-2.5 md:px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-xs sm:text-sm shrink-0">
+            <div className="flex items-center gap-1.5 sm:gap-2 bg-slate-50 dark:bg-[#202020] px-2 sm:px-2.5 md:px-3 py-1.5 rounded-xl border border-slate-200/60 dark:border-white/10 text-xs sm:text-sm shrink-0">
               <div className="flex items-center gap-1 text-amber-600 dark:text-amber-400 font-semibold" title="Reading streak">
                 <Flame className="w-3.5 h-3.5 fill-amber-500 text-amber-500" />
                 <span>{metrics.streakDays}d</span>
               </div>
-              <div className="w-px h-3.5 bg-slate-200 dark:bg-slate-700" />
-              <div className="flex items-center gap-1.5 text-slate-600 dark:text-slate-300">
+              <div className="w-px h-3.5 bg-slate-200 dark:bg-white/10" />
+              <div className="flex items-center gap-1.5 text-slate-600 dark:text-[#EDEDED]">
                 <Target className="w-3.5 h-3.5 text-brand-500" />
                 <span className="font-medium hidden sm:inline">{completedModules}/{weeklyTarget} modules</span>
                 <span className="font-medium sm:hidden">{completedModules}/{weeklyTarget}m</span>

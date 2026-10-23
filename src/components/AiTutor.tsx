@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Send, Plus, MessageSquare, Trash2, Menu, Calendar, 
   Sparkles, Clock, Copy, Check, Volume2, VolumeX, Lightbulb, 
-  HelpCircle, Compass, BookOpen, Layers, ArrowUp, Zap, ChevronDown
+  HelpCircle, Compass, BookOpen, Layers, ArrowUp, Zap, ChevronDown,
+  Mic, MicOff, FileText, X, AudioLines, Square
 } from 'lucide-react';
 import { AstroidIcon } from './icons/AstroidIcon';
 import { motion, AnimatePresence } from 'motion/react';
@@ -80,7 +81,337 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // File Upload State
+  const [attachedFile, setAttachedFile] = useState<{
+    name: string;
+    size: string;
+    content?: string;
+    type: string;
+  } | null>(null);
+
+  // Web Speech API Voice Input State
+  const [isListening, setIsListening] = useState(false);
+  const [speechSupported, setSpeechSupported] = useState(false);
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (SpeechRecognitionClass) {
+      setSpeechSupported(true);
+      try {
+        const recognizer = new SpeechRecognitionClass();
+        recognizer.continuous = false;
+        recognizer.interimResults = false;
+        recognizer.lang = 'en-US';
+
+        recognizer.onresult = (event: any) => {
+          const transcript = event.results?.[0]?.[0]?.transcript;
+          if (transcript) {
+            setInput(prev => (prev ? `${prev.trim()} ${transcript}` : transcript));
+          }
+          setIsListening(false);
+        };
+
+        recognizer.onerror = (err: any) => {
+          console.warn('SpeechRecognition error:', err);
+          setIsListening(false);
+        };
+
+        recognizer.onend = () => {
+          setIsListening(false);
+        };
+
+        recognitionRef.current = recognizer;
+      } catch (err) {
+        console.warn('Speech recognition init error:', err);
+      }
+    }
+  }, []);
+
+  const toggleVoiceInput = () => {
+    if (!speechSupported || !recognitionRef.current) {
+      console.warn('Speech recognition is not available in this browser environment.');
+      return;
+    }
+    if (isListening) {
+      try {
+        recognitionRef.current.stop();
+      } catch (_) {}
+      setIsListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+        setIsListening(true);
+      } catch (err) {
+        console.warn('Speech recognition start error:', err);
+        setIsListening(false);
+      }
+    }
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const sizeFormatted = file.size < 1024 
+      ? `${file.size} B` 
+      : file.size < 1024 * 1024 
+      ? `${(file.size / 1024).toFixed(1)} KB` 
+      : `${(file.size / (1024 * 1024)).toFixed(1)} MB`;
+
+    if (
+      file.type.startsWith('text/') || 
+      file.name.endsWith('.txt') || 
+      file.name.endsWith('.md') || 
+      file.name.endsWith('.csv') || 
+      file.name.endsWith('.json')
+    ) {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        const textContent = (event.target?.result as string) || '';
+        setAttachedFile({
+          name: file.name,
+          size: sizeFormatted,
+          content: textContent.slice(0, 8000),
+          type: file.type || 'text/plain'
+        });
+      };
+      reader.readAsText(file);
+    } else {
+      setAttachedFile({
+        name: file.name,
+        size: sizeFormatted,
+        type: file.type || 'document'
+      });
+    }
+
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+    inputRef.current?.focus();
+  };
+
+  // Auto-resize textarea to fit text dynamically up to 100px max height (Manus AI / Cursor style)
+  useEffect(() => {
+    const textarea = inputRef.current;
+    if (!textarea) return;
+
+    // Reset height to auto to measure scrollHeight accurately
+    textarea.style.height = 'auto';
+    const scrollHeight = textarea.scrollHeight;
+
+    if (scrollHeight > 100) {
+      textarea.style.height = '100px';
+      textarea.style.overflowY = 'auto';
+    } else {
+      textarea.style.height = `${Math.max(scrollHeight, 40)}px`;
+      textarea.style.overflowY = 'hidden';
+    }
+  }, [input]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
+
+  // Interactive Voice Chat with Sage (Talk Back & Interactive Loop) State
+  const [isVoiceChatOpen, setIsVoiceChatOpen] = useState(false);
+  const [voiceChatStatus, setVoiceChatStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [voiceLiveTranscript, setVoiceLiveTranscript] = useState('');
+  const [voiceLastAiReply, setVoiceLastAiReply] = useState('');
+  const voiceRecognitionRef = useRef<any>(null);
+
+  // Speak Sage's voice aloud and resume listening once speech completes
+  const speakSageVoice = (text: string, onComplete?: () => void) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setVoiceChatStatus('listening');
+      startVoiceChatListening();
+      return;
+    }
+
+    window.speechSynthesis.cancel();
+    setVoiceChatStatus('speaking');
+
+    // Clean text of markdown, latex, and URLs for natural audio speech
+    const cleanSpeech = text
+      .replace(/[*_#`~[\]]/g, '')
+      .replace(/\$\$[\s\S]*?\$\$/g, ' mathematical formula ')
+      .replace(/\$[^$]*\$/g, ' formula ')
+      .replace(/https?:\/\/\S+/g, '')
+      .replace(/\n+/g, ' ')
+      .trim();
+
+    const utterance = new SpeechSynthesisUtterance(cleanSpeech || "I am ready for your next question.");
+    utterance.rate = 1.05;
+    utterance.pitch = 1.0;
+    utterance.lang = 'en-US';
+
+    utterance.onend = () => {
+      setVoiceChatStatus('listening');
+      startVoiceChatListening();
+      if (onComplete) onComplete();
+    };
+
+    utterance.onerror = () => {
+      setVoiceChatStatus('listening');
+      startVoiceChatListening();
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  // Start listening for user speech in Interactive Voice Chat
+  const startVoiceChatListening = () => {
+    const SpeechRecognitionClass = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognitionClass) {
+      console.warn("Speech recognition is not supported in this browser.");
+      return;
+    }
+
+    try {
+      if (voiceRecognitionRef.current) {
+        voiceRecognitionRef.current.abort();
+      }
+
+      const recognizer = new SpeechRecognitionClass();
+      recognizer.continuous = false;
+      recognizer.interimResults = true;
+      recognizer.lang = 'en-US';
+
+      recognizer.onstart = () => {
+        setVoiceChatStatus('listening');
+      };
+
+      recognizer.onresult = (event: any) => {
+        let interim = '';
+        let final = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+        const text = final || interim;
+        setVoiceLiveTranscript(text);
+      };
+
+      recognizer.onend = () => {
+        setVoiceLiveTranscript(prev => {
+          if (prev && prev.trim().length > 1) {
+            handleVoiceChatMessage(prev.trim());
+          } else {
+            setVoiceChatStatus('listening');
+          }
+          return '';
+        });
+      };
+
+      recognizer.onerror = (err: any) => {
+        console.warn('Voice chat recognition error:', err);
+        setVoiceChatStatus('listening');
+      };
+
+      voiceRecognitionRef.current = recognizer;
+      recognizer.start();
+    } catch (e) {
+      console.warn('Failed to start voice chat listening:', e);
+    }
+  };
+
+  // Handle sending and receiving speech in interactive voice chat
+  const handleVoiceChatMessage = async (userPrompt: string) => {
+    if (!userPrompt || !activeSession) return;
+
+    setVoiceChatStatus('thinking');
+    const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userPrompt };
+
+    setSessions(prev => prev.map(s => {
+      if (s.id === activeSession.id) {
+        return {
+          ...s,
+          title: s.title === 'Introduction with Sage' || s.title === 'New Conversation' ? userPrompt.slice(0, 25) : s.title,
+          messages: [...s.messages, userMessage]
+        };
+      }
+      return s;
+    }));
+
+    try {
+      const allowDataCollection = JSON.parse(localStorage.getItem('privacy_data') ?? 'true');
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt: userPrompt,
+          provider: provider,
+          history: [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
+          allowDataCollection
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        const replyText = data.reply || "I'm listening and ready to help. What would you like to explore next?";
+        setVoiceLastAiReply(replyText);
+
+        setSessions(prev => prev.map(s => {
+          if (s.id === activeSession.id) {
+            return {
+              ...s,
+              messages: [...s.messages, { id: Date.now().toString() + 'ai', role: 'assistant', content: replyText }]
+            };
+          }
+          return s;
+        }));
+
+        // Sage TALKS BACK aloud to user!
+        speakSageVoice(replyText);
+      } else {
+        const fallback = "I encountered an issue processing that. Please try asking again.";
+        setVoiceLastAiReply(fallback);
+        speakSageVoice(fallback);
+      }
+    } catch {
+      const networkError = "I'm having trouble connecting to the network right now. Please try again.";
+      setVoiceLastAiReply(networkError);
+      speakSageVoice(networkError);
+    }
+  };
+
+  // Launch Interactive Voice Chat Session
+  const handleOpenVoiceChat = () => {
+    setIsVoiceChatOpen(true);
+    if (input.trim()) {
+      const promptToUse = input.trim();
+      setInput('');
+      handleVoiceChatMessage(promptToUse);
+    } else {
+      const greeting = `Hello ${firstName}! I'm Sage. What would you like to discuss today? I'm listening.`;
+      setVoiceLastAiReply(greeting);
+      speakSageVoice(greeting);
+    }
+  };
+
+  // End Interactive Voice Chat Session
+  const handleCloseVoiceChat = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    if (voiceRecognitionRef.current) {
+      try {
+        voiceRecognitionRef.current.abort();
+      } catch (_) {}
+    }
+    setIsVoiceChatOpen(false);
+    setVoiceChatStatus('idle');
+    setVoiceLiveTranscript('');
+  };
 
   const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'Learner';
   const fieldOfStudy = user?.user_metadata?.field_of_study || 'Education';
@@ -257,8 +588,18 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
 
   const handleSubmit = async (e?: React.FormEvent, directPrompt?: string) => {
     if (e) e.preventDefault();
-    const promptToSend = (directPrompt || input).trim();
-    if (!promptToSend || !activeSession || isGenerating) return;
+    const rawPrompt = (directPrompt || input).trim();
+    if ((!rawPrompt && !attachedFile) || !activeSession || isGenerating) return;
+
+    let promptToSend = rawPrompt;
+    if (attachedFile) {
+      if (attachedFile.content) {
+        promptToSend = `[Attached File: ${attachedFile.name}]\n\`\`\`\n${attachedFile.content}\n\`\`\`\n\n${rawPrompt || 'Please analyze this uploaded document and explain its key takeaways.'}`;
+      } else {
+        promptToSend = `[Attached File: ${attachedFile.name} (${attachedFile.size})]\n\n${rawPrompt || 'Please explain and provide study notes on this uploaded document.'}`;
+      }
+      setAttachedFile(null);
+    }
 
     setInput('');
     setIsGenerating(true);
@@ -390,11 +731,11 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
   ];
 
   const SidebarContent = () => (
-    <div className="flex flex-col h-full bg-slate-50 dark:bg-slate-900 border-r border-slate-200/60 dark:border-slate-800 font-sans select-none">
-      <div className="p-4 border-b border-slate-200/50 dark:border-slate-800 shrink-0">
+    <div className="flex flex-col h-full bg-slate-50 dark:bg-[#161616]/75 dark:backdrop-blur-xl border-r border-slate-200/60 dark:border-white/10 font-sans select-none sidebar-pane">
+      <div className="p-4 border-b border-slate-200/50 dark:border-white/10 shrink-0">
         <button
           onClick={handleStartNewChat}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 dark:bg-brand-600 hover:bg-slate-800 dark:hover:bg-brand-500 text-white font-semibold text-sm rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-[0.99] cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 dark:bg-indigo-600/80 hover:bg-slate-800 dark:hover:bg-indigo-600 text-white font-semibold text-sm rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-[0.99] cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>New Chat Session</span>
@@ -418,14 +759,14 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
               }}
               className={`group relative flex items-center gap-3 px-3 py-3 rounded-2xl cursor-pointer transition-all border ${
                 isActive
-                  ? 'bg-white dark:bg-slate-800 border-slate-200/80 dark:border-slate-700 shadow-sm text-slate-900 dark:text-white font-semibold'
-                  : 'bg-transparent border-transparent text-slate-600 dark:text-slate-300 hover:bg-slate-200/50 dark:hover:bg-slate-800/60 hover:text-slate-800 dark:hover:text-slate-200'
+                  ? 'bg-white dark:bg-[#1e1e1e] border-slate-200/80 dark:border-[#2f2f2f] shadow-sm text-slate-900 dark:text-[#EDEDED] font-semibold'
+                  : 'bg-transparent border-transparent text-slate-600 dark:text-[#A0A0A0] hover:bg-slate-200/50 dark:hover:bg-white/5 hover:text-slate-800 dark:hover:text-[#EDEDED]'
               }`}
             >
               <div className={`p-2 rounded-xl shrink-0 transition-colors ${
                 isActive 
                   ? 'bg-brand-600 text-white shadow-xs' 
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-500 group-hover:text-brand-600'
+                  : 'bg-slate-100 dark:bg-[#202020] text-slate-500 dark:text-[#8E8E93] group-hover:text-brand-600 dark:group-hover:text-[#EDEDED]'
               }`}>
                 <MessageSquare className="w-3.5 h-3.5" />
               </div>
@@ -434,7 +775,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                 <p className="text-xs font-medium truncate leading-normal" title={sessionItem.title}>
                   {sessionItem.title}
                 </p>
-                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 mt-0.5">
+                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-[#8E8E93] mt-0.5">
                   <Calendar className="w-2.5 h-2.5 shrink-0" />
                   <span>{sessionItem.createdAt}</span>
                 </div>
@@ -452,19 +793,19 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         })}
       </div>
 
-      <div className="p-4 border-t border-slate-200/50 dark:border-slate-800 shrink-0 bg-slate-100/40 dark:bg-slate-900/60 text-[11px] text-slate-400 flex items-center justify-between">
+      <div className="p-4 border-t border-slate-200/50 dark:border-white/10 shrink-0 bg-slate-100/40 dark:bg-[#141414] text-[11px] text-slate-400 dark:text-[#8E8E93] flex items-center justify-between">
         <span>Continuous Auto-Save</span>
-        <span className="font-bold text-slate-500 dark:text-slate-300">Edu AI Core</span>
+        <span className="font-bold text-slate-500 dark:text-[#D1D1D6]">Edu AI Core</span>
       </div>
     </div>
   );
 
   return (
-    <div className="flex h-full w-full bg-slate-50 dark:bg-slate-900 relative overflow-hidden font-sans">
+    <div className="flex h-full w-full bg-slate-50 dark:bg-[#121212] relative overflow-hidden font-sans main-canvas-bg">
       
       {/* Desktop Sidebar Panel */}
       <div 
-        className={`hidden md:flex flex-col h-full shrink-0 border-slate-200/70 dark:border-slate-800 transition-all duration-300 ease-in-out ${
+        className={`hidden md:flex flex-col h-full shrink-0 border-slate-200/70 dark:border-white/10 transition-all duration-300 ease-in-out ${
           isDesktopSidebarOpen ? 'w-72 border-r' : 'w-0 border-none overflow-hidden'
         }`}
       >
@@ -489,7 +830,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
               animate={{ translateX: '0%' }}
               exit={{ translateX: '-100%' }}
               transition={{ type: 'tween', duration: 0.25 }}
-              className="md:hidden fixed top-0 bottom-0 left-0 w-72 h-full bg-white dark:bg-slate-900 z-50 shadow-2xl"
+              className="md:hidden fixed top-0 bottom-0 left-0 w-72 h-full bg-white dark:bg-[#161616]/85 dark:backdrop-blur-2xl z-50 shadow-2xl border-r border-slate-200 dark:border-white/10 sidebar-pane"
             >
               <SidebarContent />
             </motion.div>
@@ -498,7 +839,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
       </AnimatePresence>
 
       {/* Main Study Companion Panel - Cool, Smooth & Modern Box */}
-      <div className="flex-1 flex flex-col h-full bg-gradient-to-b from-slate-50/90 via-white to-slate-50/70 dark:from-slate-900/90 dark:via-slate-900 dark:to-slate-950 relative overflow-hidden">
+      <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-[#121212] relative overflow-hidden main-canvas-bg">
 
         {/* Message Container Scroller */}
         <div className="flex-1 overflow-y-auto pt-6 pb-48 px-4 md:px-10 scroll-smooth relative">
@@ -513,10 +854,10 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                 </div>
 
                 <div className="text-center max-w-md space-y-1.5">
-                  <h3 className="text-xl font-bold font-display text-slate-900 dark:text-white">
+                  <h3 className="text-xl font-bold font-display text-slate-900 dark:text-[#EDEDED]">
                     What would you like to master today?
                   </h3>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-300 leading-relaxed">
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-[#A0A0A0] leading-relaxed">
                     Ask any question, derive mathematical formulas with LaTeX, or select an interactive starter below:
                   </p>
                 </div>
@@ -529,17 +870,17 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                       whileHover={{ scale: 1.02, y: -2 }}
                       whileTap={{ scale: 0.98 }}
                       onClick={() => handleSelectStarterPrompt(item.prompt)}
-                      className="text-left p-4 rounded-2xl bg-white dark:bg-slate-800/80 border border-slate-200/80 dark:border-slate-700/80 hover:border-brand-400 dark:hover:border-brand-500 shadow-xs hover:shadow-md transition-all group flex flex-col justify-between cursor-pointer"
+                      className="text-left p-4 rounded-2xl bg-white dark:bg-[#181818] border border-slate-200/80 dark:border-[#282828] hover:border-brand-400 dark:hover:border-white/20 shadow-xs hover:shadow-md transition-all group flex flex-col justify-between cursor-pointer"
                     >
                       <div className="flex items-center gap-2.5 mb-2">
-                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-slate-700 group-hover:bg-brand-50 dark:group-hover:bg-brand-950/60 transition-colors">
+                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-[#222222] group-hover:bg-brand-50 dark:group-hover:bg-brand-950/60 transition-colors">
                           {item.icon}
                         </div>
-                        <h4 className="text-xs font-bold text-slate-800 dark:text-white group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
+                        <h4 className="text-xs font-bold text-slate-800 dark:text-[#EDEDED] group-hover:text-brand-600 dark:group-hover:text-indigo-400 transition-colors">
                           {item.title}
                         </h4>
                       </div>
-                      <p className="text-[11px] text-slate-500 dark:text-slate-300 leading-relaxed">
+                      <p className="text-[11px] text-slate-500 dark:text-[#A0A0A0] leading-relaxed">
                         {item.desc}
                       </p>
                     </motion.button>
@@ -569,8 +910,8 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                       </div>
 
                       {/* AI Message Card */}
-                      <div className="flex-1 min-w-0 bg-white dark:bg-slate-800/90 rounded-3xl p-5 sm:p-6 border border-slate-200/70 dark:border-slate-700/80 shadow-xs space-y-3">
-                        <div className="gemini-markdown text-slate-800 dark:text-white text-[14.5px] sm:text-[15px] leading-relaxed select-text overflow-x-auto">
+                      <div className="flex-1 min-w-0 bg-white dark:bg-[#181818] rounded-3xl p-5 sm:p-6 border border-slate-200/70 dark:border-[#282828] shadow-xs space-y-3">
+                        <div className="gemini-markdown text-slate-800 dark:text-[#EDEDED] text-[14.5px] sm:text-[15px] leading-relaxed select-text overflow-x-auto">
                           <ReactMarkdown 
                             remarkPlugins={[remarkMath]}
                             rehypePlugins={[rehypeKatex]}
@@ -580,17 +921,17 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                         </div>
 
                         {/* Action Bar: Copy & Speak TTS */}
-                        <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-slate-700/60 text-slate-400">
+                        <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-white/10 text-slate-400 dark:text-[#8E8E93]">
                           <div className="flex items-center gap-1.5">
                             <button
                               onClick={() => handleCopyMessage(msg.id, msg.content)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg hover:bg-slate-100 dark:hover:bg-[#222222] text-slate-500 dark:text-[#A0A0A0] hover:text-slate-800 dark:hover:text-[#EDEDED] transition-colors cursor-pointer"
                               title="Copy response to clipboard"
                             >
                               {copiedMsgId === msg.id ? (
                                 <>
                                   <Check className="w-3.5 h-3.5 text-emerald-500" />
-                                  <span className="text-emerald-600 font-bold">Copied</span>
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-bold">Copied</span>
                                 </>
                               ) : (
                                 <>
@@ -605,7 +946,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                               className={`inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold rounded-lg transition-colors cursor-pointer ${
                                 speakingMsgId === msg.id
                                   ? 'bg-brand-50 dark:bg-brand-950/60 text-brand-600 dark:text-brand-400 font-bold'
-                                  : 'hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500 dark:text-slate-300 hover:text-slate-800 dark:hover:text-slate-200'
+                                  : 'hover:bg-slate-100 dark:hover:bg-[#222222] text-slate-500 dark:text-[#A0A0A0] hover:text-slate-800 dark:hover:text-[#EDEDED]'
                               }`}
                               title={speakingMsgId === msg.id ? "Stop voice playback" : "Listen with speech audio"}
                             >
@@ -623,7 +964,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                             </button>
                           </div>
 
-                          <span className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
+                          <span className="text-[10px] text-slate-400 dark:text-[#8E8E93] uppercase tracking-wider font-semibold">
                             Sage Tutor
                           </span>
                         </div>
@@ -644,13 +985,13 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                 <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-brand-600 to-indigo-600 flex items-center justify-center shrink-0 text-white shadow-sm animate-pulse mt-1">
                   <AstroidIcon className="w-4 h-4" />
                 </div>
-                <div className="bg-white dark:bg-slate-800/90 rounded-2xl px-5 py-4 border border-slate-200/70 dark:border-slate-700/80 shadow-xs flex items-center gap-2.5">
+                <div className="bg-white dark:bg-[#181818] rounded-2xl px-5 py-4 border border-slate-200/70 dark:border-[#282828] shadow-xs flex items-center gap-2.5">
                   <div className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-brand-500 animate-bounce" style={{ animationDelay: '0ms' }} />
                     <span className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '150ms' }} />
                     <span className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: '300ms' }} />
                   </div>
-                  <span className="text-xs font-semibold text-slate-500 dark:text-slate-300">
+                  <span className="text-xs font-semibold text-slate-500 dark:text-[#D1D1D6]">
                     Sage AI is thinking...
                   </span>
                 </div>
@@ -662,7 +1003,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         </div>
 
         {/* Floating Controls & Input Dock */}
-        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-slate-50 via-slate-50/95 to-transparent dark:from-slate-950 dark:via-slate-950/95 pt-8 pb-5 px-3 sm:px-6 z-20 pointer-events-none">
+        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-slate-50 via-slate-50/95 to-transparent dark:from-[#121212] dark:via-[#121212]/95 pt-8 pb-5 px-3 sm:px-6 z-20 pointer-events-none">
           <div className="max-w-3xl mx-auto flex flex-col items-center pointer-events-auto space-y-2.5">
             
             {/* Quick Prompt Helper Chips */}
@@ -672,48 +1013,132 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                   key={idx}
                   type="button"
                   onClick={() => handleSelectStarterPrompt(chip.prompt)}
-                  className="whitespace-nowrap px-3 py-1 text-[11px] font-semibold bg-white/90 dark:bg-slate-800/90 hover:bg-brand-50 dark:hover:bg-brand-950/50 hover:text-brand-700 dark:hover:text-brand-400 text-slate-600 dark:text-slate-300 rounded-full border border-slate-200/80 dark:border-slate-700/80 shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
+                  className="whitespace-nowrap px-3 py-1 text-[11px] font-semibold bg-white/90 dark:bg-[#181818] hover:bg-brand-50 dark:hover:bg-[#242424] hover:text-brand-700 dark:hover:text-[#EDEDED] text-slate-600 dark:text-[#D1D1D6] rounded-full border border-slate-200/80 dark:border-[#282828] shadow-xs transition-all active:scale-95 cursor-pointer shrink-0"
                 >
                   {chip.label}
                 </button>
               ))}
             </div>
 
-            {/* Input Capsule Box */}
+            {/* Input Capsule Box - Sleek Manus AI / Cursor style messaging bar */}
             <form 
               onSubmit={(e) => handleSubmit(e)}
-              className="relative flex items-center w-full bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-700/80 shadow-lg shadow-slate-200/50 dark:shadow-black/40 rounded-3xl p-1.5 sm:p-2 focus-within:border-brand-500 dark:focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20 transition-all backdrop-blur-xl"
+              className="relative flex flex-col w-full bg-white dark:bg-[#181818] border border-slate-200/90 dark:border-[#282828] shadow-xl shadow-slate-200/50 dark:shadow-black/60 rounded-2xl sm:rounded-3xl p-2 sm:p-2.5 focus-within:border-brand-500 dark:focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-500/20 transition-all backdrop-blur-xl"
             >
+              {/* Hidden File Input for Plus button */}
               <input
-                ref={inputRef}
-                type="text"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder="Ask Sage AI about concepts, formulas, book summaries..."
-                className="w-full bg-transparent border-none focus:ring-0 focus:outline-none pl-4 pr-24 py-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 text-sm font-medium"
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                onChange={handleFileUpload}
+                accept=".pdf,.txt,.md,.doc,.docx,.csv,.json,.epub,image/*"
               />
 
-              <div className="absolute right-2 flex items-center gap-1.5">
-                {/* Model Selector Mini Toggle */}
-                <select
-                  value={provider}
-                  onChange={(e) => setProvider(e.target.value as 'gemini' | 'anthropic')}
-                  className="text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl px-2 py-1.5 outline-none border-none cursor-pointer hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors hidden sm:block"
-                  title="Choose AI Model"
-                >
-                  <option value="gemini">Gemini 3.6 Flash</option>
-                  <option value="anthropic">Claude 3.7</option>
-                </select>
+              {/* Attached File Preview Badge (if any) */}
+              {attachedFile && (
+                <div className="flex items-center justify-between px-3 py-1.5 mx-1 mb-2 bg-brand-50 dark:bg-brand-950/60 border border-brand-200/80 dark:border-brand-800/80 rounded-xl text-xs text-brand-800 dark:text-brand-300">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400 shrink-0" />
+                    <span className="font-semibold truncate max-w-[200px] sm:max-w-md">{attachedFile.name}</span>
+                    <span className="text-[10px] text-brand-600/70 dark:text-brand-400/70 shrink-0">({attachedFile.size})</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedFile(null)}
+                    className="text-slate-400 hover:text-rose-500 dark:hover:text-rose-400 p-1 rounded-lg transition-colors cursor-pointer"
+                    title="Remove attached file"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
 
-                <motion.button 
-                  whileTap={{ scale: 0.92 }}
-                  type="submit"
-                  disabled={!input.trim() || isGenerating}
-                  className="p-2.5 bg-gradient-to-tr from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 disabled:opacity-40 disabled:hover:from-brand-600 disabled:hover:to-indigo-600 text-white rounded-2xl transition-all shadow-md shadow-brand-500/20 flex items-center justify-center shrink-0 cursor-pointer"
-                  title="Send message"
-                >
-                  <Send className="w-4 h-4" />
-                </motion.button>
+              {/* Auto-expanding text area that cleanly wraps text */}
+              <div className="w-full relative px-1 sm:px-1.5 pt-0.5">
+                <textarea
+                  ref={inputRef}
+                  rows={1}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={isListening ? "Listening... speak now" : "Ask Sage AI about concepts, formulas, book summaries..."}
+                  className="w-full bg-transparent border-none focus:ring-0 focus:outline-none p-1 text-slate-900 dark:text-[#EDEDED] placeholder:text-slate-400 dark:placeholder:text-[#7A7A7A] text-sm font-medium leading-relaxed resize-none min-h-[40px] max-h-[100px] scrollbar-thin transition-[height] duration-75 block"
+                  style={{ maxHeight: '100px' }}
+                />
+              </div>
+
+              {/* Bottom Action Bar: Plus Attach on Left, Model + Mic + Send on Right */}
+              <div className="flex items-center justify-between pt-1.5 px-0.5 mt-0.5 border-t border-slate-100/80 dark:border-[#282828]">
+                {/* Plus icon on the left for uploading a file */}
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="inline-flex items-center gap-1.5 px-2 py-1.5 sm:px-2.5 sm:py-1.5 text-slate-500 dark:text-[#A0A0A0] hover:text-brand-600 dark:hover:text-[#EDEDED] hover:bg-slate-100 dark:hover:bg-[#222222] rounded-xl transition-all cursor-pointer active:scale-95 text-xs font-medium"
+                    title="Upload a file or document"
+                    aria-label="Upload file"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span className="hidden sm:inline text-xs">Attach</span>
+                  </button>
+                </div>
+
+                {/* Controls on the Right: Model Selector, Voice Mic, Send */}
+                <div className="flex items-center gap-1.5 sm:gap-2">
+                  {/* Model Selector Mini Toggle */}
+                  <select
+                    value={provider}
+                    onChange={(e) => setProvider(e.target.value as 'gemini' | 'anthropic')}
+                    className="text-[11px] font-semibold bg-slate-100 dark:bg-[#202020] text-slate-600 dark:text-[#EDEDED] rounded-xl px-2.5 py-1.5 outline-none border border-transparent dark:border-[#282828] hover:border-slate-200 dark:hover:border-white/20 cursor-pointer transition-colors"
+                    title="Choose AI Model"
+                  >
+                    <option value="gemini">Gemini 3.6 Flash</option>
+                    <option value="anthropic">Claude 3.7</option>
+                  </select>
+
+                  {/* Microphone icon on the right for voice input */}
+                  <button
+                    type="button"
+                    onClick={toggleVoiceInput}
+                    className={`p-1.5 sm:p-2 rounded-xl transition-all cursor-pointer shrink-0 ${
+                      isListening
+                        ? 'bg-rose-500 text-white animate-pulse shadow-md shadow-rose-500/30 ring-2 ring-rose-400/50'
+                        : 'text-slate-500 dark:text-[#A0A0A0] hover:text-brand-600 dark:hover:text-[#EDEDED] hover:bg-slate-100 dark:hover:bg-[#222222] active:scale-95'
+                    }`}
+                    title={isListening ? "Listening... click to stop recording" : "Voice input (Speech to text)"}
+                    aria-label={isListening ? "Stop voice input" : "Start voice input"}
+                  >
+                    {isListening ? (
+                      <MicOff className="w-4 h-4 text-white" />
+                    ) : (
+                      <Mic className="w-4 h-4" />
+                    )}
+                  </button>
+
+                  {/* Interactive Voice Chat with Sage Button (Sage talks back & interacts) */}
+                  <motion.button 
+                    whileTap={{ scale: 0.92 }}
+                    type="button"
+                    onClick={handleOpenVoiceChat}
+                    className="p-1.5 sm:p-2 bg-gradient-to-tr from-purple-600 via-indigo-600 to-brand-600 hover:from-purple-500 hover:to-brand-500 text-white rounded-xl transition-all shadow-sm shadow-purple-500/20 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 group"
+                    title="Interactive Voice Chat with Sage (Sage talks back)"
+                    aria-label="Start Voice Chat with Sage"
+                  >
+                    <AudioLines className="w-4 h-4 text-purple-100 group-hover:scale-110 transition-transform" />
+                  </motion.button>
+
+                  {/* Send Button */}
+                  <motion.button 
+                    whileTap={{ scale: 0.92 }}
+                    type="submit"
+                    disabled={(!input.trim() && !attachedFile) || isGenerating}
+                    className="p-1.5 sm:p-2 bg-gradient-to-tr from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 disabled:opacity-40 disabled:hover:from-brand-600 disabled:hover:to-indigo-600 text-white rounded-xl transition-all shadow-sm shadow-brand-500/20 flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
+                    title="Send message (Enter)"
+                    aria-label="Send message"
+                  >
+                    <Send className="w-4 h-4" />
+                  </motion.button>
+                </div>
               </div>
             </form>
 
@@ -726,6 +1151,180 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         </div>
 
       </div>
+
+      {/* Interactive Voice Chat with Sage Overlay Modal */}
+      <AnimatePresence>
+        {isVoiceChatOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 bg-slate-950/80 backdrop-blur-2xl"
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              transition={{ type: "spring", damping: 25, stiffness: 300 }}
+              className="relative w-full max-w-lg bg-gradient-to-b from-slate-900 to-slate-950 border border-slate-800 rounded-3xl p-6 sm:p-8 shadow-2xl flex flex-col items-center text-center overflow-hidden"
+            >
+              {/* Close Button top-right */}
+              <button
+                type="button"
+                onClick={handleCloseVoiceChat}
+                className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white bg-slate-800/60 hover:bg-slate-800 rounded-full transition-colors cursor-pointer"
+                title="End Voice Chat"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              {/* Header Badge */}
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-brand-500/10 border border-brand-500/20 text-brand-400 text-xs font-semibold mb-4">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                <span>Live Interactive Voice • Sage AI</span>
+              </div>
+
+              {/* Pulsing Visualizer Sound Orb */}
+              <div className="relative w-40 h-40 sm:w-48 sm:h-48 my-2 flex items-center justify-center">
+                {/* Background Ambient Glow */}
+                <div 
+                  className={`absolute inset-0 rounded-full blur-2xl transition-all duration-500 ${
+                    voiceChatStatus === 'speaking'
+                      ? 'bg-gradient-to-tr from-purple-500/40 via-indigo-500/40 to-brand-500/40 scale-125'
+                      : voiceChatStatus === 'listening'
+                      ? 'bg-gradient-to-tr from-emerald-500/35 via-teal-500/35 to-cyan-500/35 scale-110'
+                      : 'bg-brand-500/20 scale-100'
+                  }`} 
+                />
+
+                {/* Animated Pulsing Outer Rings */}
+                {voiceChatStatus === 'speaking' && (
+                  <>
+                    <div className="absolute inset-0 rounded-full border-2 border-indigo-400/30 animate-ping" />
+                    <div className="absolute -inset-4 rounded-full border border-purple-400/20 animate-pulse" />
+                  </>
+                )}
+                {voiceChatStatus === 'listening' && (
+                  <div className="absolute -inset-3 rounded-full border-2 border-emerald-400/40 animate-pulse" />
+                )}
+
+                {/* Core Glowing Orb */}
+                <div 
+                  className={`relative w-28 h-28 sm:w-32 sm:h-32 rounded-full flex flex-col items-center justify-center shadow-xl transition-all duration-300 ${
+                    voiceChatStatus === 'speaking'
+                      ? 'bg-gradient-to-tr from-purple-600 via-indigo-600 to-brand-500 shadow-indigo-500/50 scale-105'
+                      : voiceChatStatus === 'listening'
+                      ? 'bg-gradient-to-tr from-emerald-600 via-teal-600 to-cyan-600 shadow-emerald-500/40 scale-100'
+                      : 'bg-gradient-to-tr from-slate-700 to-slate-800 shadow-slate-900 scale-95'
+                  }`}
+                >
+                  {voiceChatStatus === 'speaking' ? (
+                    <Volume2 className="w-10 h-10 text-white animate-pulse" />
+                  ) : voiceChatStatus === 'listening' ? (
+                    <Mic className="w-10 h-10 text-white animate-bounce" />
+                  ) : (
+                    <Sparkles className="w-10 h-10 text-brand-300 animate-spin" />
+                  )}
+
+                  {/* Simulated wave bars inside orb when speaking */}
+                  {voiceChatStatus === 'speaking' && (
+                    <div className="flex items-center gap-1 mt-1">
+                      <span className="w-1 h-3 bg-white/80 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
+                      <span className="w-1 h-5 bg-white rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
+                      <span className="w-1 h-2 bg-white/80 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Status Indicator */}
+              <div className="space-y-1 mb-4">
+                <h4 className="text-lg font-bold text-white capitalize">
+                  {voiceChatStatus === 'speaking'
+                    ? 'Sage is Speaking...'
+                    : voiceChatStatus === 'thinking'
+                    ? 'Sage is Thinking...'
+                    : 'Listening to You...'}
+                </h4>
+                <p className="text-xs text-slate-400">
+                  {voiceChatStatus === 'listening'
+                    ? 'Speak naturally. Sage will answer out loud.'
+                    : voiceChatStatus === 'speaking'
+                    ? 'Listening will automatically resume when Sage finishes.'
+                    : 'Crafting the clearest educational response...'}
+                </p>
+              </div>
+
+              {/* Live Transcript / Subtitle Bubble */}
+              <div className="w-full bg-slate-950/60 border border-slate-800/80 rounded-2xl p-4 min-h-[85px] max-h-[140px] overflow-y-auto mb-6 text-left scrollbar-thin">
+                {voiceLiveTranscript ? (
+                  <div className="text-sm text-emerald-300">
+                    <span className="text-[10px] text-emerald-500 uppercase tracking-wider block font-bold mb-1">You:</span>
+                    "{voiceLiveTranscript}"
+                  </div>
+                ) : voiceLastAiReply ? (
+                  <div className="text-xs sm:text-sm text-slate-200 leading-relaxed">
+                    <span className="text-[10px] text-brand-400 uppercase tracking-wider block font-bold mb-1">Sage:</span>
+                    {voiceLastAiReply}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500 italic text-center pt-4">
+                    Ready to converse. Say hello or ask any study question!
+                  </p>
+                )}
+              </div>
+
+              {/* Action Controls Toolbar */}
+              <div className="flex items-center gap-3">
+                {voiceChatStatus === 'speaking' ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+                      setVoiceChatStatus('listening');
+                      startVoiceChatListening();
+                    }}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <Square className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Interrupt / Speak Next</span>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (voiceChatStatus === 'listening') {
+                        setVoiceChatStatus('idle');
+                        if (voiceRecognitionRef.current) voiceRecognitionRef.current.abort();
+                      } else {
+                        startVoiceChatListening();
+                      }
+                    }}
+                    className={`px-4 py-2 rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      voiceChatStatus === 'listening'
+                        ? 'bg-emerald-600 text-white hover:bg-emerald-500'
+                        : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                    }`}
+                  >
+                    <Mic className="w-3.5 h-3.5" />
+                    <span>{voiceChatStatus === 'listening' ? 'Listening Active' : 'Start Mic'}</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleCloseVoiceChat}
+                  className="px-4 py-2 bg-rose-600/90 hover:bg-rose-500 text-white rounded-full text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-md shadow-rose-600/30"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>End Voice Chat</span>
+                </button>
+              </div>
+
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

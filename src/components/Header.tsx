@@ -684,7 +684,7 @@ export function Header({
             <div 
               ref={dropdownRef}
               style={dropdownStyle}
-              className="bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200/80 dark:border-slate-700/80 max-h-[480px] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150"
+              className="bg-white/95 dark:bg-[#161616]/85 dark:backdrop-blur-2xl rounded-2xl shadow-2xl border border-slate-200/80 dark:border-white/10 max-h-[480px] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150"
             >
               
               {/* If no query is entered yet, show popular suggestions & trending topics */}
@@ -1299,7 +1299,7 @@ export function Header({
 
           {/* User Profile Dropdown Card */}
           {isProfileMenuOpen && (
-            <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-3xl liquid-glass-dock border border-white/80 dark:border-slate-700/80 shadow-[0_20px_50px_rgba(0,0,0,0.25)] p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
+            <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-3xl liquid-glass-dock border border-white/80 dark:border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.6)] p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
               {/* Header profile identity */}
               <div className="flex items-center gap-3 pb-3 border-b border-slate-200/60 dark:border-slate-800">
                 <div 
