@@ -1,0 +1,11 @@
+.dart_tool/
+.packages
+.pub-cache/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+*.iml
+.idea/
+local.properties
+# Local secrets / run configs
+dart_defines.json

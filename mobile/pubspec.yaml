@@ -1,0 +1,24 @@
+name: eduai
+description: Sage AI tutor for Kenyan students (KCSE / CBC).
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  supabase_flutter: ^2.5.0
+  flutter_markdown: ^0.6.22
+  http: ^1.2.1
+  flutter_riverpod: ^2.5.1
+  go_router: ^13.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
