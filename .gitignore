@@ -6,3 +6,4 @@ coverage/
 .env*
 !.env.example
 uploads/
+supabase/functions/ai-tutor/deno.lock
