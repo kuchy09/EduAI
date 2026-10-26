@@ -1,33 +1,63 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import {
-  handleCorsPreflight,
-  jsonResponse,
-  resolveSupabaseContext,
+  callGeminiJson,
+  corsHeadersFor,
+  GENERIC_SERVICE_ERROR,
+  MAX_BODY_BYTES,
+  parseAllowedOrigins,
+  recordAiUsage,
+  requireAuthAndQuota,
 } from "../_shared/cors.ts";
 
-serve(async (req) => {
-  const preflight = handleCorsPreflight(req);
-  if (preflight) return preflight;
+const ALLOWED_ORIGINS = parseAllowedOrigins(Deno.env.get("ALLOWED_ORIGINS"));
+
+Deno.serve(async (req) => {
+  const cors = corsHeadersFor(req.headers.get("Origin"), ALLOWED_ORIGINS);
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { ...cors, "Content-Type": "application/json" },
+    });
+
+  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
+  if (req.method !== "POST") return json(405, { error: "Method not allowed" });
 
   try {
-    const {
-      userStyle = "Visual learner, prefers structured examples",
-      readingHabits = "General learning and core curriculum subjects",
-      currentProgress = "Starting foundational topics",
-      fieldOfStudy = "General Studies",
-      subjects = "Core Subjects",
-      planMode = "roadmap",
-    } = await req.json();
-
-    const geminiKey = Deno.env.get("GEMINI_API_KEY");
-    if (!geminiKey) {
-      return jsonResponse(
-        { error: "GEMINI_API_KEY is not configured in Supabase secrets." },
-        500,
-      );
+    if (Number(req.headers.get("content-length") ?? 0) > MAX_BODY_BYTES) {
+      return json(413, { error: "Request too large" });
     }
 
-    const { adminClient, user } = await resolveSupabaseContext(req);
+    const auth = await requireAuthAndQuota(req, json);
+    if (!auth.ok) return auth.response;
+    const { adminClient, user } = auth;
+
+    let payload: any;
+    try {
+      payload = await req.json();
+    } catch {
+      return json(400, { error: "Request body must be valid JSON" });
+    }
+
+    const userStyle =
+      typeof payload?.userStyle === "string"
+        ? payload.userStyle.slice(0, 300)
+        : "Visual learner, prefers structured examples";
+    const readingHabits =
+      typeof payload?.readingHabits === "string"
+        ? payload.readingHabits.slice(0, 300)
+        : "General learning and core curriculum subjects";
+    const currentProgress =
+      typeof payload?.currentProgress === "string"
+        ? payload.currentProgress.slice(0, 300)
+        : "Starting foundational topics";
+    const fieldOfStudy =
+      typeof payload?.fieldOfStudy === "string" && payload.fieldOfStudy.trim()
+        ? payload.fieldOfStudy.trim().slice(0, 120)
+        : "General Studies";
+    const subjects =
+      typeof payload?.subjects === "string" && payload.subjects.trim()
+        ? payload.subjects.trim().slice(0, 200)
+        : "Core Subjects";
+    const planMode = payload?.planMode === "weekly" ? "weekly" : "roadmap";
 
     const prompt = `Generate a personalized 4-step ${planMode} learning path for a student studying ${fieldOfStudy} (${subjects}).
 Learner Style: ${userStyle}
@@ -41,42 +71,34 @@ Return JSON with a "steps" array where each item has:
 - "description": 1-2 sentence academic milestone breakdown
 - "concepts": array of 3 key syllabus concepts`;
 
-    const resp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ role: "user", parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" },
-        }),
-      },
-    );
+    const { parsed, inputTokens, outputTokens, model } = await callGeminiJson({ prompt });
+    const steps = Array.isArray(parsed?.steps) ? parsed.steps : [];
 
-    const raw = await resp.json();
-    const parsed = JSON.parse(
-      raw?.candidates?.[0]?.content?.parts?.[0]?.text || '{"steps":[]}',
-    );
-    const steps = Array.isArray(parsed.steps) ? parsed.steps : [];
+    await recordAiUsage(adminClient, {
+      userId: user.id,
+      subject: `learning-path:${fieldOfStudy}`,
+      model,
+      inputTokens,
+      outputTokens,
+    });
 
-    if (adminClient && user && steps.length > 0) {
-      await adminClient.from("learning_paths").insert({
+    if (steps.length > 0) {
+      const { error: insertErr } = await adminClient.from("learning_paths").insert({
         user_id: user.id,
         title: `${fieldOfStudy} Personalized Path`,
         field_of_study: fieldOfStudy,
         subjects,
-        plan_mode: planMode === "weekly" ? "weekly" : "roadmap",
+        plan_mode: planMode,
         learner_style: userStyle,
         steps,
         is_active: true,
       });
+      if (insertErr) console.error("learning_paths insert failed", insertErr);
     }
 
-    return jsonResponse({ steps });
-  } catch (error: any) {
-    return jsonResponse(
-      { error: error?.message || "Failed to generate learning path" },
-      500,
-    );
+    return json(200, { steps });
+  } catch (error) {
+    console.error("learning-path failed", error);
+    return json(500, { error: GENERIC_SERVICE_ERROR });
   }
 });

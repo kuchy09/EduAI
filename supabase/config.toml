@@ -102,16 +102,13 @@ client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
 secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
 
 [functions.ai-tutor]
-verify_jwt = false
-
-[functions.handle-claude]
-verify_jwt = false
+verify_jwt = true
 
 [functions.reader-assistant]
-verify_jwt = false
+verify_jwt = true
 
 [functions.learning-path]
-verify_jwt = false
+verify_jwt = true
 
 [functions.quiz-generator]
-verify_jwt = false
+verify_jwt = true

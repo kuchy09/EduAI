@@ -450,10 +450,12 @@ CREATE TABLE IF NOT EXISTS public.ai_tutor_usage (
   input_tokens integer NOT NULL DEFAULT 0,
   output_tokens integer NOT NULL DEFAULT 0,
   total_tokens integer NOT NULL DEFAULT 0,
-  created_at timestamptz NOT NULL DEFAULT now()
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CONSTRAINT ai_tutor_usage_tokens_nonneg CHECK (input_tokens >= 0 AND output_tokens >= 0 AND total_tokens >= 0)
 );
 
-CREATE OR REPLACE VIEW public.ai_tutor_monthly_usage AS
+CREATE OR REPLACE VIEW public.ai_tutor_monthly_usage
+WITH (security_invoker = true) AS
 SELECT
   user_id,
   date_trunc('month', created_at) AS month,
@@ -478,7 +480,7 @@ RETURNS boolean
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
@@ -491,7 +493,7 @@ CREATE OR REPLACE FUNCTION public.check_tutor_quota(p_user_id uuid)
 RETURNS TABLE (tokens_used bigint, tokens_limit integer, is_over_limit boolean)
 LANGUAGE sql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
   SELECT
     COALESCE(sum(total_tokens), 0) AS tokens_used,
@@ -501,6 +503,9 @@ AS $$
   WHERE user_id = p_user_id
     AND created_at >= date_trunc('month', now());
 $$;
+
+REVOKE ALL ON FUNCTION public.check_tutor_quota(uuid) FROM public, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.check_tutor_quota(uuid) TO service_role;
 
 CREATE OR REPLACE FUNCTION public.match_book_content_chunks (
   query_embedding vector(1536),
@@ -702,13 +707,13 @@ DROP POLICY IF EXISTS "Users can update own profile." ON public.profiles;
 CREATE POLICY "Users can update own profile." ON public.profiles FOR UPDATE USING (auth.uid() = id OR public.is_admin());
 
 DROP POLICY IF EXISTS "Users can view relevant friend requests." ON public.friend_requests;
-CREATE POLICY "Users can view relevant friend requests." ON public.friend_requests FOR SELECT USING (true);
+CREATE POLICY "Users can view relevant friend requests." ON public.friend_requests FOR SELECT USING (auth.uid()::text IN (sender_id, receiver_id) OR public.is_admin());
 DROP POLICY IF EXISTS "Users can send friend requests." ON public.friend_requests;
-CREATE POLICY "Users can send friend requests." ON public.friend_requests FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users can send friend requests." ON public.friend_requests FOR INSERT WITH CHECK (auth.role() = 'authenticated' AND auth.uid()::text = sender_id);
 DROP POLICY IF EXISTS "Users can update friend requests." ON public.friend_requests;
-CREATE POLICY "Users can update friend requests." ON public.friend_requests FOR UPDATE USING (true);
+CREATE POLICY "Users can update friend requests." ON public.friend_requests FOR UPDATE USING (auth.uid()::text IN (sender_id, receiver_id));
 DROP POLICY IF EXISTS "Users can delete friend requests." ON public.friend_requests;
-CREATE POLICY "Users can delete friend requests." ON public.friend_requests FOR DELETE USING (true);
+CREATE POLICY "Users can delete friend requests." ON public.friend_requests FOR DELETE USING (auth.uid()::text IN (sender_id, receiver_id));
 
 -- Books & Curriculum Taxonomy
 DROP POLICY IF EXISTS "Public can view books" ON public.books;
@@ -822,7 +827,7 @@ DROP POLICY IF EXISTS "Users manage own notifications" ON public.notifications;
 CREATE POLICY "Users manage own notifications" ON public.notifications FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.role() = 'authenticated');
 
 DROP POLICY IF EXISTS "Users submit support tickets" ON public.support_tickets;
-CREATE POLICY "Users submit support tickets" ON public.support_tickets FOR INSERT WITH CHECK (true);
+CREATE POLICY "Users submit support tickets" ON public.support_tickets FOR INSERT WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
 DROP POLICY IF EXISTS "Users view own tickets and admins view all" ON public.support_tickets;
 CREATE POLICY "Users view own tickets and admins view all" ON public.support_tickets FOR SELECT USING (auth.uid() = user_id OR public.is_admin());
 DROP POLICY IF EXISTS "Admins update support tickets" ON public.support_tickets;
@@ -830,8 +835,8 @@ CREATE POLICY "Admins update support tickets" ON public.support_tickets FOR UPDA
 
 DROP POLICY IF EXISTS "Users can view own usage" ON public.ai_tutor_usage;
 CREATE POLICY "Users can view own usage" ON public.ai_tutor_usage FOR SELECT USING (auth.uid() = user_id OR public.is_admin());
+-- Service role bypasses RLS; clients cannot insert usage rows directly (matches 20261023000000_harden_ai_tutor_usage.sql)
 DROP POLICY IF EXISTS "Service role can insert usage" ON public.ai_tutor_usage;
-CREATE POLICY "Service role can insert usage" ON public.ai_tutor_usage FOR INSERT WITH CHECK (true);
 
 -- 7. STORAGE EXPLORER BUCKETS & POLICIES
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)

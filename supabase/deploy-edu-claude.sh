@@ -27,9 +27,9 @@ if [ ${#SECRETS_ARGS[@]} -gt 0 ]; then
   npx supabase secrets set "${SECRETS_ARGS[@]}" --project-ref "${SUPABASE_PROJECT_REF}"
 fi
 
-echo "4/4 Deploying all 5 Edu-Claude Edge Functions..."
-for fn in ai-tutor handle-claude reader-assistant learning-path quiz-generator; do
-  npx supabase functions deploy "${fn}" --no-verify-jwt --project-ref "${SUPABASE_PROJECT_REF}"
+echo "4/4 Deploying all 4 Edu-Claude Edge Functions (JWT verification enabled)..."
+for fn in ai-tutor reader-assistant learning-path quiz-generator; do
+  npx supabase functions deploy "${fn}" --project-ref "${SUPABASE_PROJECT_REF}"
 done
 
 echo "Done! Edu AI Org / Edu-Claude is fully provisioned."

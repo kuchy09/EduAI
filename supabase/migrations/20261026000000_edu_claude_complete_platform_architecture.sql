@@ -36,7 +36,7 @@ RETURNS boolean
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
   SELECT EXISTS (
     SELECT 1
@@ -346,7 +346,7 @@ CREATE OR REPLACE FUNCTION public.handle_new_user()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_role text;
@@ -455,7 +455,7 @@ CREATE OR REPLACE FUNCTION public.sync_community_post_counts()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 BEGIN
   IF TG_TABLE_NAME = 'community_post_likes' THEN
@@ -731,7 +731,7 @@ CREATE POLICY "Users can delete own notifications"
 DROP POLICY IF EXISTS "Users can submit support tickets" ON public.support_tickets;
 CREATE POLICY "Users can submit support tickets"
   ON public.support_tickets FOR INSERT
-  WITH CHECK (true);
+  WITH CHECK (auth.role() = 'authenticated' AND auth.uid() = user_id);
 
 DROP POLICY IF EXISTS "Users view own tickets and admins view all" ON public.support_tickets;
 CREATE POLICY "Users view own tickets and admins view all"
