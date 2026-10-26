@@ -123,7 +123,7 @@ export function DailyReadingGoalCard() {
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        className={`rounded-3xl p-6 sm:p-7 border transition-all duration-300 shadow-sm relative overflow-hidden bg-white dark:bg-[#1a1a1a] scrollbar-none contrast-blocked-card plan-card [color-scheme:light] dark:[color-scheme:dark] ${
+        className={`rounded-3xl p-6 sm:p-7 border transition-all duration-300 shadow-sm dark:shadow-[0_6px_24px_-4px_rgba(0,0,0,0.55)] relative overflow-hidden bg-white dark:bg-[#1a1a1a] scrollbar-none [color-scheme:light] dark:[color-scheme:dark] ${
           isCompleted 
             ? 'border-emerald-300/80 dark:border-emerald-500/35 shadow-emerald-500/10 ring-1 ring-emerald-400/30' 
             : 'border-slate-200/90 dark:border-[#2a2a2a] hover:border-brand-300 dark:hover:border-indigo-500/40'
@@ -208,7 +208,6 @@ export function DailyReadingGoalCard() {
           {/* Progress Bar Container / Scroll Pad Track */}
           <div 
             className="relative w-full h-3 bg-slate-100 dark:bg-[#222222] rounded-full overflow-hidden p-0.5 border border-slate-200/80 dark:border-[#2e2e2e] shadow-inner"
-            style={{ colorScheme: 'dark light' }}
           >
             <motion.div
               className={`h-full rounded-full transition-all duration-500 ${

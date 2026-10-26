@@ -30,6 +30,7 @@ export interface Book {
   pdfCoverPage?: number;
   publisher?: string;
   isKicdApproved?: boolean;
+  isbn?: string;
 }
 
 export interface Bookmark {

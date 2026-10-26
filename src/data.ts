@@ -56,9 +56,29 @@ export const mockBooks: Book[] = [
     country: ['Kenya']
   },
   {
+    id: 'klb-physics-1',
+    title: 'KLB Secondary Physics Book 1',
+    author: 'Kenya Literature Bureau (KLB)',
+    publisher: 'Kenya Literature Bureau (KLB)',
+    isKicdApproved: true,
+    coverImage: '',
+    category: 'Natural Sciences, Mathematics, and Statistics',
+    rating: 4.9,
+    description: 'Official KICD-approved Secondary Physics Student\'s Book One covering Introduction to Physics, Measurement, Force, Pressure, Particulate Nature of Matter, Thermal Expansion, Heat Transfer, Rectilinear Propagation of Light, Electrostatics, and Simple Cells.',
+    readProgress: 0,
+    aiInsights: ['Aligned with Kenyan Secondary & CBC Physics guidelines', 'Includes worked examples, lab experiments, and revision exercises'],
+    level: 'School',
+    curriculum: ['KCSE', 'CBC'],
+    subjects: ['Physics', 'Science'],
+    country: ['Kenya'],
+    fileUrl: 'klb_secondary_physics_book_1.pdf'
+  },
+  {
     id: 'cbc-g9-agri',
     title: 'CBC Grade 9 Agriculture & Nutrition',
     author: 'Kenya Literature Bureau (KLB)',
+    publisher: 'Kenya Literature Bureau (KLB)',
+    isKicdApproved: true,
     coverImage: '',
     category: 'Agriculture, Forestry, Fisheries, and Veterinary',
     rating: 4.7,
@@ -68,12 +88,15 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['Agriculture', 'Nutrition'],
-    country: ['Kenya']
+    country: ['Kenya'],
+    fileUrl: 'cbc-g9-agri.pdf'
   },
   {
     id: 'cbc-g9-socialstudies',
     title: 'CBC Grade 9 Social Studies & Civics',
     author: 'Longhorn Publishers',
+    publisher: 'Longhorn Publishers',
+    isKicdApproved: true,
     coverImage: '',
     category: 'Social Sciences',
     rating: 4.5,
@@ -83,12 +106,15 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['Social Studies', 'History', 'Geography'],
-    country: ['Kenya']
+    country: ['Kenya'],
+    fileUrl: 'cbc-g9-socialstudies.pdf'
   },
   {
     id: 'cbc-g9-intscience',
     title: 'CBC Grade 9 Integrated Science',
     author: 'Kenya Literature Bureau (KLB)',
+    publisher: 'Kenya Literature Bureau (KLB)',
+    isKicdApproved: true,
     coverImage: '',
     category: 'Natural Sciences, Mathematics, and Statistics',
     rating: 4.8,
@@ -98,12 +124,15 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['Science', 'Biology', 'Chemistry', 'Physics'],
-    country: ['Kenya']
+    country: ['Kenya'],
+    fileUrl: 'cbc-g9-intscience.pdf'
   },
   {
     id: 'cbc-g10-english',
     title: 'CBC Grade 10 English Literature & Literacy',
-    author: 'East African Educational Publishers',
+    author: 'Kenya Literature Bureau (KLB)',
+    publisher: 'Kenya Literature Bureau (KLB)',
+    isKicdApproved: true,
     coverImage: '',
     category: 'Arts and Humanities',
     rating: 4.6,
@@ -113,12 +142,15 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['English', 'Literature'],
-    country: ['Kenya']
+    country: ['Kenya'],
+    fileUrl: 'cbc-g10-english.pdf'
   },
   {
     id: 'cbc-g9-kiswahili',
     title: 'CBC Kidato cha Kwanza: Kiswahili Sanifu',
     author: 'Kenya Literature Bureau (KLB)',
+    publisher: 'Kenya Literature Bureau (KLB)',
+    isKicdApproved: true,
     coverImage: '',
     category: 'Arts and Humanities',
     rating: 4.7,
@@ -128,7 +160,8 @@ export const mockBooks: Book[] = [
     level: 'School',
     curriculum: ['CBC'],
     subjects: ['Kiswahili', 'Fasihi'],
-    country: ['Kenya']
+    country: ['Kenya'],
+    fileUrl: 'cbc-g9-kiswahili.pdf'
   },
   {
     id: '11',

@@ -242,7 +242,7 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
         animate={{ opacity: 1, y: 0 }}
         whileHover={{ y: -1 }}
         transition={{ type: 'spring', stiffness: 350, damping: 25 }}
-        className="group relative overflow-hidden rounded-2xl sm:rounded-3xl bg-white dark:bg-[#181818] border border-slate-200/90 dark:border-[#282828] p-3 sm:p-5 md:p-6 lg:p-7 shadow-sm hover:shadow-md transition-all duration-300 w-full max-w-full min-w-0 box-border contrast-blocked-card plan-card"
+        className="group relative overflow-hidden rounded-2xl sm:rounded-3xl bg-white dark:bg-[#181818] border border-slate-200/90 dark:border-[#282828] p-3 sm:p-5 md:p-6 lg:p-7 shadow-sm dark:shadow-[0_6px_24px_-4px_rgba(0,0,0,0.55)] hover:shadow-md transition-all duration-300 w-full max-w-full min-w-0 box-border"
       >
         {/* Subtle accent specular gradient bar */}
         <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-brand-500 via-indigo-500 to-emerald-500" />

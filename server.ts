@@ -4,14 +4,91 @@ import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI, Type } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
-import { S3Client, PutObjectCommand, GetObjectCommand } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import PDFDocument from "pdfkit";
 import { generateKLBPhysicsPdf } from "./server/klbPhysicsPdf";
 
 const UPLOADS_DIR = process.env.VERCEL ? path.join("/tmp", "uploads") : path.join(process.cwd(), "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+}
+
+const BOOKS_CATALOG_FILE = path.join(UPLOADS_DIR, "books-catalog.json");
+const DELETED_BOOKS_FILE = path.join(UPLOADS_DIR, "deleted-books.json");
+
+function readLocalBooksCatalog(): any[] {
+  try {
+    if (fs.existsSync(BOOKS_CATALOG_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(BOOKS_CATALOG_FILE, "utf-8"));
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (err) {
+    console.warn("[Catalog] Failed to read books-catalog.json:", err);
+  }
+  return [];
+}
+
+function writeLocalBooksCatalog(books: any[]): void {
+  try {
+    fs.writeFileSync(BOOKS_CATALOG_FILE, JSON.stringify(books, null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[Catalog] Failed to write books-catalog.json:", err);
+  }
+}
+
+function readDeletedBookIds(): string[] {
+  try {
+    if (fs.existsSync(DELETED_BOOKS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(DELETED_BOOKS_FILE, "utf-8"));
+      return Array.isArray(parsed) ? parsed : [];
+    }
+  } catch (err) {
+    console.warn("[Catalog] Failed to read deleted-books.json:", err);
+  }
+  return [];
+}
+
+function writeDeletedBookIds(ids: string[]): void {
+  try {
+    fs.writeFileSync(DELETED_BOOKS_FILE, JSON.stringify(Array.from(new Set(ids)), null, 2), "utf-8");
+  } catch (err) {
+    console.warn("[Catalog] Failed to write deleted-books.json:", err);
+  }
+}
+
+function getServerSupabase(): SupabaseClient | null {
+  const sbUrl =
+    process.env.VITE_SUPABASE_URL ||
+    process.env.NEXT_PUBLIC_SUPABASE_URL ||
+    process.env.SUPABASE_URL ||
+    "";
+  const sbKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY ||
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    process.env.VITE_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    "";
+
+  const isRealUrl = Boolean(
+    sbUrl &&
+      sbUrl.startsWith("http") &&
+      !sbUrl.includes("placeholder") &&
+      !sbUrl.includes("your-project") &&
+      !sbUrl.includes("your_")
+  );
+  const isRealKey = Boolean(
+    sbKey &&
+      !sbKey.includes("placeholder") &&
+      !sbKey.includes("your-key") &&
+      !sbKey.includes("your_")
+  );
+
+  if (!isRealUrl || !isRealKey) return null;
+  return createClient(sbUrl, sbKey);
 }
 
 const rawEndpoint = process.env.B2_ENDPOINT || "https://s3.us-west-004.backblazeb2.com";
@@ -541,13 +618,296 @@ function getMimeType(filename: string, defaultType = 'application/octet-stream')
 }
 
 const app = express();
-const PORT = 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json());
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
-  res.json({ status: "ok" });
+  res.json({
+    status: "ok",
+    cloudConnected: {
+      supabase: Boolean(getServerSupabase()),
+      b2: Boolean(getS3Client() && B2_BUCKET_NAME),
+    },
+  });
+});
+
+// Unified Server-Persisted Books Catalog API (/api/books)
+app.get("/api/books", async (req, res) => {
+  try {
+    const deletedIds = readDeletedBookIds();
+    const deletedSet = new Set(deletedIds);
+    let localCatalog = readLocalBooksCatalog();
+    const knownFileUrls = new Set(localCatalog.map((b: any) => b.fileUrl).filter(Boolean));
+
+    // Auto-discover any uploaded PDF files on local disk not yet in books-catalog.json
+    const scanDirs = ["books", "uploads", ""];
+    let catalogUpdated = false;
+    for (const sub of scanDirs) {
+      const targetDir = sub ? path.join(UPLOADS_DIR, sub) : UPLOADS_DIR;
+      if (!fs.existsSync(targetDir)) continue;
+      const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".pdf")) continue;
+        const relKey = sub ? `${sub}/${entry.name}` : entry.name;
+        if (knownFileUrls.has(relKey) || deletedSet.has(`disk-${relKey}`)) continue;
+        const cleanName = entry.name.replace(/^\d+-/, "").replace(/\.pdf$/i, "").replace(/[_\-]+/g, " ").trim();
+        const inferredKlb = cleanName.toLowerCase().includes("klb");
+        const discoveredBook = {
+          id: `disk-${relKey}`,
+          title: cleanName || getTitleFromKey(relKey),
+          author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Uploaded Textbook",
+          publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
+          isKicdApproved: inferredKlb,
+          coverImage: "",
+          category: "Textbook",
+          rating: 4.8,
+          description: "Uploaded source PDF textbook stored in platform library.",
+          level: "School",
+          curriculum: inferredKlb ? ["CBC", "KCSE"] : ["General"],
+          fileUrl: relKey,
+          createdAt: new Date().toISOString(),
+        };
+        localCatalog = [discoveredBook, ...localCatalog];
+        knownFileUrls.add(relKey);
+        catalogUpdated = true;
+      }
+    }
+    if (catalogUpdated) {
+      writeLocalBooksCatalog(localCatalog);
+    }
+
+    // Opportunistically fetch from Supabase if real credentials exist on server
+    const sb = getServerSupabase();
+    let cloudBooks: any[] = [];
+    if (sb) {
+      try {
+        const { data: sbBooks } = await sb.from("books").select("*").order("created_at", { ascending: false });
+        if (Array.isArray(sbBooks)) {
+          cloudBooks = sbBooks.map((b: any) => {
+            const isKlb =
+              Boolean(b.publisher?.toLowerCase().includes("klb")) ||
+              Boolean(b.author?.toLowerCase().includes("klb")) ||
+              Boolean(b.title?.toLowerCase().includes("klb")) ||
+              Boolean(b.author?.toLowerCase().includes("kenya literature bureau"));
+            return {
+              id: b.id,
+              title: b.title,
+              author: b.author || (isKlb ? "Kenya Literature Bureau (KLB)" : "Unknown"),
+              publisher: b.publisher || (isKlb ? "Kenya Literature Bureau (KLB)" : undefined),
+              isKicdApproved: b.is_kicd_approved ?? isKlb,
+              isbn: b.isbn || undefined,
+              coverImage: b.cover_image?.includes("unsplash.com") ? "" : b.cover_image || "",
+              category: b.category || "Textbook",
+              rating: 4.8,
+              description: b.description || "",
+              level: b.education_level || "All",
+              curriculum: b.curriculum ? [b.curriculum] : undefined,
+              subjects: b.subjects ? b.subjects.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+              fileUrl: b.file_url,
+            };
+          });
+        }
+      } catch (sbErr) {
+        console.warn("[Catalog] Supabase books fetch warning:", sbErr);
+      }
+    }
+
+    // Opportunistically discover PDFs in Backblaze B2 if configured
+    const s3 = getS3Client();
+    let b2Books: any[] = [];
+    if (s3 && B2_BUCKET_NAME) {
+      try {
+        const listRes = await s3.send(new ListObjectsV2Command({ Bucket: B2_BUCKET_NAME, MaxKeys: 200 }));
+        const cloudFileUrls = new Set([
+          ...Array.from(knownFileUrls),
+          ...cloudBooks.map((b: any) => b.fileUrl).filter(Boolean),
+        ]);
+        for (const obj of listRes.Contents || []) {
+          const key = obj.Key || "";
+          if (!key.toLowerCase().endsWith(".pdf") || cloudFileUrls.has(key) || deletedSet.has(`b2-${key}`)) continue;
+          const filename = key.split("/").pop() || key;
+          const cleanName = filename.replace(/^\d+-/, "").replace(/\.pdf$/i, "").replace(/[_\-]+/g, " ").trim();
+          const inferredKlb = cleanName.toLowerCase().includes("klb");
+          b2Books.push({
+            id: `b2-${key}`,
+            title: cleanName || getTitleFromKey(key),
+            author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Cloud Library",
+            publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
+            isKicdApproved: inferredKlb,
+            coverImage: "",
+            category: "Textbook",
+            rating: 4.8,
+            description: "Cloud-synced PDF study material.",
+            level: "School",
+            curriculum: inferredKlb ? ["CBC", "KCSE"] : undefined,
+            fileUrl: key,
+          });
+        }
+      } catch (b2Err) {
+        console.warn("[Catalog] B2 list warning:", b2Err);
+      }
+    }
+
+    // Deduplicate combined books (cloudBooks + localCatalog + b2Books) excluding deletedIds
+    const mergedMap = new Map<string, any>();
+    for (const book of [...localCatalog, ...cloudBooks, ...b2Books]) {
+      if (!book || !book.id || deletedSet.has(book.id)) continue;
+      if (!mergedMap.has(book.id)) {
+        mergedMap.set(book.id, book);
+      }
+    }
+
+    res.json({
+      books: Array.from(mergedMap.values()),
+      deletedIds,
+      cloudConnected: {
+        supabase: Boolean(sb),
+        b2: Boolean(s3 && B2_BUCKET_NAME),
+      },
+    });
+  } catch (err: any) {
+    console.error("[Catalog] GET /api/books error:", err);
+    res.status(500).json({ error: err.message || "Failed to load books catalog" });
+  }
+});
+
+app.post("/api/books", async (req, res) => {
+  try {
+    const payload = req.body || {};
+    if (!payload.title) {
+      return res.status(400).json({ error: "Book title is required" });
+    }
+
+    let createdBook: any = {
+      id: payload.id || `book-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      title: String(payload.title).trim(),
+      author: payload.author ? String(payload.author).trim() : (payload.publisher || "Unknown Author"),
+      publisher: payload.publisher ? String(payload.publisher).trim() : undefined,
+      isbn: payload.isbn ? String(payload.isbn).trim() : undefined,
+      isKicdApproved: Boolean(payload.isKicdApproved),
+      description: payload.description || "",
+      category: payload.category || "Textbook",
+      rating: typeof payload.rating === "number" ? payload.rating : 4.8,
+      level: payload.level || "All",
+      curriculum: Array.isArray(payload.curriculum)
+        ? payload.curriculum
+        : payload.curriculum
+        ? [String(payload.curriculum)]
+        : undefined,
+      subjects: Array.isArray(payload.subjects)
+        ? payload.subjects
+        : typeof payload.subjects === "string" && payload.subjects.trim()
+        ? payload.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)
+        : undefined,
+      country: Array.isArray(payload.country) ? payload.country : undefined,
+      coverImage: payload.coverImage || "",
+      fileUrl: payload.fileUrl || "",
+      createdAt: new Date().toISOString(),
+    };
+
+    // Opportunistically insert into Supabase if real credentials exist
+    const sb = getServerSupabase();
+    if (sb) {
+      try {
+        const { data, error } = await sb
+          .from("books")
+          .insert([
+            {
+              title: createdBook.title,
+              author: createdBook.author,
+              description: createdBook.description,
+              category: createdBook.category,
+              education_level: createdBook.level,
+              curriculum: createdBook.curriculum?.[0] || null,
+              subjects: createdBook.subjects?.join(", ") || null,
+              cover_image: createdBook.coverImage,
+              file_url: createdBook.fileUrl,
+              publisher: createdBook.publisher || null,
+              is_kicd_approved: createdBook.isKicdApproved,
+              isbn: createdBook.isbn || null,
+            },
+          ])
+          .select()
+          .single();
+
+        if (!error && data?.id) {
+          createdBook = { ...createdBook, id: data.id };
+        }
+      } catch (sbErr) {
+        console.warn("[Catalog] Supabase insert warning (persisted locally):", sbErr);
+      }
+    }
+
+    // Persist in local books-catalog.json
+    const existing = readLocalBooksCatalog().filter((b: any) => b.id !== createdBook.id);
+    writeLocalBooksCatalog([createdBook, ...existing]);
+
+    // Ensure it's not marked deleted
+    const deletedIds = readDeletedBookIds().filter((id) => id !== createdBook.id);
+    writeDeletedBookIds(deletedIds);
+
+    res.json({ book: createdBook, success: true });
+  } catch (err: any) {
+    console.error("[Catalog] POST /api/books error:", err);
+    res.status(500).json({ error: err.message || "Failed to save book" });
+  }
+});
+
+app.patch("/api/books/:id", async (req, res) => {
+  try {
+    const bookId = req.params.id;
+    const updates = req.body || {};
+
+    const existing = readLocalBooksCatalog();
+    const idx = existing.findIndex((b: any) => b.id === bookId);
+    if (idx >= 0) {
+      existing[idx] = { ...existing[idx], ...updates };
+      writeLocalBooksCatalog(existing);
+    }
+
+    const sb = getServerSupabase();
+    if (sb && updates.coverImage !== undefined) {
+      try {
+        await sb.from("books").update({ cover_image: updates.coverImage || "" }).eq("id", bookId);
+      } catch (sbErr) {
+        console.warn("[Catalog] Supabase cover update warning:", sbErr);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("[Catalog] PATCH /api/books error:", err);
+    res.status(500).json({ error: err.message || "Failed to update book" });
+  }
+});
+
+app.delete("/api/books/:id", async (req, res) => {
+  try {
+    const bookId = req.params.id;
+    const existing = readLocalBooksCatalog().filter((b: any) => b.id !== bookId);
+    writeLocalBooksCatalog(existing);
+
+    const deletedIds = readDeletedBookIds();
+    if (!deletedIds.includes(bookId)) {
+      writeDeletedBookIds([...deletedIds, bookId]);
+    }
+
+    const sb = getServerSupabase();
+    if (sb) {
+      try {
+        await sb.from("books").delete().eq("id", bookId);
+      } catch (sbErr) {
+        console.warn("[Catalog] Supabase delete warning:", sbErr);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("[Catalog] DELETE /api/books error:", err);
+    res.status(500).json({ error: err.message || "Failed to delete book" });
+  }
 });
 
 // Client error diagnostics endpoint

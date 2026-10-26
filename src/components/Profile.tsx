@@ -249,28 +249,28 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
         {/* Left Column: Personal info & Education System */}
         <div className="lg:col-span-1 space-y-6 md:space-y-8">
           {/* Personal Information */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
-            <h3 className="font-bold text-slate-900">Personal Information</h3>
+          <div className="bg-white dark:bg-[#1a1a1d] p-6 rounded-2xl border border-slate-200 dark:border-[#2e2e32] shadow-sm dark:shadow-[0_8px_28px_-4px_rgba(0,0,0,0.55)] space-y-5">
+            <h3 className="font-bold text-slate-900 dark:text-[#ededed]">Personal Information</h3>
             <div className="space-y-4">
-              <div className="flex items-center gap-3 text-sm text-slate-600">
-                <Mail className="w-4 h-4 text-slate-400 shrink-0" />
+              <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
+                <Mail className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
                 <span className="truncate">{user?.email || 'Loading email...'}</span>
               </div>
-              <div className="flex items-center gap-3 text-sm text-slate-600">
-                <MapPin className="w-4 h-4 text-slate-400 shrink-0" />
+              <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
+                <MapPin className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
                 <span>{profile?.country || user?.user_metadata?.country || 'Edu AI Global Access'}</span>
               </div>
-              <div className="flex items-center gap-3 text-sm text-slate-600">
-                <Building className="w-4 h-4 text-slate-400 shrink-0" />
+              <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
+                <Building className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
                 <span>{profile?.education_level || user?.user_metadata?.education_level || 'Online Learning Platform'}</span>
               </div>
-              <div className="flex items-center gap-3 text-sm text-slate-600">
-                <Calendar className="w-4 h-4 text-slate-400 shrink-0" />
+              <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
+                <Calendar className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
                 <span>Joined {user?.user_metadata?.join_date ? new Date(user.user_metadata.join_date).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : 'Recently'}</span>
               </div>
               {user?.user_metadata?.dob && (
-                <div className="flex items-center gap-3 text-sm text-slate-600">
-                  <Clock className="w-4 h-4 text-slate-400 shrink-0" />
+                <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
+                  <Clock className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
                   <span>Born {new Date(user.user_metadata.dob).toLocaleDateString()}</span>
                 </div>
               )}
@@ -301,39 +301,41 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
         {/* Right Column: Subjects & Stats */}
         <div className="lg:col-span-2 space-y-6 md:space-y-8">
           {/* Subjects Intakes */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+          <div className="bg-white dark:bg-[#1a1a1d] p-6 rounded-2xl border border-slate-200 dark:border-[#2e2e32] shadow-sm dark:shadow-[0_8px_28px_-4px_rgba(0,0,0,0.55)] space-y-6">
             <div className="flex items-center justify-between">
-              <h3 className="font-bold text-slate-900">Subjects & Intakes</h3>
-              <button className="px-4 py-1.5 text-brand-600 text-sm font-medium hover:text-brand-700">Manage</button>
+              <h3 className="font-bold text-slate-900 dark:text-[#ededed]">Subjects & Intakes</h3>
+              <button className="px-3.5 py-1.5 rounded-xl bg-transparent hover:bg-[#f5f5f7] dark:bg-[#242429] dark:hover:bg-[#2e2e35] border border-transparent dark:border-[#34343c] text-brand-600 dark:text-[#b8a5f0] text-sm font-medium hover:text-brand-700 dark:hover:text-[#d8cef6] transition-colors cursor-pointer">
+                Manage
+              </button>
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {(profile?.subjects || user?.user_metadata?.subjects) ? (
                 (profile?.subjects || user?.user_metadata?.subjects).split(',').map((subj: string, idx: number) => (
-                  <div key={idx} className="p-4 rounded-xl border border-slate-100 hover:border-slate-300 transition-colors">
+                  <div key={idx} className="p-4 rounded-xl bg-[#f8f9fb] dark:bg-[#222226] border border-slate-200/80 dark:border-[#2e2e34] hover:border-slate-300 dark:hover:border-[#3f3f46] transition-colors">
                     <div className="flex items-center gap-3 mb-3">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-brand-50 text-brand-600`}>
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-brand-50 dark:bg-brand-500/20 text-brand-600 dark:text-[#b8a5f0]">
                         <BookOpen className="w-4 h-4" />
                       </div>
-                      <span className="font-semibold text-slate-900 text-sm truncate">{subj.trim()}</span>
+                      <span className="font-semibold text-slate-900 dark:text-[#ededed] text-sm truncate">{subj.trim()}</span>
                     </div>
-                    <div className="flex items-center justify-between text-xs text-slate-500 mb-2">
+                    <div className="flex items-center justify-between text-xs text-slate-500 dark:text-[#a1a1aa] mb-2">
                       <span>Course Progress</span>
-                      <span className="font-medium text-slate-900">0%</span>
+                      <span className="font-medium text-slate-900 dark:text-[#ededed]">0%</span>
                     </div>
-                    <div className="h-1.5 w-full bg-slate-100 rounded-full overflow-hidden">
+                    <div className="h-1.5 w-full bg-[#e5e5ea] dark:bg-[#2e2e34] rounded-full overflow-hidden">
                       <div className="h-full bg-brand-500 rounded-full w-0" />
                     </div>
                   </div>
                 ))
               ) : (
                 ['General Mathematics', 'Basic Science', 'Language Arts'].map((subj, idx) => (
-                  <div key={idx} className="p-4 rounded-xl border border-slate-100 hover:border-slate-300 transition-colors opacity-60">
+                  <div key={idx} className="p-4 rounded-xl bg-[#f8f9fb] dark:bg-[#222226] border border-slate-200/80 dark:border-[#2e2e34] hover:border-slate-300 dark:hover:border-[#3f3f46] transition-colors opacity-75 dark:opacity-85">
                     <div className="flex items-center gap-3 mb-3">
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-slate-100 text-slate-500`}>
+                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-[#ebebf0] dark:bg-[#2c2c32] text-slate-500 dark:text-[#a1a1aa]">
                         <BookOpen className="w-4 h-4" />
                       </div>
-                      <span className="font-semibold text-slate-900 text-sm">{subj}</span>
+                      <span className="font-semibold text-slate-900 dark:text-[#ededed] text-sm">{subj}</span>
                     </div>
                   </div>
                 ))
