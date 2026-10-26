@@ -1,7 +1,7 @@
 import { Book, Bookmark, Highlight } from '../types';
 import { ChevronLeft, List, Settings, MessageSquareText, Search, BookmarkPlus, Bookmark as BookmarkIcon, ExternalLink, FileText, ChevronRight, Highlighter, Trash2, X, CheckCircle2, Loader2, Download as DownloadIcon, Clock, Sun, Type, Copy, BookOpen, Share, Sparkles, WifiOff, Wifi, CloudDownload, HardDriveDownload, Headphones, Quote as QuoteIcon, Image as ImageIcon, SpellCheck } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
-import { Document, Page, pdfjs } from 'react-pdf';
+import { Document, Page } from 'react-pdf';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { logReadingProgress } from '../lib/readingGoal';
@@ -24,11 +24,7 @@ import { ReaderAiHoverTutor } from './ReaderAiHoverTutor';
 import { FloatingEditorToolbar, TextStylePreset, TextAlignment } from './FloatingEditorToolbar';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
-
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url,
-).toString();
+import '../lib/pdfWorker';
 
 function DownloadFallback({ book }: { book: Book }) {
   const [isDownloading, setIsDownloading] = useState(false);

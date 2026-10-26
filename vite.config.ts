@@ -5,19 +5,19 @@ import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
   return {
+    envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
       },
-      dedupe: ['react', 'react-dom'],
+      dedupe: ['react', 'react-dom', 'pdfjs-dist'],
     },
     optimizeDeps: {
       include: ['react', 'react-dom'],
     },
     server: {
       hmr: false,
-      watch: null,
     },
   };
 });

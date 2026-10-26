@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   full_name text,
   email text,
   avatar_url text,
-  role text DEFAULT 'student' CHECK (role IN ('student', 'teacher', 'educator', 'admin')),
+  role text DEFAULT 'student' CHECK (role IN ('student', 'teacher', 'educator', 'parent', 'admin')),
   title text,
   institution text,
   location text,
@@ -26,6 +26,11 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at timestamptz DEFAULT now(),
   updated_at timestamptz DEFAULT now()
 );
+
+-- Allow public directory educator/peer profiles alongside auth.users-synced profiles
+ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey;
+ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_role_check;
+ALTER TABLE public.profiles ADD CONSTRAINT profiles_role_check CHECK (role IN ('student', 'teacher', 'educator', 'parent', 'admin'));
 
 -- Ensure all columns exist in case table was created previously
 ALTER TABLE public.profiles ADD COLUMN IF NOT EXISTS username text UNIQUE;

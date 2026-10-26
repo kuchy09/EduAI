@@ -1,280 +1,336 @@
-import { createClient } from "npm:@supabase/supabase-js@2.39.3";
+import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import Anthropic from "https://esm.sh/@anthropic-ai/sdk@0.39.0";
 import {
-  buildSystemPrompt,
-  corsHeadersFor,
-  estimateTokens,
-  LIMITS,
-  parseAllowedOrigins,
-  parseRequest,
-  type Provider,
-  type Turn,
-  ValidationError,
-} from "./validate.ts";
+  corsHeaders,
+  handleCorsPreflight,
+  jsonResponse,
+  resolveSupabaseContext,
+} from "../_shared/cors.ts";
 
-// ── Config (set with `supabase secrets set NAME=value`) ───────────────────────
-//   ANTHROPIC_API_KEY / GEMINI_API_KEY  provider keys (set the ones you use)
-//   DEFAULT_PROVIDER   'gemini' (default) or 'anthropic'
-//   ANTHROPIC_MODEL    default 'claude-haiku-5-5'  (use 'claude-sonnet-5-5' for higher quality)
-//   GEMINI_MODEL       default 'gemini-3.1-flash-lite' (same default as the web prototype)
-//   ALLOWED_ORIGINS    comma-separated web origins allowed by CORS. Leave empty for a mobile-only app.
-// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided by Supabase automatically.
-const MAX_OUTPUT_TOKENS = 1024;
-const ALLOWED_ORIGINS = parseAllowedOrigins(Deno.env.get("ALLOWED_ORIGINS"));
-const GENERIC_ERROR = "The tutor ran into a problem. Please try again.";
+serve(async (req) => {
+  const preflight = handleCorsPreflight(req);
+  if (preflight) return preflight;
 
-class UpstreamError extends Error {
-  constructor(public status: number, detail: string) {
-    super(detail);
-  }
-}
-
-interface Chunk {
-  text?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-}
-
-// ── Provider plumbing ─────────────────────────────────────────────────────────
-
-/** Yields the `data:` payloads of a Server-Sent-Events body. */
-async function* sseData(body: ReadableStream<Uint8Array>): AsyncGenerator<string> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   try {
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const raw of lines) {
-        const line = raw.trimEnd();
-        if (!line.startsWith("data:")) continue;
-        const data = line.slice(5).trim();
-        if (data && data !== "[DONE]") yield data;
+    const payload = await req.json();
+    let {
+      prompt,
+      history,
+      provider = "gemini",
+      messages,
+      subject,
+      studentName,
+      bookContext,
+      allowDataCollection = true,
+      stream: wantStream = true,
+    } = payload;
+
+    if (messages && messages.length > 0 && !prompt) {
+      prompt = messages[messages.length - 1].content;
+      history = messages.slice(0, -1);
+    }
+
+    if (!prompt || typeof prompt !== "string") {
+      return jsonResponse({ error: "prompt is required" }, 400);
+    }
+
+    const { adminClient, user } = await resolveSupabaseContext(req);
+
+    if (adminClient && user) {
+      const { data: quotaInfo } = await adminClient.rpc("check_tutor_quota", {
+        p_user_id: user.id,
+      });
+      if (quotaInfo && quotaInfo[0]?.is_over_limit) {
+        return jsonResponse(
+          { error: "Monthly token quota exceeded (Free tier: 50k tokens)." },
+          429,
+        );
       }
     }
-  } finally {
-    reader.releaseLock();
-  }
-}
 
-async function* anthropicChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Chunk> {
-  for await (const data of sseData(body)) {
-    let evt: any;
-    try {
-      evt = JSON.parse(data);
-    } catch {
-      continue;
-    }
-    if (evt.type === "message_start") {
-      yield { inputTokens: evt.message?.usage?.input_tokens };
-    } else if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
-      yield { text: evt.delta.text };
-    } else if (evt.type === "message_delta") {
-      yield { outputTokens: evt.usage?.output_tokens };
-    } else if (evt.type === "error") {
-      throw new Error(`anthropic stream error: ${evt.error?.type ?? "unknown"}`);
-    }
-  }
-}
-
-async function* geminiChunks(body: ReadableStream<Uint8Array>): AsyncGenerator<Chunk> {
-  for await (const data of sseData(body)) {
-    let evt: any;
-    try {
-      evt = JSON.parse(data);
-    } catch {
-      continue;
-    }
-    const parts: any[] = evt.candidates?.[0]?.content?.parts ?? [];
-    const text = parts.map((p) => p?.text ?? "").join("");
-    yield {
-      text: text || undefined,
-      inputTokens: evt.usageMetadata?.promptTokenCount,
-      outputTokens: evt.usageMetadata?.candidatesTokenCount,
+    const recordUsage = async (
+      inputTokens: number,
+      outputTokens: number,
+      modelName: string,
+    ) => {
+      if (!user || !adminClient || (inputTokens === 0 && outputTokens === 0)) {
+        return;
+      }
+      try {
+        await adminClient.from("ai_tutor_usage").insert({
+          user_id: user.id,
+          subject: subject || bookContext?.title || "general",
+          provider,
+          model: modelName,
+          book_id: bookContext?.bookId || null,
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens: inputTokens + outputTokens,
+        });
+      } catch (err) {
+        console.error("Error recording ai_tutor_usage:", err);
+      }
     };
-  }
-}
 
-/** Starts the upstream request. Throws before any streaming begins if the provider rejects it. */
-async function openUpstream(
-  provider: Provider,
-  system: string,
-  turns: Turn[],
-): Promise<AsyncGenerator<Chunk>> {
-  if (provider === "anthropic") {
-    const apiKey = Deno.env.get("ANTHROPIC_API_KEY");
-    if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: Deno.env.get("ANTHROPIC_MODEL") ?? "claude-haiku-5-5",
-        max_tokens: MAX_OUTPUT_TOKENS,
-        system,
-        messages: turns.map((t) => ({ role: t.role, content: t.content })),
+    const studentNameContext = studentName || "Student";
+    const subjectContext = subject ? ` in ${subject}` : "";
+    const studyPatternsText = allowDataCollection
+      ? "Adapt explanations dynamically to the learner's pace and curriculum context."
+      : "Operate statelessly without assuming historical study patterns.";
+
+    const bookGroundingText = bookContext
+      ? `\nActive Reading Context:\n- Book Title: "${bookContext.title || "Educational Textbook"}"` +
+        (bookContext.author ? `\n- Author/Publisher: "${bookContext.author}"` : "") +
+        (bookContext.page
+          ? `\n- Current Page: ${bookContext.page}${bookContext.numPages ? ` of ${bookContext.numPages}` : ""}`
+          : "") +
+        (bookContext.selectedText
+          ? `\n- Highlighted Selection: "${bookContext.selectedText}"`
+          : "")
+      : "";
+
+    const systemPrompt =
+      `You are Sage AI, an expert educational tutor${subjectContext} guiding ${studentNameContext}. ${studyPatternsText}${bookGroundingText}\n` +
+      `Pedagogical rules:\n` +
+      `1. Build clear intuition with examples before formal derivations.\n` +
+      `2. Structure responses cleanly using concise headings and bullet points.\n` +
+      `3. Format all math, physics, and chemistry expressions strictly with LaTeX ($inline$ and $$display$$).`;
+
+    if (provider === "anthropic" || provider === "claude") {
+      const apiKey =
+        Deno.env.get("ANTHROPIC_API_KEY") || Deno.env.get("CLAUDE_API_KEY");
+      if (!apiKey) {
+        return jsonResponse(
+          {
+            error:
+              "ANTHROPIC_API_KEY is not configured in Supabase Edge Function secrets.",
+          },
+          500,
+        );
+      }
+
+      const modelName = "claude-sonnet-4-20250514";
+      const anthropic = new Anthropic({ apiKey });
+      const anthropicMessages: Array<{ role: "user" | "assistant"; content: string }> =
+        [];
+
+      if (Array.isArray(history)) {
+        for (const msg of history) {
+          if (!msg?.content) continue;
+          anthropicMessages.push({
+            role:
+              msg.role === "user" || msg.role === "User" ? "user" : "assistant",
+            content: String(msg.content),
+          });
+        }
+      }
+      anthropicMessages.push({ role: "user", content: prompt });
+
+      if (!wantStream) {
+        const result = await anthropic.messages.create({
+          model: modelName,
+          max_tokens: 1024,
+          system: systemPrompt,
+          messages: anthropicMessages,
+        });
+        const text =
+          result.content[0]?.type === "text" ? result.content[0].text : "";
+        await recordUsage(
+          result.usage?.input_tokens || 0,
+          result.usage?.output_tokens || 0,
+          modelName,
+        );
+        return jsonResponse({ reply: text });
+      }
+
+      const responseStream = await anthropic.messages.create({
+        model: modelName,
+        max_tokens: 1024,
+        system: systemPrompt,
+        messages: anthropicMessages,
         stream: true,
-      }),
-    });
-    if (!res.ok || !res.body) throw new UpstreamError(res.status, await res.text());
-    return anthropicChunks(res.body);
-  }
+      });
 
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
-  if (!apiKey) throw new Error("GEMINI_API_KEY is not set");
-  const model = Deno.env.get("GEMINI_MODEL") ?? "gemini-3.1-flash-lite";
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,
-    {
-      method: "POST",
-      // The key goes in a header, not the URL, so it never shows up in logs.
-      headers: { "content-type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: turns.map((t) => ({
-          role: t.role === "user" ? "user" : "model",
-          parts: [{ text: t.content }],
-        })),
-        generationConfig: { maxOutputTokens: MAX_OUTPUT_TOKENS },
-      }),
-    },
-  );
-  if (!res.ok || !res.body) throw new UpstreamError(res.status, await res.text());
-  return geminiChunks(res.body);
-}
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        async start(controller) {
+          let inputTokens = 0;
+          let outputTokens = 0;
+          try {
+            for await (const chunk of responseStream) {
+              if (
+                chunk.type === "message_start" &&
+                chunk.message?.usage?.input_tokens
+              ) {
+                inputTokens = chunk.message.usage.input_tokens;
+              }
+              if (chunk.type === "message_delta" && chunk.usage?.output_tokens) {
+                outputTokens = chunk.usage.output_tokens;
+              }
+              if (
+                chunk.type === "content_block_delta" &&
+                chunk.delta.type === "text_delta"
+              ) {
+                const data = JSON.stringify({
+                  type: "delta",
+                  text: chunk.delta.text,
+                });
+                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+              }
+            }
+            recordUsage(inputTokens, outputTokens, modelName);
+            controller.enqueue(
+              encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`),
+            );
+            controller.close();
+          } catch (err: any) {
+            const data = JSON.stringify({
+              type: "delta",
+              text: `\n[Error: ${err.message}]`,
+            });
+            controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            controller.close();
+          }
+        },
+      });
 
-// ── HTTP handler ──────────────────────────────────────────────────────────────
-
-Deno.serve(async (req) => {
-  const cors = corsHeadersFor(req.headers.get("Origin"), ALLOWED_ORIGINS);
-  const json = (status: number, body: unknown) =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { ...cors, "Content-Type": "application/json" },
-    });
-
-  if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: cors });
-  if (req.method !== "POST") return json(405, { error: "Method not allowed" });
-
-  try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL");
-    const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
-    if (!supabaseUrl || !serviceKey) {
-      console.error("SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing");
-      return json(500, { error: GENERIC_ERROR });
-    }
-    const admin = createClient(supabaseUrl, serviceKey, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    });
-
-    // 1. Authentication is mandatory.
-    const token = /^Bearer\s+(.+)$/i.exec(req.headers.get("Authorization") ?? "")?.[1];
-    if (!token) return json(401, { error: "Sign in to use the tutor" });
-    const { data: userData, error: authError } = await admin.auth.getUser(token);
-    const user = userData?.user;
-    if (authError || !user) return json(401, { error: "Your session has expired. Please sign in again." });
-
-    // 2. Parse and validate input.
-    if (Number(req.headers.get("content-length") ?? 0) > LIMITS.bodyBytes) {
-      return json(413, { error: "Request too large" });
-    }
-    let payload: unknown;
-    try {
-      payload = await req.json();
-    } catch {
-      return json(400, { error: "Request body must be valid JSON" });
-    }
-    const request = parseRequest(payload);
-    const provider: Provider = request.provider ??
-      (Deno.env.get("DEFAULT_PROVIDER") === "anthropic" ? "anthropic" : "gemini");
-
-    // 3. Quota is enforced BEFORE calling the model, and fails closed.
-    const { data: quota, error: quotaError } = await admin.rpc("check_tutor_quota", { p_user_id: user.id });
-    const q = Array.isArray(quota) ? quota[0] : null;
-    if (quotaError || !q) {
-      console.error("check_tutor_quota failed", quotaError);
-      return json(503, { error: "Could not verify your usage right now. Please try again shortly." });
-    }
-    if (q.is_over_limit) {
-      return json(429, {
-        error: `Monthly token quota exceeded (Free tier: ${Number(q.tokens_limit).toLocaleString("en-US")} tokens).`,
+      return new Response(stream, {
+        headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
       });
     }
 
-    // 4. Call the model.
-    const system = buildSystemPrompt(request.studentName, request.subject);
-    const turns: Turn[] = [...request.history, { role: "user", content: request.prompt }];
-    const chunks = await openUpstream(provider, system, turns);
+    // Default: Gemini 2.5 Flash
+    const geminiKey = Deno.env.get("GEMINI_API_KEY");
+    if (!geminiKey) {
+      return jsonResponse(
+        {
+          error:
+            "GEMINI_API_KEY is not configured in Supabase Edge Function secrets.",
+        },
+        500,
+      );
+    }
 
-    // 5. Stream the answer back and record usage when it ends.
+    const geminiModel = "gemini-2.5-flash";
+    const contents: Array<{ role: string; parts: Array<{ text: string }> }> = [];
+    if (Array.isArray(history)) {
+      for (const m of history) {
+        if (!m?.content) continue;
+        contents.push({
+          role: m.role === "user" || m.role === "User" ? "user" : "model",
+          parts: [{ text: String(m.content) }],
+        });
+      }
+    }
+    contents.push({ role: "user", parts: [{ text: prompt }] });
+
+    if (!wantStream) {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: systemPrompt }] },
+            contents,
+          }),
+        },
+      );
+      const data = await resp.json();
+      const reply =
+        data?.candidates?.[0]?.content?.parts?.[0]?.text ||
+        "Unable to generate response.";
+      await recordUsage(
+        data?.usageMetadata?.promptTokenCount || 0,
+        data?.usageMetadata?.candidatesTokenCount || 0,
+        geminiModel,
+      );
+      return jsonResponse({ reply });
+    }
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:streamGenerateContent?alt=sse&key=${geminiKey}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents,
+        }),
+      },
+    );
+
+    if (!response.body) {
+      throw new Error("No response stream returned from Gemini API");
+    }
+
     const encoder = new TextEncoder();
-    const promptChars = system.length + turns.reduce((n, t) => n + t.content.length, 0);
-
     const stream = new ReadableStream({
       async start(controller) {
         let inputTokens = 0;
         let outputTokens = 0;
-        let outputChars = 0;
-        const send = (obj: unknown) => {
-          try {
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
-          } catch { /* client disconnected */ }
-        };
         try {
-          for await (const c of chunks) {
-            if (c.inputTokens) inputTokens = c.inputTokens;
-            if (c.outputTokens) outputTokens = c.outputTokens;
-            if (c.text) {
-              outputChars += c.text.length;
-              send({ type: "delta", text: c.text });
+          const reader = response.body!.getReader();
+          const decoder = new TextDecoder("utf-8");
+          let buffer = "";
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const dataStr = line.substring(6).trim();
+              if (!dataStr || dataStr === "[DONE]") continue;
+              try {
+                const dataJson = JSON.parse(dataStr);
+                if (dataJson.usageMetadata) {
+                  inputTokens =
+                    dataJson.usageMetadata.promptTokenCount || inputTokens;
+                  outputTokens =
+                    dataJson.usageMetadata.candidatesTokenCount || outputTokens;
+                }
+                const parts = dataJson.candidates?.[0]?.content?.parts;
+                if (parts && parts.length > 0 && parts[0].text) {
+                  controller.enqueue(
+                    encoder.encode(
+                      `data: ${JSON.stringify({ type: "delta", text: parts[0].text })}\n\n`,
+                    ),
+                  );
+                }
+              } catch (e) {
+                console.error("Error parsing Gemini SSE:", e);
+              }
             }
           }
-          send({ type: "done" });
-        } catch (err) {
-          console.error("stream failed", err);
-          send({ type: "error", message: GENERIC_ERROR });
-        } finally {
-          // If the provider reported no usage, fall back to an estimate so nothing is free.
-          const input = inputTokens || estimateTokens("x".repeat(promptChars));
-          const output = outputTokens || Math.ceil(outputChars / 4);
-          if (input + output > 0) {
-            const { error } = await admin.from("ai_tutor_usage").insert({
-              user_id: user.id,
-              subject: request.subject ?? "general",
-              input_tokens: input,
-              output_tokens: output,
-              total_tokens: input + output,
-            });
-            if (error) console.error("recording usage failed", error);
-          }
-          try {
-            controller.close();
-          } catch { /* already closed */ }
+
+          recordUsage(inputTokens, outputTokens, geminiModel);
+          controller.enqueue(
+            encoder.encode(`data: ${JSON.stringify({ type: "done" })}\n\n`),
+          );
+          controller.close();
+        } catch (err: any) {
+          controller.enqueue(
+            encoder.encode(
+              `data: ${JSON.stringify({ type: "delta", text: `\n[Error: ${err.message}]` })}\n\n`,
+            ),
+          );
+          controller.close();
         }
       },
     });
 
     return new Response(stream, {
-      headers: { ...cors, "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      headers: { ...corsHeaders, "Content-Type": "text/event-stream" },
     });
-  } catch (error) {
-    if (error instanceof ValidationError) return json(400, { error: error.message });
-    if (error instanceof UpstreamError) {
-      console.error("upstream error", error.status, error.message.slice(0, 500));
-      const busy = [429, 500, 502, 503, 504, 529].includes(error.status);
-      return json(503, {
-        error: busy
-          ? "The AI model is busy right now. Please try again in a few moments."
-          : "The tutor is temporarily unavailable.",
-      });
-    }
-    console.error("ai-tutor failed", error);
-    return json(500, { error: GENERIC_ERROR });
+  } catch (error: any) {
+    console.error("Error in ai-tutor Edge Function:", error);
+    return jsonResponse(
+      { error: error?.message || "Failed to generate tutor response" },
+      500,
+    );
   }
 });

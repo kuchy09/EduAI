@@ -410,7 +410,136 @@ export default function App() {
     };
   }, [checkSystemHealth]);
 
+  const loadUnifiedCatalog = useCallback(async () => {
+    try {
+      let serverBooks: Book[] = [];
+      let deletedIds = new Set<string>();
+
+      try {
+        const res = await fetch('/api/books', { headers: { 'Cache-Control': 'no-cache' } });
+        if (res.ok) {
+          const payload = await res.json();
+          if (Array.isArray(payload.books)) serverBooks = payload.books;
+          if (Array.isArray(payload.deletedIds)) deletedIds = new Set(payload.deletedIds);
+        }
+      } catch (apiErr) {
+        console.warn('[App] /api/books fetch notice:', apiErr);
+      }
+
+      let dbGenericBooks: Book[] = [];
+      if (supabase) {
+        try {
+          const timeoutPromise = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('fetchBooks timeout')), 3000)
+          );
+          const genericBooksRes: any = await Promise.race([
+            supabase.from('books').select('*').order('created_at', { ascending: false }),
+            timeoutPromise,
+          ]);
+          const genericBooks = Array.isArray(genericBooksRes?.data) ? genericBooksRes.data : [];
+          dbGenericBooks = genericBooks.map((b: any) => {
+            let inferredPublisher = b.publisher || '';
+            let kicd = b.is_kicd_approved ?? b.isKicdApproved ?? false;
+            if (
+              !inferredPublisher &&
+              (b.author?.toLowerCase().includes('klb') ||
+                b.title?.toLowerCase().includes('klb') ||
+                b.author?.toLowerCase().includes('kenya literature bureau'))
+            ) {
+              inferredPublisher = 'Kenya Literature Bureau (KLB)';
+              kicd = true;
+            }
+            return {
+              id: b.id,
+              title: b.title,
+              author: b.author || 'Unknown',
+              coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
+              category: b.category || 'General',
+              rating: 4.5,
+              description: b.description || '',
+              level: b.education_level,
+              curriculum: b.curriculum ? [b.curriculum] : undefined,
+              subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
+              country: b.description && b.description.includes('Location: ') ? [b.description.split('Location: ')[1].trim()] : undefined,
+              fileUrl: b.file_url,
+              publisher: inferredPublisher || undefined,
+              isKicdApproved: kicd,
+              isbn: b.isbn || undefined,
+            };
+          });
+        } catch (sbErr) {
+          console.warn('[App] Supabase books query notice:', sbErr);
+        }
+      }
+
+      let mappedCurriculum: Book[] = [];
+      try {
+        const curriculumBooks = await getCurriculumBooks();
+        mappedCurriculum = (curriculumBooks || []).map(cb => ({
+          id: cb.id,
+          title: cb.title,
+          author: cb.publisher,
+          publisher: cb.publisher,
+          isbn: cb.isbn,
+          isKicdApproved: cb.isKicdApproved,
+          coverImage: cb.coverImageUrl?.includes('unsplash.com') ? '' : (cb.coverImageUrl || ''),
+          category: cb.category === 'PAST_PAPER' ? 'Natural Sciences, Mathematics, and Statistics' : 'Natural Sciences, Mathematics, and Statistics',
+          rating: 4.9,
+          description: cb.description || '',
+          level: 'School' as const,
+          curriculum: cb.gradeLevel?.curriculum?.name ? [cb.gradeLevel.curriculum.name] : ['CBC'],
+          subjects: cb.subject?.name ? [cb.subject.name] : undefined,
+          country: ['Kenya'],
+          fileUrl: cb.pdfFileUrl,
+        }));
+      } catch (currErr) {
+        console.warn('[App] getCurriculumBooks notice:', currErr);
+      }
+
+      let localUploadedBooks: Book[] = [];
+      try {
+        const rawLocal = safeStorage.getItem('custom_uploaded_books');
+        if (rawLocal) {
+          const parsed = JSON.parse(rawLocal);
+          if (Array.isArray(parsed)) localUploadedBooks = parsed;
+        }
+      } catch (_) {}
+
+      const candidates = [
+        ...serverBooks,
+        ...dbGenericBooks,
+        ...localUploadedBooks,
+        ...mappedCurriculum,
+        ...mockBooks,
+      ];
+
+      const seenIds = new Set<string>();
+      const seenTitles = new Set<string>();
+      const deduped: Book[] = [];
+
+      for (const candidate of candidates) {
+        if (!candidate || !candidate.id || deletedIds.has(candidate.id)) continue;
+        const normTitle = `${candidate.title.trim().toLowerCase()}::${(candidate.publisher || candidate.author || '').trim().toLowerCase()}`;
+        if (seenIds.has(candidate.id) || seenTitles.has(normTitle)) continue;
+        seenIds.add(candidate.id);
+        seenTitles.add(normTitle);
+        deduped.push(candidate);
+      }
+
+      setBooks(getPersistedBooks(deduped));
+
+      const dbCategories = Array.from(new Set(deduped.map(b => b.category))).filter(Boolean);
+      if (dbCategories.length > 0) {
+        setCategories(Array.from(new Set(['All', ...initialCategories, ...dbCategories])));
+      }
+    } catch (err) {
+      console.warn('[App] loadUnifiedCatalog notice:', err);
+    }
+  }, []);
+
   useEffect(() => {
+    loadUnifiedCatalog();
+
     if (!supabase) {
       try {
         const storedDemo = safeStorage.getItem('edu_demo_user');
@@ -492,97 +621,6 @@ export default function App() {
 
     initAuth();
 
-    const fetchBooks = async () => {
-      if (!supabase) return;
-      try {
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('fetchBooks timeout')), 3000)
-        );
-
-        const fetchPromise = Promise.all([
-          supabase.from('books').select('*').order('created_at', { ascending: false }),
-          getCurriculumBooks()
-        ]);
-
-        const [genericBooksRes, curriculumBooksRes] = await Promise.race([
-          fetchPromise,
-          timeoutPromise
-        ]) as any;
-        
-        const genericBooks = (genericBooksRes.data && Array.isArray(genericBooksRes.data)) ? genericBooksRes.data : [];
-        const curriculumBooks = curriculumBooksRes || [];
-
-        let allBooks: Book[] = [];
-
-        // Map generic books
-        const mappedGeneric = genericBooks.map(b => {
-          // Detect publisher/kicd for existing KLB books if not explicit
-          let inferredPublisher = b.publisher || '';
-          let kicd = b.isKicdApproved || false;
-          
-          if (!inferredPublisher && (
-              b.author?.toLowerCase().includes('klb') || 
-              b.title?.toLowerCase().includes('klb') ||
-              b.author?.toLowerCase().includes('kenya literature bureau')
-            )) {
-            inferredPublisher = 'Kenya Literature Bureau (KLB)';
-            kicd = true;
-          }
-
-          return {
-            id: b.id,
-            title: b.title,
-            author: b.author || 'Unknown',
-            coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
-            category: b.category || 'General',
-            rating: 4.5,
-            description: b.description || '',
-            level: b.education_level,
-            curriculum: b.curriculum ? [b.curriculum] : undefined,
-            subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
-            country: b.description && b.description.includes('Location: ') ? [b.description.split('Location: ')[1].trim()] : undefined,
-            fileUrl: b.file_url,
-            publisher: inferredPublisher,
-            isKicdApproved: kicd
-          };
-        });
-
-        // Map curriculum books
-        const mappedCurriculum = curriculumBooks.map(cb => ({
-          id: cb.id,
-          title: cb.title,
-          author: cb.publisher,
-          publisher: cb.publisher,
-          isKicdApproved: cb.isKicdApproved,
-          coverImage: cb.coverImageUrl || '',
-          category: cb.category,
-          rating: 5.0,
-          description: cb.description || '',
-          level: cb.gradeLevel?.levelCategory || 'School',
-          curriculum: cb.gradeLevel?.curriculum?.name ? [cb.gradeLevel.curriculum.name] : ['CBC'],
-          subjects: cb.subject?.name ? [cb.subject.name] : undefined,
-          country: ['Kenya'],
-          fileUrl: cb.pdfFileUrl
-        }));
-
-        allBooks = [...mappedGeneric, ...mappedCurriculum];
-
-        if (allBooks.length > 0) {
-          setBooks(getPersistedBooks([...allBooks, ...mockBooks]));
-          
-          // update categories to include dynamic ones
-          const dbCategories = Array.from(new Set(allBooks.map(b => b.category))).filter(Boolean);
-          if (dbCategories.length > 0) {
-             setCategories(Array.from(new Set(['All', ...initialCategories, ...dbCategories])));
-          }
-        }
-      } catch (err) {
-        console.warn("fetchBooks error (ignoring):", err);
-      }
-    };
-    
-    fetchBooks();
-
     let unsubscribe = () => {};
     try {
       const { data } = supabase.auth.onAuthStateChange(async (event, session) => {
@@ -614,7 +652,7 @@ export default function App() {
     }
 
     return () => unsubscribe();
-  }, []);
+  }, [loadUnifiedCatalog]);
 
   // Real-time synchronization for user reading progress & goals
   useEffect(() => {
@@ -664,29 +702,7 @@ export default function App() {
         setProfile(newProfile);
       },
       onBooksChange: async () => {
-        if (!supabase) return;
-        try {
-          const { data, error } = await supabase.from('books').select('*').order('created_at', { ascending: false });
-          if (!error && data && Array.isArray(data)) {
-            const apiBooks = data.map(b => ({
-              id: b.id,
-              title: b.title,
-              author: b.author || 'Unknown',
-              coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
-              category: b.category || 'General',
-              rating: 4.5,
-              description: b.description || '',
-              level: b.education_level,
-              curriculum: b.curriculum ? [b.curriculum] : undefined,
-              subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
-              country: b.description && b.description.includes('Location: ') ? [b.description.split('Location: ')[1].trim()] : undefined,
-              fileUrl: b.file_url 
-            }));
-            setBooks(getPersistedBooks([...apiBooks, ...mockBooks]));
-          }
-        } catch (err) {
-          console.warn('[App] Realtime books sync error:', err);
-        }
+        await loadUnifiedCatalog();
       }
     });
 
@@ -694,7 +710,7 @@ export default function App() {
       isMounted = false;
       cleanupSubscriptions();
     };
-  }, [session?.user?.id]);
+  }, [session?.user?.id, loadUnifiedCatalog]);
 
   const handleAddBookmark = (bookmark: Bookmark) => {
     setBookmarks(prev => [bookmark, ...prev]);
@@ -1003,11 +1019,22 @@ export default function App() {
                       <Admin 
                         appBooks={books} 
                         onUpdateBook={(updatedBook) => {
-                          setBooks(prev => prev.map(b => b.id === updatedBook.id ? updatedBook : b));
+                          setBooks(prev => {
+                            const exists = prev.some(b => b.id === updatedBook.id);
+                            return exists
+                              ? prev.map(b => b.id === updatedBook.id ? updatedBook : b)
+                              : [updatedBook, ...prev];
+                          });
                           if (activeBook?.id === updatedBook.id) {
                             setActiveBook(updatedBook);
                           }
-                        }} 
+                        }}
+                        onDeleteBook={(deletedId) => {
+                          setBooks(prev => prev.filter(b => b.id !== deletedId));
+                          if (activeBook?.id === deletedId) {
+                            setActiveBook(null);
+                          }
+                        }}
                       />
                     )}
                     {currentView === 'book-store' && (

@@ -488,6 +488,22 @@ function getMockCurriculumBooks(filters?: any): CurriculumBook[] {
       description: 'Complete KCSE Paper 232/1, 232/2 & 232/3 examination mastery handbook with KNEC-style marking schemes.',
       subject: { id: 15, curriculumId: 2, name: 'Physics (232)', code: 'KCSE-232', department: 'Sciences' },
       gradeLevel: { id: 18, curriculumId: 2, levelCategory: 'KCSE_SECONDARY', name: 'Form 4 (KCSE Candidate)', sequenceOrder: 18, curriculum: { id: 2, name: 'KCSE' } }
+    },
+    {
+      id: '11111111-1111-4000-8000-000000000005',
+      title: 'KCSE Top Mark Mathematics Form 4 with Past Papers',
+      isbn: '978-9966-25-888-2',
+      publisher: 'Kenya Literature Bureau (KLB)',
+      isKicdApproved: true,
+      category: 'PAST_PAPER',
+      subjectId: 12,
+      gradeLevelId: 18,
+      edition: '2026 Examination Edition',
+      coverImageUrl: '',
+      pdfFileUrl: 'kcse-f4-math-pastpapers.pdf',
+      description: 'Over 10 years of categorized KNEC KCSE Mathematics examination past papers with step-by-step solutions for Paper 1 (121/1) and Paper 2 (121/2).',
+      subject: { id: 12, curriculumId: 2, name: 'Mathematics (121)', code: 'KCSE-121', department: 'Mathematics' },
+      gradeLevel: { id: 18, curriculumId: 2, levelCategory: 'KCSE_SECONDARY', name: 'Form 4 (KCSE Candidate)', sequenceOrder: 18, curriculum: { id: 2, name: 'KCSE' } }
     }
   ];
 
