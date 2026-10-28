@@ -1,44 +1,60 @@
-import { createClient } from '@supabase/supabase-js';
-
-// Resolve Supabase Project URL (supports Vite & Next.js conventions)
-const supabaseUrl = 
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_URL) ||
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_URL) ||
-  (typeof process !== 'undefined' && (process.env?.NEXT_PUBLIC_SUPABASE_URL || process.env?.VITE_SUPABASE_URL || process.env?.SUPABASE_URL)) ||
-  '';
-
-// Resolve Supabase API Key (supports updated Publishable Key interface as well as legacy Anon Key)
-const supabaseApiKey = 
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY) ||
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_SUPABASE_ANON_KEY) ||
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY) ||
-  (typeof import.meta !== 'undefined' && (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_ANON_KEY) ||
-  (typeof process !== 'undefined' && (
-    process.env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    process.env?.VITE_SUPABASE_PUBLISHABLE_KEY ||
-    process.env?.SUPABASE_PUBLISHABLE_KEY ||
-    process.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    process.env?.VITE_SUPABASE_ANON_KEY ||
-    process.env?.SUPABASE_ANON_KEY
-  )) ||
-  '';
-
-const isRealUrl = Boolean(
-  supabaseUrl && 
-  supabaseUrl.startsWith('http') && 
-  !supabaseUrl.includes('placeholder') && 
-  !supabaseUrl.includes('your-project') &&
-  !supabaseUrl.includes('your_')
-);
-
-const isRealKey = Boolean(
-  supabaseApiKey && 
-  !supabaseApiKey.includes('placeholder') && 
-  !supabaseApiKey.includes('your-key') &&
-  !supabaseApiKey.includes('your_')
-);
-
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { safeStorage } from './safeStorage';
+
+export const SERVER_VERIFIED_SESSION_KEY = 'edu_sb_verified_session';
+
+export function isRealSupabaseUrl(val?: string | null): val is string {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  return Boolean(
+    trimmed &&
+      trimmed.startsWith('http') &&
+      !trimmed.includes('placeholder') &&
+      !trimmed.includes('your-project') &&
+      !trimmed.includes('your_') &&
+      !trimmed.startsWith('MY_')
+  );
+}
+
+export function isRealSupabaseKey(val?: string | null): val is string {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  return Boolean(
+    trimmed &&
+      trimmed.length > 15 &&
+      !trimmed.includes('placeholder') &&
+      !trimmed.includes('your-key') &&
+      !trimmed.includes('your_') &&
+      !trimmed.startsWith('MY_')
+  );
+}
+
+// Resolve first non-placeholder Supabase Project URL (supports Vite & Next.js conventions)
+let currentSupabaseUrl =
+  [
+    typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_URL : undefined,
+    typeof import.meta !== 'undefined' ? (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_URL : undefined,
+    typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_SUPABASE_URL : undefined,
+    typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_URL : undefined,
+    typeof process !== 'undefined' ? process.env?.SUPABASE_URL : undefined,
+  ].find(isRealSupabaseUrl) || '';
+
+// Resolve first non-placeholder Supabase Public Key (never short-circuits on placeholder strings)
+let currentSupabaseApiKey =
+  [
+    typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_PUBLISHABLE_KEY : undefined,
+    typeof import.meta !== 'undefined' ? (import.meta as any).env?.VITE_SUPABASE_ANON_KEY : undefined,
+    typeof import.meta !== 'undefined' ? (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY : undefined,
+    typeof import.meta !== 'undefined' ? (import.meta as any).env?.NEXT_PUBLIC_SUPABASE_ANON_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_PUBLISHABLE_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.SUPABASE_PUBLISHABLE_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.NEXT_PUBLIC_SUPABASE_ANON_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.VITE_SUPABASE_ANON_KEY : undefined,
+    typeof process !== 'undefined' ? process.env?.SUPABASE_ANON_KEY : undefined,
+  ].find(isRealSupabaseKey) || '';
+
+let serverAuthReadyFlag = false;
 
 export function clearStaleSupabaseTokens() {
   if (typeof window === 'undefined') return;
@@ -54,7 +70,8 @@ export function clearStaleSupabaseTokens() {
             key.startsWith('sb_') ||
             key.includes('supabase.auth.token') || 
             key.includes('sb_edu_ai_token') ||
-            key.includes('-auth-token')
+            key.includes('-auth-token') ||
+            key === SERVER_VERIFIED_SESSION_KEY
           )
         ) {
           keysToRemove.push(key);
@@ -213,19 +230,131 @@ if (typeof window !== 'undefined') {
       console.warn('Handled background auth error event:', msg);
     }
   }, true);
+
+  // 4. If OAuth popup landed on Site URL '/' instead of '/auth/callback', relay callback payload to window.opener immediately
+  try {
+    if (window.opener && !window.opener.closed && window.location.pathname !== '/auth/callback') {
+      const searchParams = new URLSearchParams(window.location.search);
+      const rawHash = window.location.hash ? window.location.hash.substring(1) : '';
+      const hashParams = new URLSearchParams(rawHash);
+      const hasOAuthParams = Boolean(
+        hashParams.get('access_token') ||
+          searchParams.get('code') ||
+          hashParams.get('error') ||
+          searchParams.get('error')
+      );
+      if (hasOAuthParams) {
+        const payload = {
+          type: 'EDU_SUPABASE_OAUTH_CALLBACK',
+          code: searchParams.get('code') || hashParams.get('code') || null,
+          access_token: hashParams.get('access_token') || searchParams.get('access_token') || null,
+          refresh_token: hashParams.get('refresh_token') || searchParams.get('refresh_token') || null,
+          error: searchParams.get('error') || hashParams.get('error') || null,
+          error_description: searchParams.get('error_description') || hashParams.get('error_description') || null,
+        };
+        try {
+          window.opener.postMessage(payload, window.location.origin);
+        } catch {
+          window.opener.postMessage(payload, '*');
+        }
+        setTimeout(() => {
+          try {
+            window.close();
+          } catch {}
+        }, 120);
+      }
+    }
+  } catch (_) {}
 }
 
 // Proactively sanitize stored sessions before constructing the Supabase client
 sanitizeStoredSupabaseSession();
 
+function buildBrowserSupabaseClient(url: string, key: string): SupabaseClient {
+  return createClient(url.trim(), key.trim(), {
+    auth: {
+      storage: safeStorage,
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  });
+}
+
 // Initialize Supabase Client with updated interface and robust session caching
-export const supabase = (isRealUrl && isRealKey)
-  ? createClient(supabaseUrl, supabaseApiKey, {
-      auth: {
-        storage: safeStorage,
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
+export let supabase: SupabaseClient | null =
+  isRealSupabaseUrl(currentSupabaseUrl) && isRealSupabaseKey(currentSupabaseApiKey)
+    ? buildBrowserSupabaseClient(currentSupabaseUrl, currentSupabaseApiKey)
+    : null;
+
+export function getSupabaseClient(): SupabaseClient | null {
+  return supabase;
+}
+
+export function getResolvedSupabaseUrl(): string {
+  return currentSupabaseUrl;
+}
+
+export function isServerAuthAvailable(): boolean {
+  return Boolean(supabase) || serverAuthReadyFlag || Boolean(currentSupabaseUrl);
+}
+
+let runtimeConfigPromise: Promise<{
+  client: SupabaseClient | null;
+  supabaseUrl: string;
+  serverAuthReady: boolean;
+}> | null = null;
+
+export async function ensureSupabaseRuntimeConfig(): Promise<{
+  client: SupabaseClient | null;
+  supabaseUrl: string;
+  serverAuthReady: boolean;
+}> {
+  if (supabase) {
+    return {
+      client: supabase,
+      supabaseUrl: currentSupabaseUrl,
+      serverAuthReady: true,
+    };
+  }
+
+  if (!runtimeConfigPromise) {
+    runtimeConfigPromise = (async () => {
+      try {
+        const res = await fetch('/api/public-config', {
+          headers: { 'Cache-Control': 'no-cache' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (isRealSupabaseUrl(data?.supabaseUrl)) {
+            currentSupabaseUrl = data.supabaseUrl.trim();
+          }
+          if (isRealSupabaseKey(data?.supabaseAnonKey)) {
+            currentSupabaseApiKey = data.supabaseAnonKey.trim();
+          }
+          if (typeof data?.serverAuthReady === 'boolean') {
+            serverAuthReadyFlag = data.serverAuthReady;
+          }
+          if (!supabase && isRealSupabaseUrl(currentSupabaseUrl) && isRealSupabaseKey(currentSupabaseApiKey)) {
+            supabase = buildBrowserSupabaseClient(currentSupabaseUrl, currentSupabaseApiKey);
+          }
+        }
+      } catch (_) {
+        // Offline or local-only mode
       }
-    }) 
-  : null;
+      return {
+        client: supabase,
+        supabaseUrl: currentSupabaseUrl,
+        serverAuthReady: Boolean(supabase) || serverAuthReadyFlag,
+      };
+    })();
+  }
+
+  const resolved = await runtimeConfigPromise;
+  // Allow future re-checks if still not initialized
+  if (!resolved.client && !resolved.serverAuthReady) {
+    runtimeConfigPromise = null;
+  }
+  return resolved;
+}
+

@@ -1,22 +1,43 @@
-import React, { useState } from 'react';
-import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  supabase,
+  clearStaleSupabaseTokens,
+  ensureSupabaseRuntimeConfig,
+  getSupabaseClient,
+  getResolvedSupabaseUrl,
+  isServerAuthAvailable,
+  SERVER_VERIFIED_SESSION_KEY,
+} from '../lib/supabase';
 import { safeStorage } from '../lib/safeStorage';
-import { Mail, Phone, Lock, Hash, Loader2, BookOpen, Compass, ArrowRight, Sparkles } from 'lucide-react';
+import {
+  EDUCATION_LEVELS,
+  COUNTRIES_WITH_CURRICULA,
+  CURRICULA,
+  FIELDS_OF_STUDY,
+  SCHOOL_SUBJECTS,
+  COLLEGE_SUBJECTS_MAP,
+  saveStoredAcademicPrefs,
+} from '../lib/bookPersonalization';
+import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AuthMode = 'email' | 'phone';
 type AuthState = 'sign_in' | 'sign_up' | 'verify_otp';
+type OAuthProviderType = 'google' | 'apple' | 'github';
 
 interface AuthProps {
-  onContinueAsGuest?: () => void;
-  onLoginSuccess?: (session: any) => void;
+  onLoginSuccess?: (session: any, profile?: any) => void;
 }
 
-export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
+export function Auth({ onLoginSuccess }: AuthProps = {}) {
   const [mode, setMode] = useState<AuthMode>('email');
   const [state, setState] = useState<AuthState>('sign_in');
   const [isLoading, setIsLoading] = useState(false);
+  const [oauthLoadingProvider, setOauthLoadingProvider] = useState<OAuthProviderType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [authReady, setAuthReady] = useState<boolean>(() => isServerAuthAvailable());
+  const popupTimerRef = useRef<number | null>(null);
 
   // Form states
   const [email, setEmail] = useState('');
@@ -34,103 +55,13 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
   const [country, setCountry] = useState('');
   const [curriculum, setCurriculum] = useState('');
 
-  const educationLevels = ['Primary', 'High School', 'College', 'University', 'Graduate', 'Postgraduate', 'Vocational'];
+  const educationLevels = [...EDUCATION_LEVELS];
   const roles = ['student', 'teacher', 'educator', 'parent'];
-  const countries = [
-    { name: 'United States', curriculum: 'AP' },
-    { name: 'United Kingdom', curriculum: 'A-Levels' },
-    { name: 'Canada', curriculum: 'Provincial Curriculum' },
-    { name: 'Australia', curriculum: 'National Curriculum' },
-    { name: 'Kenya', curriculum: 'CBC' },
-    { name: 'Nigeria', curriculum: 'WASSCE' },
-    { name: 'South Africa', curriculum: 'NSC' },
-    { name: 'India', curriculum: 'CBSE' },
-    { name: 'Germany', curriculum: 'Abitur' },
-    { name: 'France', curriculum: 'Baccalaureate' },
-    { name: 'China', curriculum: 'Gaokao' },
-    { name: 'Japan', curriculum: 'National Curriculum' },
-    { name: 'Singapore', curriculum: 'GCE A-Levels' },
-    { name: 'Ghana', curriculum: 'WASSCE' },
-    { name: 'Egypt', curriculum: 'Thanaweya Amma' },
-    { name: 'Brazil', curriculum: 'ENEM' },
-    { name: 'Mexico', curriculum: 'Bachillerato' },
-    { name: 'Italy', curriculum: 'Maturità' },
-    { name: 'Spain', curriculum: 'Bachillerato' },
-    { name: 'Netherlands', curriculum: 'VWO/HAVO' },
-    { name: 'Ireland', curriculum: 'Leaving Certificate' },
-    { name: 'Pakistan', curriculum: 'Matriculation' },
-    { name: 'Bangladesh', curriculum: 'HSC' },
-    { name: 'Indonesia', curriculum: 'National Curriculum' },
-    { name: 'South Korea', curriculum: 'CSAT' },
-    { name: 'Finland', curriculum: 'Ylioppilastutkinto' },
-    { name: 'Turkey', curriculum: 'National Curriculum' },
-    { name: 'Other', curriculum: 'IB' }
-  ];
-  const curricula = [
-    'IGCSE', 'IB', 'National Curriculum', 'A-Levels', 'AP', 'SAT/ACT', 
-    'CBSE', 'ICSE', 'WASSCE', 'CBC', 'KCSE', 'NSC', 'Abitur', 'Baccalaureate', 
-    'Gaokao', 'Thanaweya Amma', 'ENEM', 'Bachillerato', 'Maturità', 
-    'Leaving Certificate', 'Matriculation', 'HSC', 'CSAT', 'Ylioppilastutkinto', 'Other'
-  ];
-  const fieldsOfStudy = [
-    'Business, Administration, and Law',
-    'Engineering, Manufacturing, and Construction',
-    'Information and Communication Technologies (ICT)',
-    'Health and Welfare',
-    'Natural Sciences, Mathematics, and Statistics',
-    'Arts and Humanities',
-    'Social Sciences',
-    'Agriculture, Forestry, Fisheries, and Veterinary',
-    'Services'
-  ];
-
-  const schoolSubjects = [
-    'Mathematics', 'English Language', 'Biology', 'Chemistry', 'Physics', 
-    'History', 'Geography', 'Computer Science', 'Literature', 'Art', 
-    'Music', 'Physical Education', 'Economics', 'Psychology', 'Sociology'
-  ];
-
-  const collegeSubjectsMap: Record<string, string[]> = {
-    'Business, Administration, and Law': [
-      'Accounting', 'Marketing', 'Finance', 'Management', 'Business Law', 
-      'Economics', 'Human Resources', 'International Business', 
-      'Public Administration', 'Constitutional Law', 'Contract Law', 'Criminal Law'
-    ],
-    'Engineering, Manufacturing, and Construction': [
-      'Civil Engineering', 'Mechanical Engineering', 'Electrical Engineering', 
-      'Electronic Engineering', 'Chemical Engineering', 'Architecture', 
-      'Urban Planning', 'Construction Management', 'Manufacturing Technology', 'Materials Science'
-    ],
-    'Information and Communication Technologies (ICT)': [
-      'Computer Science', 'Software Engineering', 'Cybersecurity', 'Data Science', 
-      'Web Development', 'Network Engineering', 'Artificial Intelligence', 
-      'Database Management', 'Information Systems', 'Cloud Computing'
-    ],
-    'Health and Welfare': [
-      'Medicine', 'Nursing', 'Pharmacy', 'Dentistry', 'Public Health', 
-      'Physical Therapy', 'Medical Technology', 'Social Work', 'Psychology', 'Veterinary Nursing'
-    ],
-    'Natural Sciences, Mathematics, and Statistics': [
-      'Biology', 'Chemistry', 'Physics', 'Mathematics', 'Statistics', 
-      'Geology', 'Astronomy', 'Environmental Science', 'Biochemistry', 'Genetics'
-    ],
-    'Arts and Humanities': [
-      'Fine Arts', 'Graphic Design', 'Fashion Design', 'History', 'Philosophy', 
-      'Literature', 'Modern Languages', 'Linguistics', 'Music', 'Performing Arts'
-    ],
-    'Social Sciences': [
-      'Sociology', 'Political Science', 'Anthropology', 'International Relations', 
-      'Criminology', 'Media Studies', 'Journalism', 'Social Policy', 'Human Geography'
-    ],
-    'Agriculture, Forestry, Fisheries, and Veterinary': [
-      'Crop Science', 'Animal Science', 'Forestry', 'Fisheries Science', 
-      'Veterinary Medicine', 'Horticulture', 'Soil Science', 'Agricultural Economics'
-    ],
-    'Services': [
-      'Tourism', 'Hospitality Management', 'Culinary Arts', 'Transportation', 
-      'Logistics', 'Security Services', 'Personal Services', 'Occupational Health'
-    ]
-  };
+  const countries = COUNTRIES_WITH_CURRICULA;
+  const curricula = CURRICULA;
+  const fieldsOfStudy = FIELDS_OF_STUDY;
+  const schoolSubjects = SCHOOL_SUBJECTS;
+  const collegeSubjectsMap = COLLEGE_SUBJECTS_MAP;
 
   const currentAvailableSubjects = (educationLevel === 'Primary' || educationLevel === 'High School') 
     ? schoolSubjects 
@@ -144,70 +75,225 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
     }
   };
 
-  const handleOAuthLogin = async (provider: 'google' | 'github') => {
-    if (!supabase) return setError('Supabase not configured');
+  useEffect(() => {
+    let mounted = true;
+    ensureSupabaseRuntimeConfig().then((cfg) => {
+      if (mounted) {
+        setAuthReady(Boolean(cfg.client || cfg.supabaseUrl || cfg.serverAuthReady));
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleOAuthMessage = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const payload = event.data;
+      if (!payload || payload.type !== 'EDU_SUPABASE_OAUTH_CALLBACK') return;
+
+      if (popupTimerRef.current) {
+        window.clearInterval(popupTimerRef.current);
+        popupTimerRef.current = null;
+      }
+
+      if (payload.error || payload.error_description) {
+        const rawErr = String(payload.error_description || payload.error || 'Authentication cancelled');
+        const decodedErr = decodeURIComponent(rawErr.replace(/\+/g, ' '));
+        if (decodedErr.toLowerCase().includes('provider is not enabled') || decodedErr.toLowerCase().includes('unsupported provider')) {
+          setError('This OAuth provider must be toggled ON with its Client ID & Secret in your Supabase Dashboard (Authentication -> Providers).');
+        } else {
+          setError(decodedErr);
+        }
+        setOauthLoadingProvider(null);
+        setIsLoading(false);
+        return;
+      }
+
+      try {
+        setIsLoading(true);
+        const runtimeCfg = await ensureSupabaseRuntimeConfig();
+        const client = runtimeCfg.client || getSupabaseClient();
+        let activeSession: any = null;
+        let fetchedProfile: any = null;
+
+        if (client && payload.code) {
+          const { data, error: exchangeErr } = await client.auth.exchangeCodeForSession(payload.code);
+          if (exchangeErr) throw exchangeErr;
+          activeSession = data.session;
+        } else if (client && payload.access_token && payload.refresh_token) {
+          const { data, error: sessionErr } = await client.auth.setSession({
+            access_token: payload.access_token,
+            refresh_token: payload.refresh_token,
+          });
+          if (sessionErr) throw sessionErr;
+          activeSession = data.session;
+        } else if (payload.access_token) {
+          const verifyRes = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              access_token: payload.access_token,
+              refresh_token: payload.refresh_token || '',
+            }),
+          });
+          const verifyJson = await verifyRes.json().catch(() => ({}));
+          if (!verifyRes.ok || !verifyJson?.session) {
+            throw new Error(verifyJson?.error || 'Could not verify OAuth session.');
+          }
+          activeSession = verifyJson.session;
+          fetchedProfile = verifyJson.profile || null;
+          try {
+            safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(activeSession));
+          } catch (_) {}
+        }
+
+        if (activeSession && onLoginSuccess) {
+          onLoginSuccess(activeSession, fetchedProfile);
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Could not finalize OAuth sign-in.');
+      } finally {
+        setOauthLoadingProvider(null);
+        setIsLoading(false);
+      }
+    };
+
+    window.addEventListener('message', handleOAuthMessage);
+    return () => {
+      window.removeEventListener('message', handleOAuthMessage);
+      if (popupTimerRef.current) {
+        window.clearInterval(popupTimerRef.current);
+      }
+    };
+  }, [onLoginSuccess]);
+
+  const handleOAuthLogin = async (provider: OAuthProviderType) => {
+    const providerLabel = provider === 'github' ? 'GitHub' : provider === 'apple' ? 'Apple' : 'Google';
     try {
-      setIsLoading(true);
+      setOauthLoadingProvider(provider);
       setError(null);
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: window.location.origin,
-        },
-      });
-      if (error) throw error;
+      setInfoMessage(null);
+
+      const runtimeCfg = await ensureSupabaseRuntimeConfig();
+      const client = runtimeCfg.client || getSupabaseClient();
+      const sbUrl = (runtimeCfg.supabaseUrl || getResolvedSupabaseUrl()).replace(/\/$/, '');
+
+      if (!client && !sbUrl) {
+        setOauthLoadingProvider(null);
+        return setError(`Supabase project URL (VITE_SUPABASE_URL) is not configured yet.`);
+      }
+
+      const redirectTo = `${window.location.origin}/auth/callback`;
+      let oauthUrl = '';
+
+      if (client) {
+        const { data, error } = await client.auth.signInWithOAuth({
+          provider,
+          options: {
+            redirectTo,
+            skipBrowserRedirect: true,
+          },
+        });
+        if (error) throw error;
+        oauthUrl = data?.url || '';
+      } else {
+        oauthUrl = `${sbUrl}/auth/v1/authorize?provider=${encodeURIComponent(provider)}&redirect_to=${encodeURIComponent(redirectTo)}`;
+      }
+
+      if (!oauthUrl) {
+        throw new Error(`Unable to start ${providerLabel} authentication.`);
+      }
+
+      const width = 540;
+      const height = 680;
+      const left = Math.max(0, Math.round(window.screenX + (window.outerWidth - width) / 2));
+      const top = Math.max(0, Math.round(window.screenY + (window.outerHeight - height) / 2));
+      const popup = window.open(
+        oauthUrl,
+        'eduai_supabase_oauth',
+        `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,status=no`
+      );
+
+      if (!popup) {
+        const inIframe = window.self !== window.top;
+        if (inIframe) {
+          setOauthLoadingProvider(null);
+          setError(`Popup blocked. Please allow popups in your browser to continue with ${providerLabel}.`);
+          return;
+        }
+        window.location.assign(oauthUrl);
+        return;
+      }
+
+      if (popupTimerRef.current) {
+        window.clearInterval(popupTimerRef.current);
+      }
+      popupTimerRef.current = window.setInterval(() => {
+        if (popup.closed) {
+          if (popupTimerRef.current) {
+            window.clearInterval(popupTimerRef.current);
+            popupTimerRef.current = null;
+          }
+          setOauthLoadingProvider((current) => (current === provider ? null : current));
+        }
+      }, 600);
     } catch (err: any) {
       const msg = err.message || '';
       if (msg.includes('Failed to fetch') || err.name === 'TypeError') {
         setError('Unable to reach the authentication server. Please check your network connection.');
+      } else if (msg.toLowerCase().includes('provider is not enabled') || msg.toLowerCase().includes('unsupported provider')) {
+        setError(`${providerLabel} sign-in must be enabled in your Supabase Dashboard under Authentication -> Providers.`);
       } else {
-        setError(msg || 'An error occurred during authentication');
+        setError(msg || `An error occurred during ${providerLabel} authentication`);
       }
-      setIsLoading(false);
+      setOauthLoadingProvider(null);
     }
   };
 
   const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase) {
-      setIsLoading(true);
-      setError(null);
-      setTimeout(() => {
-        const mockUser = {
-          id: 'demo-student-' + Date.now(),
-          email: email.trim() || 'student@edu-ai.learn',
-          user_metadata: {
-            full_name: fullName.trim() || (email ? email.split('@')[0] : 'Alex Johnson'),
-            education_level: educationLevel || 'High School',
-            role: role || 'student',
-            country: country || 'Kenya',
-            curriculum: curriculum || 'CBC'
-          }
-        };
-        const mockSession = { user: mockUser, access_token: 'local_token' };
-        try {
-          safeStorage.setItem('edu_demo_user', JSON.stringify(mockSession));
-        } catch (_) {}
-        setIsLoading(false);
-        if (onLoginSuccess) {
-          onLoginSuccess(mockSession);
-        } else if (onContinueAsGuest) {
-          onContinueAsGuest();
-        }
-      }, 300);
-      return;
-    }
-    
     try {
       setIsLoading(true);
       setError(null);
+      setInfoMessage(null);
+
+      const runtimeCfg = await ensureSupabaseRuntimeConfig();
+      const client = runtimeCfg.client || getSupabaseClient();
+
+      if (!client && !runtimeCfg.serverAuthReady) {
+        setError('Authentication server is not configured. Please check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+        return;
+      }
       
       if (state === 'sign_in') {
-        const { error } = await supabase.auth.signInWithPassword({
-          email,
-          password,
-        });
-        if (error) throw error;
+        if (client) {
+          const { data: signInData, error } = await client.auth.signInWithPassword({
+            email: email.trim(),
+            password,
+          });
+          if (error) throw error;
+          if (signInData?.session && onLoginSuccess) {
+            onLoginSuccess(signInData.session);
+          }
+        } else {
+          const res = await fetch('/api/auth/signin', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: email.trim(), password }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.session) {
+            throw new Error(data?.error || 'Invalid email or password.');
+          }
+          try {
+            safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(data.session));
+          } catch (_) {}
+          if (onLoginSuccess) {
+            onLoginSuccess(data.session, data.profile || null);
+          }
+        }
       } else {
         // Robust Form Validation
         if (!fullName.trim()) return setError('Please enter your full name');
@@ -217,8 +303,8 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
         
         // Level-specific validation
         const isSchoolLevel = educationLevel === 'Primary' || educationLevel === 'High School';
-        const isHigherEducation = !isSchoolLevel && educationLevel !== 'Vocational' && educationLevel !== '';
-        
+        const isHigherEducation = !isSchoolLevel && educationLevel !== '';
+
         if (isSchoolLevel && !curriculum) {
           return setError(`Please select a curriculum for ${educationLevel}`);
         }
@@ -235,30 +321,109 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
           return setError('Password must be at least 6 characters long');
         }
 
-        const { error } = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            emailRedirectTo: window.location.origin,
-            data: {
-              full_name: fullName,
-              dob: dob,
-              education_level: educationLevel,
-              subjects: subjects.join(', '),
-              field_of_study: (educationLevel === 'College' || educationLevel === 'University' || educationLevel === 'Graduate' || educationLevel === 'Postgraduate') ? fieldOfStudy : null,
-              role: role,
-              country: country,
-              curriculum: (educationLevel === 'Primary' || educationLevel === 'High School') ? curriculum : null,
-              join_date: new Date().toISOString(),
+        const subjectsJoined = subjects.join(', ');
+        const metadata = {
+          full_name: fullName.trim(),
+          dob: dob,
+          education_level: educationLevel,
+          subjects: subjectsJoined,
+          field_of_study: !isSchoolLevel ? fieldOfStudy : null,
+          role: role,
+          country: country,
+          curriculum: isSchoolLevel ? curriculum : null,
+          join_date: new Date().toISOString(),
+        };
+        const emailRedirectTo = `${window.location.origin}/auth/callback`;
+
+        if (client) {
+          const { data: signUpData, error } = await client.auth.signUp({
+            email: email.trim(),
+            password,
+            options: {
+              emailRedirectTo,
+              data: metadata,
             }
+          });
+          if (error) throw error;
+          const createdUserId = signUpData?.user?.id || signUpData?.session?.user?.id;
+          if (createdUserId) {
+            saveStoredAcademicPrefs(createdUserId, {
+              country,
+              education_level: educationLevel,
+              curriculum: isSchoolLevel ? curriculum : '',
+              field_of_study: !isSchoolLevel ? fieldOfStudy : '',
+              subjects: subjectsJoined,
+            });
           }
-        });
-        if (error) throw error;
-        setError('Check your email for a verification link.');
+          if (signUpData?.session) {
+            if (onLoginSuccess) {
+              onLoginSuccess(signUpData.session, {
+                id: createdUserId,
+                full_name: metadata.full_name,
+                email: email.trim(),
+                country: metadata.country,
+                education_level: metadata.education_level,
+                curriculum: metadata.curriculum,
+                field_of_study: metadata.field_of_study,
+                subjects: metadata.subjects,
+                role: metadata.role,
+              });
+            }
+          } else {
+            setInfoMessage('Account created! Please check your email inbox for a verification link, then sign in below.');
+            setState('sign_in');
+          }
+        } else {
+          const res = await fetch('/api/auth/signup', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              email: email.trim(),
+              password,
+              metadata,
+              emailRedirectTo,
+            }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data?.error || 'Could not create account.');
+          }
+          const createdUserId = data?.user?.id || data?.session?.user?.id;
+          if (createdUserId) {
+            saveStoredAcademicPrefs(createdUserId, {
+              country,
+              education_level: educationLevel,
+              curriculum: isSchoolLevel ? curriculum : '',
+              field_of_study: !isSchoolLevel ? fieldOfStudy : '',
+              subjects: subjectsJoined,
+            });
+          }
+          if (data?.session) {
+            try {
+              safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(data.session));
+            } catch (_) {}
+            if (onLoginSuccess) {
+              onLoginSuccess(data.session, {
+                id: createdUserId,
+                full_name: metadata.full_name,
+                email: email.trim(),
+                country: metadata.country,
+                education_level: metadata.education_level,
+                curriculum: metadata.curriculum,
+                field_of_study: metadata.field_of_study,
+                subjects: metadata.subjects,
+                role: metadata.role,
+              });
+            }
+          } else {
+            setInfoMessage('Account created! Please check your email inbox for a verification link, then sign in below.');
+            setState('sign_in');
+          }
+        }
       }
     } catch (err: any) {
       const msg = err.message || '';
-      if (msg.includes('Refresh Token') || msg.includes('refresh_token') || msg.includes('Invalid')) {
+      if (msg.includes('Refresh Token') || msg.includes('refresh_token') || (msg.includes('Invalid') && !msg.includes('Invalid login credentials') && !msg.includes('Invalid email'))) {
         clearStaleSupabaseTokens();
         setError('Your session expired. Please enter your email and password to sign in again.');
       } else if (msg.includes('Failed to fetch') || err.name === 'TypeError') {
@@ -274,51 +439,66 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
 
   const handlePhoneAuth = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!supabase) {
-      setIsLoading(true);
-      setError(null);
-      setTimeout(() => {
-        const mockUser = {
-          id: 'demo-phone-user-' + Date.now(),
-          phone: phone || '+254700000000',
-          email: `${phone.replace(/\D/g, '') || 'student'}@edu-ai.learn`,
-          user_metadata: {
-            full_name: 'Student Learner',
-            education_level: 'High School',
-            role: 'student'
-          }
-        };
-        const mockSession = { user: mockUser, access_token: 'local_token' };
-        try {
-          safeStorage.setItem('edu_demo_user', JSON.stringify(mockSession));
-        } catch (_) {}
-        setIsLoading(false);
-        if (onLoginSuccess) {
-          onLoginSuccess(mockSession);
-        } else if (onContinueAsGuest) {
-          onContinueAsGuest();
-        }
-      }, 300);
-      return;
-    }
-
     try {
       setIsLoading(true);
       setError(null);
+      setInfoMessage(null);
+
+      const runtimeCfg = await ensureSupabaseRuntimeConfig();
+      const client = runtimeCfg.client || getSupabaseClient();
+
+      if (!client && !runtimeCfg.serverAuthReady) {
+        setError('Authentication server is not configured. Please check VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.');
+        return;
+      }
 
       if (state === 'verify_otp') {
-        const { error } = await supabase.auth.verifyOtp({
-          phone,
-          token: otp,
-          type: 'sms',
-        });
-        if (error) throw error;
+        if (client) {
+          const { data: otpData, error } = await client.auth.verifyOtp({
+            phone: phone.trim(),
+            token: otp.trim(),
+            type: 'sms',
+          });
+          if (error) throw error;
+          if (otpData?.session && onLoginSuccess) {
+            onLoginSuccess(otpData.session);
+          }
+        } else {
+          const res = await fetch('/api/auth/otp-verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: phone.trim(), token: otp.trim() }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.session) {
+            throw new Error(data?.error || 'Invalid verification code.');
+          }
+          try {
+            safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(data.session));
+          } catch (_) {}
+          if (onLoginSuccess) {
+            onLoginSuccess(data.session);
+          }
+        }
       } else {
-        const { error } = await supabase.auth.signInWithOtp({
-          phone,
-        });
-        if (error) throw error;
-        setState('verify_otp');
+        if (client) {
+          const { error } = await client.auth.signInWithOtp({
+            phone: phone.trim(),
+          });
+          if (error) throw error;
+          setState('verify_otp');
+        } else {
+          const res = await fetch('/api/auth/otp-send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ phone: phone.trim() }),
+          });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            throw new Error(data?.error || 'Could not send verification code.');
+          }
+          setState('verify_otp');
+        }
       }
     } catch (err: any) {
       const msg = err.message || '';
@@ -333,64 +513,140 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+    <div className="min-h-screen bg-slate-50 dark:bg-[#121212] flex items-center justify-center p-4 transition-colors">
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full bg-white rounded-3xl shadow-xl border border-slate-100 overflow-hidden"
+        className="max-w-md w-full bg-white dark:bg-[#1A1A1A] rounded-3xl shadow-xl border border-slate-100 dark:border-white/10 overflow-hidden"
       >
-        <div className="p-8 pb-6 text-center border-b border-slate-100">
+        <div className="p-8 pb-6 text-center border-b border-slate-100 dark:border-white/10">
           <div className="w-12 h-12 bg-brand-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-brand-500/30">
             <BookOpen className="w-6 h-6" />
           </div>
-          <h2 className="text-2xl font-display font-bold text-slate-900 mb-2">
-            Welcome to Edu AI
+          <h2 className="text-2xl font-display font-bold text-slate-900 dark:text-white mb-2">
+            {state === 'sign_up' ? 'Create Your Edu AI Account' : 'Welcome to Edu AI'}
           </h2>
-          <p className="text-slate-500 text-sm">
-            Sign in to access your personalized learning path
+          <p className="text-slate-500 dark:text-slate-400 text-sm">
+            {state === 'sign_up'
+              ? 'Sign up to unlock your personalized learning platform'
+              : 'Sign in or create an account to access the platform'}
           </p>
+
+          {state !== 'verify_otp' && (
+            <div className="grid grid-cols-2 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl mt-5">
+              <button
+                type="button"
+                onClick={() => { setState('sign_in'); setError(null); setInfoMessage(null); }}
+                className={`py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+                  state === 'sign_in'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+              >
+                Sign In
+              </button>
+              <button
+                type="button"
+                onClick={() => { setMode('email'); setState('sign_up'); setError(null); setInfoMessage(null); }}
+                className={`py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+                  state === 'sign_up'
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                }`}
+              >
+                Sign Up
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="p-8">
+          {infoMessage && (
+            <div className="mb-6 p-3.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-sm rounded-xl border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-2.5">
+              <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
+              <span>{infoMessage}</span>
+            </div>
+          )}
+
           {error && (
-            <div className="mb-6 p-3 bg-red-50 text-red-600 text-sm rounded-xl border border-red-100">
+            <div className="mb-6 p-3 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-300 text-sm rounded-xl border border-red-100 dark:border-red-900/60">
               {error}
             </div>
           )}
 
-          {/* Social Logins */}
-          <div className="space-y-3 mb-6">
+          {/* Social Logins (Sign In & Sign Up via Google, Apple, GitHub) */}
+          <div className="space-y-2.5 mb-6">
             <button
+              type="button"
+              disabled={isLoading || oauthLoadingProvider !== null}
               onClick={() => handleOAuthLogin('google')}
-              className="w-full flex items-center justify-center gap-3 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 px-4 py-2.5 rounded-xl font-medium transition-colors"
+              className="w-full flex items-center justify-center gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/80 px-4 py-2.5 rounded-xl font-medium transition-colors disabled:opacity-60 cursor-pointer"
             >
-              <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
-                <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              Continue with Google
+              {oauthLoadingProvider === 'google' ? (
+                <Loader2 className="w-5 h-5 animate-spin text-brand-600" />
+              ) : (
+                <svg className="w-5 h-5 shrink-0" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                </svg>
+              )}
+              <span>{state === 'sign_up' ? 'Sign up with Google' : 'Continue with Google'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isLoading || oauthLoadingProvider !== null}
+              onClick={() => handleOAuthLogin('apple')}
+              className="w-full flex items-center justify-center gap-3 bg-slate-950 hover:bg-slate-900 dark:bg-white dark:hover:bg-slate-100 border border-slate-950 dark:border-white text-white dark:text-slate-950 px-4 py-2.5 rounded-xl font-medium transition-colors disabled:opacity-60 cursor-pointer"
+            >
+              {oauthLoadingProvider === 'apple' ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <svg className="w-5 h-5 shrink-0 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.24 2.31-.93 3.57-.84 1.51.12 2.65.72 3.4 1.8-3.12 1.87-2.38 5.98.48 7.13-.57 1.5-1.31 2.99-2.54 4.09l.01-.01zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" />
+                </svg>
+              )}
+              <span>{state === 'sign_up' ? 'Sign up with Apple' : 'Continue with Apple'}</span>
+            </button>
+
+            <button
+              type="button"
+              disabled={isLoading || oauthLoadingProvider !== null}
+              onClick={() => handleOAuthLogin('github')}
+              className="w-full flex items-center justify-center gap-3 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-100 hover:bg-slate-50 dark:hover:bg-slate-700/80 px-4 py-2.5 rounded-xl font-medium transition-colors disabled:opacity-60 cursor-pointer"
+            >
+              {oauthLoadingProvider === 'github' ? (
+                <Loader2 className="w-5 h-5 animate-spin text-slate-700 dark:text-slate-200" />
+              ) : (
+                <svg className="w-5 h-5 shrink-0 fill-current" viewBox="0 0 24 24" aria-hidden="true">
+                  <path fillRule="evenodd" clipRule="evenodd" d="M12 2C6.477 2 2 6.484 2 12.017c0 4.425 2.865 8.18 6.839 9.504.5.092.682-.217.682-.483 0-.237-.008-.868-.013-1.703-2.782.605-3.369-1.343-3.369-1.343-.454-1.158-1.11-1.466-1.11-1.466-.908-.62.069-.608.069-.608 1.003.07 1.53 1.032 1.53 1.032.892 1.53 2.341 1.088 2.91.832.092-.647.35-1.088.636-1.338-2.22-.253-4.555-1.113-4.555-4.951 0-1.093.39-1.988 1.029-2.688-.103-.253-.446-1.272.098-2.65 0 0 .84-.27 2.75 1.026A9.564 9.564 0 0112 6.844c.85.004 1.705.115 2.504.337 1.909-1.296 2.747-1.027 2.747-1.027.546 1.379.202 2.398.1 2.651.64.7 1.028 1.595 1.028 2.688 0 3.848-2.339 4.695-4.566 4.943.359.309.678.92.678 1.855 0 1.338-.012 2.419-.012 2.747 0 .268.18.58.688.482A10.019 10.019 0 0022 12.017C22 6.484 17.522 2 12 2z" />
+                </svg>
+              )}
+              <span>{state === 'sign_up' ? 'Sign up with GitHub' : 'Continue with GitHub'}</span>
             </button>
           </div>
 
           <div className="relative flex items-center justify-center mb-6">
-            <div className="border-t border-slate-200 w-full"></div>
-            <div className="absolute bg-white px-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
+            <div className="border-t border-slate-200 dark:border-white/10 w-full"></div>
+            <div className="absolute bg-white dark:bg-[#1A1A1A] px-4 text-xs font-medium text-slate-400 uppercase tracking-wider">
               Or continue with
             </div>
           </div>
 
-          <div className="flex bg-slate-100 p-1 rounded-xl mb-6">
+          <div className="flex bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl mb-6">
             <button
-              onClick={() => { setMode('email'); setState('sign_in'); setError(null); }}
-              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'email' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              type="button"
+              onClick={() => { setMode('email'); if (state === 'verify_otp') setState('sign_in'); setError(null); setInfoMessage(null); }}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors cursor-pointer ${mode === 'email' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               Email
             </button>
             <button
-              onClick={() => { setMode('phone'); setState('sign_in'); setError(null); }}
-              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'phone' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+              type="button"
+              onClick={() => { setMode('phone'); setState('sign_in'); setError(null); setInfoMessage(null); }}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors cursor-pointer ${mode === 'phone' ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               Phone (OTP)
             </button>
@@ -411,12 +667,12 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
                   {state === 'sign_up' && (
                     <>
                       <div>
-                        <label className="block text-sm font-medium text-slate-700 mb-1">Full Name</label>
+                        <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Full Name</label>
                         <input
                           type="text"
                           value={fullName}
                           onChange={(e) => setFullName(e.target.value)}
-                          className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                          className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
                           placeholder="Alex Johnson"
                           required
                         />
@@ -424,21 +680,21 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
                       
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Date of Birth</label>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Date of Birth</label>
                           <input
                             type="date"
                             value={dob}
                             onChange={(e) => setDob(e.target.value)}
-                            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white"
                             required
                           />
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Role</label>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Role</label>
                           <select
                             value={role}
                             onChange={(e) => setRole(e.target.value)}
-                            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 capitalize"
+                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white capitalize"
                           >
                             {roles.map(r => <option key={r} value={r}>{r}</option>)}
                           </select>
@@ -447,11 +703,11 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
 
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Education Level</label>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Education Level</label>
                           <select
                             value={educationLevel}
                             onChange={(e) => setEducationLevel(e.target.value)}
-                            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white"
                             required
                           >
                             <option value="">Select level...</option>
@@ -459,11 +715,11 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
                           </select>
                         </div>
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Country of Study</label>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Country of Study</label>
                           <select
                             value={country}
                             onChange={(e) => handleCountryChange(e.target.value)}
-                            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white"
                             required
                           >
                             <option value="">Select country...</option>
@@ -474,19 +730,19 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
 
                       {(educationLevel === 'Primary' || educationLevel === 'High School') && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">System / Curriculum</label>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">System / Curriculum</label>
                           <div className="relative">
                             <select
                               value={curriculum}
                               onChange={(e) => setCurriculum(e.target.value)}
-                              className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                              className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white"
                               required
                             >
                               <option value="">Select curriculum...</option>
                               {curricula.map(c => <option key={c} value={c}>{c}</option>)}
                             </select>
                             {country && (
-                              <p className="mt-1.5 text-[11px] text-brand-600 font-medium px-1">
+                              <p className="mt-1.5 text-[11px] text-brand-600 dark:text-brand-400 font-medium px-1">
                                 Suggested based on {country}
                               </p>
                             )}
@@ -496,14 +752,14 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
 
                       {(educationLevel === 'College' || educationLevel === 'University' || educationLevel === 'Graduate' || educationLevel === 'Postgraduate') && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Major / Field of Study</label>
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Major / Field of Study</label>
                           <select
                             value={fieldOfStudy}
                             onChange={(e) => {
                               setFieldOfStudy(e.target.value);
                               setSubjects([]); // Reset subjects when field changes
                             }}
-                            className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                            className="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white"
                             required
                           >
                             <option value="">Select field study...</option>
@@ -514,8 +770,8 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
 
                       {((educationLevel === 'Primary' || educationLevel === 'High School') || (educationLevel && fieldOfStudy)) && (
                         <div>
-                          <label className="block text-sm font-medium text-slate-700 mb-1">Subjects Intake (Select multiple)</label>
-                          <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-50 border border-slate-200 rounded-xl">
+                          <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subjects Intake (Select multiple)</label>
+                          <div className="grid grid-cols-2 gap-2 max-h-40 overflow-y-auto p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl">
                             {currentAvailableSubjects.map((subj) => (
                               <button
                                 key={subj}
@@ -527,10 +783,10 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
                                       : [...prev, subj]
                                   );
                                 }}
-                                className={`text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                                className={`text-left px-3 py-1.5 rounded-lg text-xs font-medium transition-all border cursor-pointer ${
                                   subjects.includes(subj)
                                     ? 'bg-brand-600 text-white border-brand-600 shadow-sm'
-                                    : 'bg-white text-slate-600 border-slate-100 hover:border-slate-300'
+                                    : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-100 dark:border-slate-700 hover:border-slate-300 dark:hover:border-slate-600'
                                 }`}
                               >
                                 {subj}
@@ -545,28 +801,28 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
                     </>
                   )}
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Email Address</label>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Email Address</label>
                     <div className="relative">
                       <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                       <input
                         type="email"
                         value={email}
                         onChange={(e) => setEmail(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
                         placeholder="you@example.com"
                         required
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Password</label>
                     <div className="relative">
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                       <input
                         type="password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
                         placeholder="••••••••"
                         required
                       />
@@ -577,32 +833,32 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
                 <>
                   {state === 'verify_otp' ? (
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Enter OTP Code</label>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Enter OTP Code</label>
                       <div className="relative">
                         <Hash className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
                           type="text"
                           value={otp}
                           onChange={(e) => setOtp(e.target.value)}
-                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 tracking-widest"
+                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white tracking-widest placeholder:text-slate-400"
                           placeholder="000000"
                           required
                         />
                       </div>
-                      <p className="text-xs text-slate-500 mt-2 text-center">
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 text-center">
                         Code sent to {phone}
                       </p>
                     </div>
                   ) : (
                     <div>
-                      <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number</label>
+                      <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Phone Number</label>
                       <div className="relative">
                         <Phone className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
                         <input
                           type="tel"
                           value={phone}
                           onChange={(e) => setPhone(e.target.value)}
-                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900"
+                          className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
                           placeholder="+1 (555) 000-0000"
                           required
                         />
@@ -615,7 +871,7 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="w-full bg-brand-600 hover:bg-brand-700 text-white font-medium py-3 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 mt-6 disabled:opacity-70"
+                className="w-full bg-brand-600 hover:bg-brand-700 text-white font-semibold py-3 rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 mt-6 disabled:opacity-70 cursor-pointer"
               >
                 {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
                 {mode === 'phone' && state === 'sign_in' ? 'Send Code' : (state === 'sign_up' ? 'Create Account' : 'Sign In')}
@@ -624,84 +880,43 @@ export function Auth({ onContinueAsGuest, onLoginSuccess }: AuthProps = {}) {
           </AnimatePresence>
 
           {mode === 'email' && (
-            <div className="mt-6 text-center text-sm">
+            <div className="mt-6 pt-5 border-t border-slate-100 dark:border-white/10 text-center text-sm">
               <div>
-                <span className="text-slate-500">
+                <span className="text-slate-500 dark:text-slate-400">
                   {state === 'sign_in' ? "Don't have an account? " : "Already have an account? "}
                 </span>
                 <button
-                  onClick={() => setState(state === 'sign_in' ? 'sign_up' : 'sign_in')}
-                  className="text-brand-600 hover:text-brand-700 font-medium transition-colors"
+                  type="button"
+                  onClick={() => {
+                    setState(state === 'sign_in' ? 'sign_up' : 'sign_in');
+                    setError(null);
+                    setInfoMessage(null);
+                  }}
+                  className="text-brand-600 dark:text-brand-400 hover:text-brand-700 font-semibold transition-colors cursor-pointer"
                 >
                   {state === 'sign_in' ? 'Sign up' : 'Sign in'}
                 </button>
               </div>
             </div>
           )}
-
-          <div className="mt-6 pt-5 border-t border-slate-100 dark:border-slate-800 text-center space-y-2.5">
-            {onLoginSuccess && (
-              <button
-                type="button"
-                onClick={() => {
-                  const demoSession = {
-                    user: {
-                      id: 'demo-alex-johnson',
-                      email: 'alex.johnson@edu-ai.learn',
-                      user_metadata: {
-                        full_name: 'Alex Johnson',
-                        education_level: 'High School',
-                        role: 'student',
-                        country: 'Kenya',
-                        curriculum: 'CBC'
-                      }
-                    },
-                    access_token: 'demo_token'
-                  };
-                  try {
-                    safeStorage.setItem('edu_demo_user', JSON.stringify(demoSession));
-                  } catch (_) {}
-                  onLoginSuccess(demoSession);
-                }}
-                className="w-full py-2.5 px-4 rounded-xl border border-indigo-200 hover:border-indigo-400 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-700 dark:bg-indigo-950/40 dark:border-indigo-800 dark:text-indigo-300 transition-all font-medium text-xs sm:text-sm flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-              >
-                <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                <span>Sign In as Demo Student</span>
-              </button>
-            )}
-
-            {onContinueAsGuest && (
-              <button
-                type="button"
-                onClick={onContinueAsGuest}
-                className="w-full py-2.5 px-4 rounded-xl border border-slate-200 hover:border-brand-300 dark:border-slate-700 dark:hover:border-brand-600 text-slate-700 dark:text-slate-200 bg-slate-50/70 hover:bg-slate-100 dark:bg-slate-800/60 dark:hover:bg-slate-800 transition-all font-medium text-xs sm:text-sm flex items-center justify-center gap-2 group cursor-pointer shadow-xs"
-              >
-                <Sparkles className="w-4 h-4 text-brand-500 group-hover:scale-110 transition-transform" />
-                <span>Explore Applet as Guest</span>
-                <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
-              </button>
-            )}
-            <p className="text-[11px] text-slate-400">
-              Preview all reader features, AI tools, and curriculum library instantly
-            </p>
-          </div>
           
           {mode === 'phone' && state === 'verify_otp' && (
             <div className="mt-4 text-center text-sm">
               <button
+                type="button"
                 onClick={() => setState('sign_in')}
-                className="text-brand-600 hover:text-brand-700 font-medium transition-colors"
+                className="text-brand-600 dark:text-brand-400 hover:text-brand-700 font-medium transition-colors cursor-pointer"
               >
                 Use a different number
               </button>
             </div>
           )}
 
-          {!supabase && (
-            <div className="mt-8 p-4 bg-amber-50 rounded-xl border border-amber-200">
-              <h4 className="text-amber-800 font-semibold text-sm mb-1">Preview Mode Setup Needed</h4>
-              <p className="text-amber-700 text-xs leading-relaxed">
-                Supabase credentials not found. To enable real auth, add your <code className="bg-amber-100 px-1 rounded">VITE_SUPABASE_URL</code> and <code className="bg-amber-100 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> to the <code className="bg-amber-100 px-1 rounded">.env</code> file.
+          {!supabase && !authReady && (
+            <div className="mt-8 p-4 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200 dark:border-amber-800/60">
+              <h4 className="text-amber-800 dark:text-amber-300 font-semibold text-sm mb-1">Supabase Configuration Needed</h4>
+              <p className="text-amber-700 dark:text-amber-400 text-xs leading-relaxed">
+                Add <code className="bg-amber-100 dark:bg-amber-900/60 px-1 rounded">VITE_SUPABASE_URL</code> and <code className="bg-amber-100 dark:bg-amber-900/60 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> in your environment settings to enable authentication.
               </p>
             </div>
           )}

@@ -66,11 +66,15 @@ enabled = true
 site_url = "https://ais-pre-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app"
 additional_redirect_urls = [
   "https://ais-dev-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app",
+  "https://ais-dev-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app/auth/callback",
   "https://ais-dev-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app/**",
   "https://ais-pre-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app",
+  "https://ais-pre-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app/auth/callback",
   "https://ais-pre-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app/**",
   "http://localhost:3000",
-  "http://localhost:3000/**"
+  "http://localhost:3000/auth/callback",
+  "http://localhost:3000/**",
+  "io.supabase.eduai://login-callback"
 ]
 jwt_expiry = 3600
 enable_refresh_token_rotation = true
@@ -91,13 +95,18 @@ enable_signup = true
 enable_confirmations = true
 
 [auth.external.google]
-enabled = false
+enabled = true
 client_id = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID)"
 secret = "env(SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET)"
 skip_nonce_check = false
 
+[auth.external.apple]
+enabled = true
+client_id = "env(SUPABASE_AUTH_EXTERNAL_APPLE_CLIENT_ID)"
+secret = "env(SUPABASE_AUTH_EXTERNAL_APPLE_SECRET)"
+
 [auth.external.github]
-enabled = false
+enabled = true
 client_id = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_CLIENT_ID)"
 secret = "env(SUPABASE_AUTH_EXTERNAL_GITHUB_SECRET)"
 

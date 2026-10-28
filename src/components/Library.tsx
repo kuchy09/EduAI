@@ -5,6 +5,13 @@ import { Filter, Search, Bookmark as BookmarkIcon, LayoutGrid, List, HardDriveDo
 import { BookCoverVisual } from './BookCoverVisual';
 import { useOffline } from '../lib/useOffline';
 import { platformBookStoreCatalog } from '../data';
+import {
+  extractUserAcademicProfile,
+  getPersonalizedBooks,
+  getAiRecommendedBooks,
+  findMatchingUserSubjects,
+  ACADEMIC_PREFS_EVENT,
+} from '../lib/bookPersonalization';
 
 interface LibraryProps {
   books: Book[];
@@ -15,15 +22,24 @@ interface LibraryProps {
   profile?: any;
   onAddBookToLibrary?: (book: Book) => void;
   onNavigate?: (view: any) => void;
+  onOpenAcademicPrefs?: () => void;
 }
 
-export function Library({ books, categories, onBookSelect, bookmarks, user, profile, onAddBookToLibrary, onNavigate }: LibraryProps) {
+export function Library({ books, categories, onBookSelect, bookmarks, user, profile, onAddBookToLibrary, onNavigate, onOpenAcademicPrefs }: LibraryProps) {
   const [activeCategory, setActiveCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'books' | 'bookmarks' | 'downloaded'>('books');
   const [displayMode, setDisplayMode] = useState<'grid' | 'list'>('grid');
   const [addedBookIds, setAddedBookIds] = useState<Set<string>>(new Set());
+  const [catalogScope, setCatalogScope] = useState<'personalized' | 'all'>('personalized');
+  const [prefsTick, setPrefsTick] = useState(0);
   const { isOnline, isBookCached, downloadBook, isDownloading, downloadProgress, cachedBookIds } = useOffline();
+
+  useEffect(() => {
+    const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+  }, []);
 
   // Load prefilled search query if navigating from Header or Home
   useEffect(() => {
@@ -34,25 +50,57 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
     }
   }, []);
 
+  const academicProfile = useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
+
+  const personalizedLibraryBooks = useMemo(
+    () => getPersonalizedBooks(books, academicProfile, { allowFallbackIfEmpty: true, includeStartedBooks: true }),
+    [books, academicProfile]
+  );
+
+  const baseBooks = catalogScope === 'personalized' && academicProfile.isConfigured
+    ? personalizedLibraryBooks
+    : books;
+
   const [selectedCountry, setSelectedCountry] = useState<string>('All');
   const [selectedCurriculum, setSelectedCurriculum] = useState<string>('All');
   const [showFilters, setShowFilters] = useState(false);
 
-  const availableCountries = Array.from(new Set(books.flatMap(b => b.country || []))).filter(Boolean);
-  const availableCurricula = Array.from(new Set(books.flatMap(b => b.curriculum || []))).filter(Boolean);
+  const availableCountries = Array.from(new Set(baseBooks.flatMap(b => b.country || []))).filter(Boolean);
+  const availableCurricula = Array.from(new Set(baseBooks.flatMap(b => b.curriculum || []))).filter(Boolean);
+
+  const personalizedFilterPills = useMemo(() => {
+    if (academicProfile.subjects.length > 0 && catalogScope === 'personalized') {
+      return ['All', ...academicProfile.subjects];
+    }
+    const presentCats = Array.from(new Set(baseBooks.map(b => b.category).filter(Boolean)));
+    return presentCats.length > 0 ? ['All', ...presentCats] : categories;
+  }, [academicProfile.subjects, catalogScope, baseBooks, categories]);
+
+  useEffect(() => {
+    if (activeCategory !== 'All' && !personalizedFilterPills.includes(activeCategory)) {
+      setActiveCategory('All');
+    }
+  }, [personalizedFilterPills, activeCategory]);
 
   const q = searchQuery.toLowerCase().trim();
 
-  // Search through library books
+  // Search & filter through personalized library books
   const filteredBooks = useMemo(() => {
-    return books.filter(book => {
-      // If in downloaded tab, filter to cached books
+    const sourceList = viewMode === 'downloaded' ? books : baseBooks;
+    return sourceList.filter(book => {
       if (viewMode === 'downloaded' && !isBookCached(book.id)) {
         return false;
       }
 
-      // Basic category & search filtering
-      const matchesCategory = activeCategory === 'All' || book.category === activeCategory;
+      const matchesCategory =
+        activeCategory === 'All' ||
+        book.category === activeCategory ||
+        findMatchingUserSubjects(book, [activeCategory]).length > 0 ||
+        (book.subjects && book.subjects.some(s => s.toLowerCase() === activeCategory.toLowerCase()));
+
       const matchesSearch = !q || 
                             book.title.toLowerCase().includes(q) || 
                             book.author.toLowerCase().includes(q) ||
@@ -75,13 +123,26 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
       
       return matchesCategory && matchesSearch && matchesCountry && matchesCurriculum;
     });
-  }, [books, viewMode, activeCategory, q, selectedCountry, selectedCurriculum, isBookCached]);
+  }, [baseBooks, books, viewMode, activeCategory, q, selectedCountry, selectedCurriculum, isBookCached]);
 
-  // Platform bookstore catalog books matching search that aren't yet in library
+  // AI Recommended syllabus titles (personalized to user's country, curriculum, level, and subjects)
+  const aiRecommendedForLibrary = useMemo(() => {
+    const libraryIds = new Set(books.map(b => b.id));
+    const unownedStoreBooks = platformBookStoreCatalog.filter(b => !libraryIds.has(b.id));
+    const combinedPool = [...personalizedLibraryBooks, ...getPersonalizedBooks(unownedStoreBooks, academicProfile, { allowFallbackIfEmpty: false })];
+    return getAiRecommendedBooks(combinedPool, academicProfile, 4);
+  }, [books, personalizedLibraryBooks, academicProfile]);
+
+  const libraryIdSet = useMemo(() => new Set(books.map(b => b.id)), [books]);
+
+  // Platform bookstore catalog books matching search (prioritizing user's academic profile)
   const platformStoreMatches = useMemo(() => {
     if (!q) return [];
     const libraryIds = new Set(books.map(b => b.id));
-    return platformBookStoreCatalog.filter(book => {
+    const scopedStore = catalogScope === 'personalized' && academicProfile.isConfigured
+      ? getPersonalizedBooks(platformBookStoreCatalog, academicProfile, { allowFallbackIfEmpty: true })
+      : platformBookStoreCatalog;
+    return scopedStore.filter(book => {
       if (libraryIds.has(book.id)) return false;
       return book.title.toLowerCase().includes(q) ||
              book.author.toLowerCase().includes(q) ||
@@ -90,7 +151,7 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
              (book.subjects && book.subjects.some(s => s.toLowerCase().includes(q))) ||
              (book.curriculum && book.curriculum.some(c => c.toLowerCase().includes(q)));
     });
-  }, [books, q]);
+  }, [books, q, catalogScope, academicProfile]);
 
   // Related books computation
   const relatedBooks = useMemo(() => {
@@ -141,19 +202,34 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
     <div className="p-4 sm:p-6 md:p-8 max-w-6xl mx-auto space-y-6 sm:space-y-8 w-full max-w-full overflow-hidden">
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 sm:gap-6 w-full">
         <div className="min-w-0 w-full">
-          <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight mb-1 sm:mb-2">Library</h2>
-          <p className="text-sm sm:text-base text-slate-500 mb-4 sm:mb-6">Access your collection and AI-generated notes.</p>
+          <div className="flex flex-wrap items-center gap-2.5 mb-1 sm:mb-2">
+            <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-white tracking-tight">Library</h2>
+            <button
+              type="button"
+              onClick={() => onOpenAcademicPrefs?.()}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer"
+              title="Customize your Country, Curriculum, Level & Subjects"
+            >
+              <Sparkles className="w-3 h-3 shrink-0" />
+              <span>{academicProfile.isConfigured ? academicProfile.summaryLabel : 'Set Academic Intake'}</span>
+            </button>
+          </div>
+          <p className="text-sm sm:text-base text-slate-500 dark:text-slate-400 mb-4 sm:mb-6">
+            {academicProfile.isConfigured && catalogScope === 'personalized'
+              ? `Showing textbooks tailored to ${academicProfile.summaryLabel}${academicProfile.subjects.length > 0 ? ` (${academicProfile.subjects.join(', ')})` : ''}.`
+              : 'Access your collection and AI-generated study notes.'}
+          </p>
 
-          <div className="flex items-center border-b border-slate-200 gap-1 sm:gap-2 overflow-x-auto scrollbar-hide w-full max-w-full">
+          <div className="flex items-center border-b border-slate-200 dark:border-slate-800 gap-1 sm:gap-2 overflow-x-auto scrollbar-hide w-full max-w-full">
             <button 
               onClick={() => setViewMode('books')}
-              className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer shrink-0 ${viewMode === 'books' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors whitespace-nowrap cursor-pointer shrink-0 ${viewMode === 'books' ? 'border-brand-500 text-brand-600 dark:text-brand-400' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
-              My Books
+              My Books ({baseBooks.length})
             </button>
             <button 
               onClick={() => setViewMode('downloaded')}
-              className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 ${viewMode === 'downloaded' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 whitespace-nowrap cursor-pointer shrink-0 ${viewMode === 'downloaded' ? 'border-brand-500 text-brand-600 dark:text-brand-400' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               <HardDriveDownload className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               Offline Books ({cachedBookIds.size})
@@ -165,7 +241,7 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
             </button>
             <button 
               onClick={() => setViewMode('bookmarks')}
-              className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 sm:gap-2 whitespace-nowrap cursor-pointer shrink-0 ${viewMode === 'bookmarks' ? 'border-brand-500 text-brand-600' : 'border-transparent text-slate-500 hover:text-slate-700'}`}
+              className={`px-3 sm:px-4 py-2.5 sm:py-3 text-xs sm:text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 sm:gap-2 whitespace-nowrap cursor-pointer shrink-0 ${viewMode === 'bookmarks' ? 'border-brand-500 text-brand-600 dark:text-brand-400' : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}
             >
               <BookmarkIcon className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
               Bookmarks ({bookmarks.length})
@@ -174,7 +250,20 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
         </div>
         
         <div className="flex flex-col sm:items-end gap-3 w-full sm:w-auto shrink-0 mb-1">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            {academicProfile.isConfigured && (
+              <button
+                type="button"
+                onClick={() => setCatalogScope(prev => prev === 'personalized' ? 'all' : 'personalized')}
+                className={`px-3 py-1.5 sm:py-2 border rounded-xl text-xs font-medium transition-colors cursor-pointer ${
+                  catalogScope === 'personalized'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800/60 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-white dark:bg-[#1e1e20] border-slate-200 dark:border-[#2e2e32] text-slate-600 dark:text-[#d4d4d8]'
+                }`}
+              >
+                {catalogScope === 'personalized' ? 'My Intake Only' : 'Showing All Levels'}
+              </button>
+            )}
             <button 
               onClick={() => setShowFilters(!showFilters)}
               className={`px-3 py-1.5 sm:py-2 border rounded-xl flex items-center gap-2 text-xs sm:text-sm font-medium transition-colors cursor-pointer ${
@@ -197,7 +286,7 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
                   onChange={(e) => setSelectedCountry(e.target.value)}
                   className="bg-slate-50 dark:bg-[#242428] border border-slate-200 dark:border-[#34343a] text-slate-700 dark:text-[#ededed] text-xs sm:text-sm rounded-xl px-3 py-1.5 outline-none focus:border-brand-500 w-full sm:w-40 max-w-full"
                 >
-                  <option value="All">All Countries</option>
+                  <option value="All">All Matched Countries</option>
                   {availableCountries.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
@@ -208,7 +297,7 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
                   onChange={(e) => setSelectedCurriculum(e.target.value)}
                   className="bg-slate-50 dark:bg-[#242428] border border-slate-200 dark:border-[#34343a] text-slate-700 dark:text-[#ededed] text-xs sm:text-sm rounded-xl px-3 py-1.5 outline-none focus:border-brand-500 w-full sm:w-40 max-w-full"
                 >
-                  <option value="All">All Curricula</option>
+                  <option value="All">All Matched Curricula</option>
                   {availableCurricula.map(c => <option key={c} value={c}>{c}</option>)}
                 </select>
               </div>
@@ -217,12 +306,73 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
         </div>
       </div>
 
+      {/* AI Recommendations Shelf inside Library */}
+      {viewMode === 'books' && !q && aiRecommendedForLibrary.length > 0 && (
+        <section className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-indigo-50/70 via-white to-brand-50/40 dark:from-[#191922] dark:via-[#16161a] dark:to-[#1d192b] border border-indigo-100/80 dark:border-indigo-900/40 space-y-3.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                  AI Recommended For Your Curriculum & Subjects
+                </h3>
+                <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+                  Selected for {academicProfile.summaryLabel}
+                </p>
+              </div>
+            </div>
+            {onNavigate && (
+              <button
+                onClick={() => onNavigate('book-store')}
+                className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                More in Bookstore <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {aiRecommendedForLibrary.map(({ book, matchReason }) => {
+              const inLib = libraryIdSet.has(book.id) || addedBookIds.has(book.id);
+              return (
+                <div
+                  key={`ai-lib-${book.id}`}
+                  onClick={() => {
+                    if (!inLib && onAddBookToLibrary) {
+                      onAddBookToLibrary(book);
+                      setAddedBookIds(prev => new Set(prev).add(book.id));
+                    }
+                    onBookSelect(book);
+                  }}
+                  className="bg-white/90 dark:bg-[#1e1e24] p-3 rounded-2xl border border-slate-200/70 dark:border-white/10 hover:border-indigo-300 dark:hover:border-indigo-500/50 shadow-xs hover:shadow-md transition-all cursor-pointer flex gap-3 items-center group"
+                >
+                  <div className="w-12 h-18 aspect-[2/3] rounded-lg overflow-hidden shrink-0 bg-slate-100 dark:bg-slate-800 shadow-xs">
+                    <BookCoverVisual book={book} className="w-full h-full object-cover" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-full max-w-full truncate mb-1">
+                      <Sparkles className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate">{matchReason}</span>
+                    </span>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-slate-100 line-clamp-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                      {book.title}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">{book.author}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {viewMode === 'books' || viewMode === 'downloaded' ? (
         <>
           <div className="flex items-center justify-between pb-2 gap-3 w-full max-w-full min-w-0">
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-hide flex-1 min-w-0 py-1 bg-transparent">
-              {categories.map((cat) => (
+              {personalizedFilterPills.map((cat) => (
                 <button
                   key={cat}
                   onClick={() => setActiveCategory(cat)}

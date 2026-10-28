@@ -57,14 +57,24 @@ curl -N -X POST http://localhost:54321/functions/v1/ai-tutor \
 
 Run the function tests: `cd supabase/functions/ai-tutor && deno test --allow-env --allow-net`.
 
-## 3. Flutter app
+## 3. OAuth providers (Google, Apple, GitHub)
+
+`supabase/config.toml` enables Google, Apple, and GitHub sign-in / sign-up.
+
+1. In your provider consoles, register the Supabase callback URL:
+   `https://<YOUR_PROJECT_REF>.supabase.co/auth/v1/callback`
+2. In Supabase Dashboard (**Authentication -> Providers**), enable **Google**, **Apple**, and **GitHub** with their Client IDs and Secrets (or export `SUPABASE_AUTH_EXTERNAL_*` env vars and run `./supabase/deploy-edu-claude.sh`).
+3. In **Authentication -> URL Configuration -> Redirect URLs**, add `io.supabase.eduai://login-callback` for mobile deep links.
+4. After generating `android/` and `ios/` in `mobile/`, register the custom URL scheme `io.supabase.eduai` (`host="login-callback"` in `android/app/src/main/AndroidManifest.xml`, and `CFBundleURLSchemes = ["io.supabase.eduai"]` in `ios/Runner/Info.plist`).
+
+## 4. Flutter app
 
 The app lives in `mobile/`. Key files:
 
 - `lib/core/services/sse_parser.dart` — turns the SSE bytes into events (pure Dart, unit-tested)
 - `lib/core/services/tutor_service.dart` — calls the Edge Function, maps failures to student-friendly messages
 - `lib/features/tutor/` — Riverpod controller and chat screen
-- `lib/features/auth/auth_screen.dart` — email/password sign-in and sign-up
+- `lib/features/auth/auth_screen.dart` — Google, Apple, GitHub OAuth + email/password sign-in and sign-up
 - `lib/app.dart` — go_router with sign-in redirect
 
 Setup is in the [README](README.md). Known gap: the tutor answers with LaTeX (`$$...$$`); `flutter_markdown` shows it as plain text until a math renderer (for example `flutter_math_fork`) is added.

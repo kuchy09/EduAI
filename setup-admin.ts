@@ -1,19 +1,24 @@
 import { createClient } from '@supabase/supabase-js';
 
-const supabaseUrl = 
-  process.env.VITE_SUPABASE_URL || 
-  process.env.NEXT_PUBLIC_SUPABASE_URL || 
-  process.env.SUPABASE_URL || 
-  '';
+const isRealValue = (v?: string) =>
+  Boolean(v && !v.includes('placeholder') && !v.includes('your_') && !v.includes('your-') && !v.startsWith('MY_'));
 
-const supabaseKey = 
-  process.env.SUPABASE_SECRET_KEY ||
-  process.env.SUPABASE_SERVICE_ROLE_KEY ||
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-  process.env.VITE_SUPABASE_ANON_KEY || 
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 
-  '';
+const supabaseUrl =
+  [
+    process.env.VITE_SUPABASE_URL,
+    process.env.NEXT_PUBLIC_SUPABASE_URL,
+    process.env.SUPABASE_URL,
+  ].find((v) => isRealValue(v) && v!.startsWith('http')) || '';
+
+const supabaseKey =
+  [
+    process.env.SUPABASE_SECRET_KEY,
+    process.env.SUPABASE_SERVICE_ROLE_KEY,
+    process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+    process.env.VITE_SUPABASE_ANON_KEY,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  ].find(isRealValue) || '';
 
 if (!supabaseUrl || !supabaseKey) {
   console.log('Skipping admin setup. Please set VITE_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_URL and SUPABASE_SECRET_KEY / VITE_SUPABASE_PUBLISHABLE_KEY first.');

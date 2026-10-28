@@ -29,7 +29,7 @@ final routerProvider = Provider<GoRouter>((ref) {
   ref.onDispose(refresh.dispose);
 
   return GoRouter(
-    initialLocation: '/tutor',
+    initialLocation: '/login',
     refreshListenable: refresh,
     redirect: (context, state) {
       final signedIn = auth.currentSession != null;

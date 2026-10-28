@@ -2,21 +2,35 @@ import { Mail, MapPin, Building, Calendar, BookOpen, GraduationCap, BarChart2, L
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl } from '../lib/userAvatarService';
+import { extractUserAcademicProfile, ACADEMIC_PREFS_EVENT } from '../lib/bookPersonalization';
 
 export interface ProfileProps {
   user?: any;
   profile?: any;
   onNavigate?: (view: string) => void;
   onSignOut?: () => void;
+  onOpenAcademicPrefs?: () => void;
 }
 
-export function Profile({ user: propUser, profile: propProfile, onNavigate, onSignOut }: ProfileProps = {}) {
+export function Profile({ user: propUser, profile: propProfile, onNavigate, onSignOut, onOpenAcademicPrefs }: ProfileProps = {}) {
   const [user, setUser] = useState<any>(propUser || null);
   const [profile, setProfile] = useState<any>(propProfile || null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const avatarUrl = useUserAvatar(user);
   const [avatarFailed, setAvatarFailed] = useState(false);
+  const [prefsTick, setPrefsTick] = useState(0);
+
+  useEffect(() => {
+    const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+  }, []);
+
+  const academicProfile = React.useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
 
   useEffect(() => {
     if (propUser) setUser(propUser);
@@ -162,7 +176,7 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
   return (
     <div className="p-4 sm:p-8 max-w-4xl mx-auto space-y-6 sm:space-y-8">
       {/* Cover & Profile Header */}
-      <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+      <div className="bg-white dark:bg-[#1a1a1d] rounded-3xl border border-slate-200 dark:border-[#2e2e32] overflow-hidden shadow-sm">
         {/* Cover Photo */}
         <div className="h-48 xl:h-64 bg-gradient-to-r from-brand-500 to-indigo-600 relative">
           <div className="absolute inset-0 bg-black/10 mix-blend-overlay"></div>
@@ -179,7 +193,7 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
                 className="hidden" 
                 accept="image/*" 
               />
-              <div className="w-32 h-32 sm:w-40 sm:h-40 bg-white p-1.5 rounded-full z-10 shadow-md relative overflow-hidden">
+              <div className="w-32 h-32 sm:w-40 sm:h-40 bg-white dark:bg-[#1a1a1d] p-1.5 rounded-full z-10 shadow-md relative overflow-hidden">
                 {avatarUrl && !avatarFailed ? (
                   <img 
                     src={avatarUrl} 
@@ -202,7 +216,7 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
                     onError={() => setAvatarFailed(true)}
                   />
                 ) : (
-                  <div className="w-full h-full bg-brand-100 rounded-full flex items-center justify-center text-4xl font-display font-bold text-brand-600">
+                  <div className="w-full h-full bg-brand-100 dark:bg-brand-950 rounded-full flex items-center justify-center text-4xl font-display font-bold text-brand-600 dark:text-brand-300">
                     {user?.email ? user.email.charAt(0).toUpperCase() : 'U'}
                   </div>
                 )}
@@ -214,32 +228,40 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
               </div>
             </div>
             
-            <button className="bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-colors shadow-sm hidden sm:block">
-              Edit Profile
+            <button
+              type="button"
+              onClick={() => onOpenAcademicPrefs?.()}
+              className="bg-slate-900 dark:bg-brand-600 hover:bg-slate-800 dark:hover:bg-brand-700 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-colors shadow-sm hidden sm:block cursor-pointer"
+            >
+              Edit Academic Profile
             </button>
           </div>
 
           {/* Name & Badge */}
           <div className="space-y-1 sm:space-y-2">
             <div className="flex flex-col sm:flex-row sm:items-center gap-3">
-              <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 tracking-tight">
+              <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-white tracking-tight">
                 {profile?.full_name || user?.user_metadata?.full_name || 'Edu AI Learner'}
               </h1>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-brand-50 text-brand-700 text-xs font-semibold rounded-full w-fit">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-brand-50 dark:bg-brand-950/60 text-brand-700 dark:text-brand-300 text-xs font-semibold rounded-full w-fit">
                 <GraduationCap className="w-3.5 h-3.5" />
-                {profile?.education_level || user?.user_metadata?.education_level || 'Active Student'} {user?.user_metadata?.role ? `• ${user.user_metadata.role}` : ''}
+                {academicProfile.educationLevel || 'Active Student'} {user?.user_metadata?.role ? `• ${user.user_metadata.role}` : ''}
               </span>
             </div>
-            <p className="text-slate-500 max-w-2xl text-sm md:text-base">
-              {profile?.field_of_study || user?.user_metadata?.field_of_study 
-                ? `Specializing in ${profile?.field_of_study || user?.user_metadata?.field_of_study}. ` 
-                : 'Passionate learner exploring new concepts and advancing education. '}
+            <p className="text-slate-500 dark:text-slate-400 max-w-2xl text-sm md:text-base">
+              {academicProfile.isConfigured
+                ? `Studying under ${academicProfile.summaryLabel}. `
+                : 'Personalize your country, curriculum, level, and subjects to tailor your shelves. '}
               User ID: <span className="font-mono text-xs">{user?.id || '...'}</span>
             </p>
           </div>
           
-          <button className="w-full mt-6 bg-slate-900 hover:bg-slate-800 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-colors shadow-sm md:hidden">
-            Edit Profile
+          <button
+            type="button"
+            onClick={() => onOpenAcademicPrefs?.()}
+            className="w-full mt-6 bg-slate-900 dark:bg-brand-600 hover:bg-slate-800 dark:hover:bg-brand-700 text-white px-5 py-2.5 rounded-full text-sm font-medium transition-colors shadow-sm md:hidden cursor-pointer"
+          >
+            Edit Academic Profile
           </button>
         </div>
       </div>
@@ -258,11 +280,11 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
               </div>
               <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
                 <MapPin className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
-                <span>{profile?.country || user?.user_metadata?.country || 'Edu AI Global Access'}</span>
+                <span>{academicProfile.country || 'Not selected yet'}</span>
               </div>
               <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
                 <Building className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
-                <span>{profile?.education_level || user?.user_metadata?.education_level || 'Online Learning Platform'}</span>
+                <span>{academicProfile.educationLevel || 'Select level of education'}</span>
               </div>
               <div className="flex items-center gap-3 text-sm text-slate-600 dark:text-[#c4c4c8]">
                 <Calendar className="w-4 h-4 text-slate-400 dark:text-[#8e8e93] shrink-0" />
@@ -278,21 +300,23 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
           </div>
 
           {/* Education System */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
-            <h3 className="font-bold text-slate-900">Education System</h3>
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-100">
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-semibold text-slate-900">
-                  {profile?.curriculum || user?.user_metadata?.curriculum ? 'Curriculum' : 'Study Path'}
+          <div className="bg-white dark:bg-[#1a1a1d] p-6 rounded-2xl border border-slate-200 dark:border-[#2e2e32] shadow-sm space-y-5">
+            <h3 className="font-bold text-slate-900 dark:text-[#ededed]">Education System</h3>
+            <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34]">
+              <div className="flex items-center justify-between mb-2 gap-2">
+                <span className="font-semibold text-slate-900 dark:text-white text-sm">
+                  {academicProfile.isSchoolLevel ? 'Curriculum' : 'Study Path'}
                 </span>
-                <span className="text-xs font-semibold px-2 py-1 bg-indigo-100 text-indigo-700 rounded-md">
-                  {profile?.curriculum || user?.user_metadata?.curriculum || profile?.field_of_study || user?.user_metadata?.field_of_study || 'General'}
+                <span className="text-xs font-semibold px-2 py-1 bg-indigo-100 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 rounded-md truncate max-w-[160px]">
+                  {academicProfile.curriculum || academicProfile.fieldOfStudy || 'Set Intake'}
                 </span>
               </div>
-              <p className="text-sm text-slate-500">
-                {profile?.curriculum || user?.user_metadata?.curriculum 
-                  ? `Following the ${profile?.curriculum || user?.user_metadata?.curriculum} academic framework.` 
-                  : `Focusing on ${profile?.field_of_study || user?.user_metadata?.field_of_study || 'comprehensive'} studies.`}
+              <p className="text-sm text-slate-500 dark:text-slate-400">
+                {academicProfile.curriculum 
+                  ? `Following the ${academicProfile.curriculum} academic framework${academicProfile.country ? ` in ${academicProfile.country}` : ''}.` 
+                  : academicProfile.fieldOfStudy
+                    ? `Focusing on ${academicProfile.fieldOfStudy} studies.`
+                    : 'Click Manage to choose your curriculum and subjects.'}
               </p>
             </div>
           </div>
@@ -304,41 +328,47 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
           <div className="bg-white dark:bg-[#1a1a1d] p-6 rounded-2xl border border-slate-200 dark:border-[#2e2e32] shadow-sm dark:shadow-[0_8px_28px_-4px_rgba(0,0,0,0.55)] space-y-6">
             <div className="flex items-center justify-between">
               <h3 className="font-bold text-slate-900 dark:text-[#ededed]">Subjects & Intakes</h3>
-              <button className="px-3.5 py-1.5 rounded-xl bg-transparent hover:bg-[#f5f5f7] dark:bg-[#242429] dark:hover:bg-[#2e2e35] border border-transparent dark:border-[#34343c] text-brand-600 dark:text-[#b8a5f0] text-sm font-medium hover:text-brand-700 dark:hover:text-[#d8cef6] transition-colors cursor-pointer">
+              <button
+                type="button"
+                onClick={() => onOpenAcademicPrefs?.()}
+                className="px-3.5 py-1.5 rounded-xl bg-transparent hover:bg-[#f5f5f7] dark:bg-[#242429] dark:hover:bg-[#2e2e35] border border-slate-200 dark:border-[#34343c] text-brand-600 dark:text-[#b8a5f0] text-sm font-medium hover:text-brand-700 dark:hover:text-[#d8cef6] transition-colors cursor-pointer"
+              >
                 Manage
               </button>
             </div>
             
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {(profile?.subjects || user?.user_metadata?.subjects) ? (
-                (profile?.subjects || user?.user_metadata?.subjects).split(',').map((subj: string, idx: number) => (
+              {academicProfile.subjects.length > 0 ? (
+                academicProfile.subjects.map((subj: string, idx: number) => (
                   <div key={idx} className="p-4 rounded-xl bg-[#f8f9fb] dark:bg-[#222226] border border-slate-200/80 dark:border-[#2e2e34] hover:border-slate-300 dark:hover:border-[#3f3f46] transition-colors">
                     <div className="flex items-center gap-3 mb-3">
                       <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-brand-50 dark:bg-brand-500/20 text-brand-600 dark:text-[#b8a5f0]">
                         <BookOpen className="w-4 h-4" />
                       </div>
-                      <span className="font-semibold text-slate-900 dark:text-[#ededed] text-sm truncate">{subj.trim()}</span>
+                      <span className="font-semibold text-slate-900 dark:text-[#ededed] text-sm truncate">{subj}</span>
                     </div>
                     <div className="flex items-center justify-between text-xs text-slate-500 dark:text-[#a1a1aa] mb-2">
                       <span>Course Progress</span>
-                      <span className="font-medium text-slate-900 dark:text-[#ededed]">0%</span>
+                      <span className="font-medium text-slate-900 dark:text-[#ededed]">Active</span>
                     </div>
                     <div className="h-1.5 w-full bg-[#e5e5ea] dark:bg-[#2e2e34] rounded-full overflow-hidden">
-                      <div className="h-full bg-brand-500 rounded-full w-0" />
+                      <div className="h-full bg-brand-500 rounded-full w-1/4" />
                     </div>
                   </div>
                 ))
               ) : (
-                ['General Mathematics', 'Basic Science', 'Language Arts'].map((subj, idx) => (
-                  <div key={idx} className="p-4 rounded-xl bg-[#f8f9fb] dark:bg-[#222226] border border-slate-200/80 dark:border-[#2e2e34] hover:border-slate-300 dark:hover:border-[#3f3f46] transition-colors opacity-75 dark:opacity-85">
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0 bg-[#ebebf0] dark:bg-[#2c2c32] text-slate-500 dark:text-[#a1a1aa]">
-                        <BookOpen className="w-4 h-4" />
-                      </div>
-                      <span className="font-semibold text-slate-900 dark:text-[#ededed] text-sm">{subj}</span>
-                    </div>
-                  </div>
-                ))
+                <div className="col-span-full p-6 rounded-2xl bg-slate-50 dark:bg-[#222226] border border-dashed border-slate-300 dark:border-[#34343c] text-center space-y-3">
+                  <p className="text-sm text-slate-600 dark:text-slate-300">
+                    No subjects selected yet. Choose your country, curriculum, level, and subjects to personalize your books.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => onOpenAcademicPrefs?.()}
+                    className="px-4 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold cursor-pointer"
+                  >
+                    Select Subjects Now
+                  </button>
+                </div>
               )}
             </div>
           </div>

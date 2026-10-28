@@ -1,5 +1,6 @@
 import { Map, CheckCircle2, Circle, Sparkles, Loader2, Calendar, Target, Clock, BookOpen, ChevronRight, Layers, Award } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import { extractUserAcademicProfile, ACADEMIC_PREFS_EVENT } from '../lib/bookPersonalization';
 
 interface LearningStep {
   title: string;
@@ -11,43 +12,62 @@ interface LearningStep {
 
 interface LearningPathProps {
   user: any;
+  profile?: any;
 }
 
-export function LearningPath({ user }: LearningPathProps) {
+export function LearningPath({ user, profile }: LearningPathProps) {
   const [steps, setSteps] = useState<LearningStep[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [error, setError] = useState('');
   const [planMode, setPlanMode] = useState<'roadmap' | 'weekly'>('roadmap');
-
-  const fieldOfStudy = user?.user_metadata?.field_of_study || 'General Studies';
-  const subjects = user?.user_metadata?.subjects || 'core concepts';
+  const [prefsTick, setPrefsTick] = useState(0);
 
   useEffect(() => {
-    // Generate an initial default structured plan based on user's field
+    const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+  }, []);
+
+  const academicProfile = useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
+
+  const trackLabel = academicProfile.isSchoolLevel
+    ? `${academicProfile.country ? `${academicProfile.country} ` : ''}${academicProfile.curriculum || academicProfile.educationLevel}`.trim()
+    : academicProfile.fieldOfStudy || academicProfile.educationLevel || 'General Studies';
+
+  const subjectsLabel = academicProfile.subjects.length > 0
+    ? academicProfile.subjects.join(', ')
+    : 'core syllabus concepts';
+
+  useEffect(() => {
     setSteps([
       { 
-        title: `Foundations of ${fieldOfStudy}`, 
+        title: `Foundations of ${trackLabel}`, 
         status: 'completed', 
         duration: '2 weeks',
-        description: 'Core principles, fundamental definitions, and foundational reading modules.',
-        concepts: ['Key Terminology', 'Fundamental Laws', 'Core Frameworks']
+        description: `Core syllabus principles, foundational definitions, and guided reading modules aligned with ${academicProfile.summaryLabel}.`,
+        concepts: academicProfile.subjects.slice(0, 3).length > 0
+          ? academicProfile.subjects.slice(0, 3)
+          : ['Key Terminology', 'Fundamental Laws', 'Core Frameworks']
       },
       { 
-        title: `Advanced Topics in ${subjects}`, 
+        title: `Core Mastery in ${subjectsLabel}`, 
         status: 'current', 
         duration: '3 weeks',
-        description: 'In-depth conceptual breakdowns, case analyses, and textbook problem sets.',
-        concepts: ['Analytical Frameworks', 'System Architecture', 'Critical Case Studies']
+        description: 'In-depth conceptual breakdowns, worked examples, and curriculum-aligned textbook problem sets.',
+        concepts: ['Analytical Frameworks', 'Worked Examples', 'Practical Inquiry']
       },
       { 
-        title: `Practical Applications & Capstone`, 
+        title: `${academicProfile.curriculum || academicProfile.educationLevel || 'Syllabus'} Assessment & Synthesis`, 
         status: 'upcoming', 
         duration: '4 weeks',
-        description: 'Comprehensive evaluations, mock exam quizzes, and practical project synthesis.',
-        concepts: ['Project Synthesis', 'Exam Revision', 'Review Assessments']
+        description: 'Comprehensive evaluations, past-paper style quizzes, and cross-topic mastery synthesis.',
+        concepts: ['Exam Readiness', 'Active Recall', 'Review Assessments']
       },
     ]);
-  }, [fieldOfStudy, subjects]);
+  }, [trackLabel, subjectsLabel, academicProfile.summaryLabel, academicProfile.curriculum, academicProfile.educationLevel, academicProfile.subjects]);
 
   const generatePersonalizedPath = async () => {
     setIsGenerating(true);
@@ -58,8 +78,8 @@ export function LearningPath({ user }: LearningPathProps) {
       const requestBody = allowDataCollection 
         ? {
             userStyle: "Visual learner, needs hands-on exercises",
-            readingHabits: `Reads late night, studying ${fieldOfStudy} and ${subjects}`,
-            currentProgress: `Finished Foundations of ${fieldOfStudy} recently.`
+            readingHabits: `Studying ${academicProfile.summaryLabel} with subjects: ${subjectsLabel}`,
+            currentProgress: `Finished Foundations of ${trackLabel} recently.`
           }
         : {
              userStyle: "Standard",

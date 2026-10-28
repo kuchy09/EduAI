@@ -16,6 +16,12 @@ import { triggerCapsuleFeedback } from '../lib/feedback';
 import { useUserAvatar, saveUserAvatarLocally } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
 import { supabase } from '../lib/supabase';
+import {
+  extractUserAcademicProfile,
+  getPersonalizedBooks,
+  getAiRecommendedBooks,
+  ACADEMIC_PREFS_EVENT,
+} from '../lib/bookPersonalization';
 
 interface HeaderProps {
   currentView?: ViewState;
@@ -24,6 +30,7 @@ interface HeaderProps {
   onNavigate: (view: ViewState) => void;
   onAddBookToLibrary?: (book: Book) => void;
   user?: any;
+  profile?: any;
   books: Book[];
   onToggleSageSidebar?: () => void;
   isSageSidebarOpen?: boolean;
@@ -103,6 +110,7 @@ export function Header({
   onNavigate, 
   onAddBookToLibrary, 
   user, 
+  profile,
   books,
   onToggleSageSidebar,
   isSageSidebarOpen: propIsSageSidebarOpen,
@@ -293,22 +301,60 @@ export function Header({
     };
   }, []);
 
-  const fieldOfStudy = user?.user_metadata?.field_of_study || 'General Studies';
-  const subjects = user?.user_metadata?.subjects || 'core concepts';
+  const [prefsTick, setPrefsTick] = useState(0);
+  useEffect(() => {
+    const refreshPrefs = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
+  }, []);
+
+  const academicProfile = useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
+
+  const personalizedLibraryBooks = useMemo(
+    () => getPersonalizedBooks(books, academicProfile),
+    [books, academicProfile]
+  );
+
+  const personalizedStoreCatalog = useMemo(
+    () => getPersonalizedBooks(platformBookStoreCatalog, academicProfile),
+    [academicProfile]
+  );
+
+  const aiSearchRecommendations = useMemo(
+    () => getAiRecommendedBooks([...books, ...platformBookStoreCatalog], academicProfile, 4),
+    [books, academicProfile]
+  );
+
+  const primaryTrack =
+    academicProfile.curriculum ||
+    academicProfile.fieldOfStudy ||
+    academicProfile.educationLevel ||
+    'General Studies';
+  const primarySubject = academicProfile.subjects[0] || primaryTrack;
+  const secondarySubject = academicProfile.subjects[1] || 'Core Concepts';
 
   const learningPaths = useMemo(() => [
-    { id: 'path-1', title: `Foundations of ${fieldOfStudy}`, category: 'Path' },
-    { id: 'path-2', title: `Advanced Topics in ${subjects}`, category: 'Path' },
-    { id: 'path-3', title: 'Practical Applications & Projects', category: 'Path' },
-    { id: 'path-4', title: 'Kenyan CBC Senior Secondary Core Pathway', category: 'Path' },
-  ], [fieldOfStudy, subjects]);
+    { id: 'path-1', title: `Foundations of ${primaryTrack}`, category: 'Path' },
+    { id: 'path-2', title: `Mastery Track: ${primarySubject}`, category: 'Path' },
+    { id: 'path-3', title: `Applied Practice in ${secondarySubject}`, category: 'Path' },
+    {
+      id: 'path-4',
+      title: academicProfile.country
+        ? `${academicProfile.country} ${primaryTrack} Pathway`
+        : `${primaryTrack} Exam Readiness`,
+      category: 'Path',
+    },
+  ], [primaryTrack, primarySubject, secondarySubject, academicProfile.country]);
 
   const quizzes = useMemo(() => [
-    { id: 'quiz-1', title: `${fieldOfStudy}: Chapter 1 Review`, topic: fieldOfStudy },
-    { id: 'quiz-2', title: `${subjects} Diagnostic Quiz`, topic: subjects },
+    { id: 'quiz-1', title: `${primarySubject}: Chapter 1 Review`, topic: primarySubject },
+    { id: 'quiz-2', title: `${secondarySubject} Diagnostic Quiz`, topic: secondarySubject },
     { id: 'quiz-3', title: 'Problem Solving & Critical Thinking', topic: 'General' },
-    { id: 'quiz-4', title: 'CBC Grade 9 Science Assessment', topic: 'Science' },
-  ], [fieldOfStudy, subjects]);
+    { id: 'quiz-4', title: `${primaryTrack} Assessment`, topic: primaryTrack },
+  ], [primaryTrack, primarySubject, secondarySubject]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -332,29 +378,37 @@ export function Header({
     }
 
     const libraryIds = new Set(books.map(b => b.id));
+    const personalizedIds = new Set([
+      ...personalizedLibraryBooks.map(b => b.id),
+      ...personalizedStoreCatalog.map(b => b.id),
+    ]);
 
-    // Match books in user's library
-    const libMatches = books.filter(b => {
-      const titleMatch = b.title.toLowerCase().includes(searchLow);
-      const authorMatch = b.author.toLowerCase().includes(searchLow);
-      const curriculumMatch = b.curriculum?.some(c => c.toLowerCase().includes(searchLow)) || false;
-      const subjectsMatch = b.subjects?.some(s => s.toLowerCase().includes(searchLow)) || false;
-      const categoryMatch = b.category.toLowerCase().includes(searchLow);
-      const descMatch = b.description.toLowerCase().includes(searchLow);
-      return titleMatch || authorMatch || curriculumMatch || subjectsMatch || categoryMatch || descMatch;
-    });
+    // Match books in user's library (prioritizing personalized intake matches first)
+    const libMatches = books
+      .filter(b => {
+        const titleMatch = b.title.toLowerCase().includes(searchLow);
+        const authorMatch = b.author.toLowerCase().includes(searchLow);
+        const curriculumMatch = b.curriculum?.some(c => c.toLowerCase().includes(searchLow)) || false;
+        const subjectsMatch = b.subjects?.some(s => s.toLowerCase().includes(searchLow)) || false;
+        const categoryMatch = b.category.toLowerCase().includes(searchLow);
+        const descMatch = b.description.toLowerCase().includes(searchLow);
+        return titleMatch || authorMatch || curriculumMatch || subjectsMatch || categoryMatch || descMatch;
+      })
+      .sort((a, b) => Number(personalizedIds.has(b.id)) - Number(personalizedIds.has(a.id)));
 
     // Match books in the platform bookstore that are NOT in the library
-    const storeMatches = platformBookStoreCatalog.filter(b => {
-      if (libraryIds.has(b.id)) return false; // Already in library
-      const titleMatch = b.title.toLowerCase().includes(searchLow);
-      const authorMatch = b.author.toLowerCase().includes(searchLow);
-      const curriculumMatch = b.curriculum?.some(c => c.toLowerCase().includes(searchLow)) || false;
-      const subjectsMatch = b.subjects?.some(s => s.toLowerCase().includes(searchLow)) || false;
-      const categoryMatch = b.category.toLowerCase().includes(searchLow);
-      const descMatch = b.description.toLowerCase().includes(searchLow);
-      return titleMatch || authorMatch || curriculumMatch || subjectsMatch || categoryMatch || descMatch;
-    });
+    const storeMatches = platformBookStoreCatalog
+      .filter(b => {
+        if (libraryIds.has(b.id)) return false; // Already in library
+        const titleMatch = b.title.toLowerCase().includes(searchLow);
+        const authorMatch = b.author.toLowerCase().includes(searchLow);
+        const curriculumMatch = b.curriculum?.some(c => c.toLowerCase().includes(searchLow)) || false;
+        const subjectsMatch = b.subjects?.some(s => s.toLowerCase().includes(searchLow)) || false;
+        const categoryMatch = b.category.toLowerCase().includes(searchLow);
+        const descMatch = b.description.toLowerCase().includes(searchLow);
+        return titleMatch || authorMatch || curriculumMatch || subjectsMatch || categoryMatch || descMatch;
+      })
+      .sort((a, b) => Number(personalizedIds.has(b.id)) - Number(personalizedIds.has(a.id)));
 
     // Extract subjects/categories from direct matches to find related books on the platform
     const matchedCategories = new Set<string>();
@@ -367,8 +421,11 @@ export function Header({
 
     const directIds = new Set([...libMatches.map(b => b.id), ...storeMatches.map(b => b.id)]);
 
-    // Find related books on the platform that share category or subjects
-    const allPlatformBooks = [...books, ...platformBookStoreCatalog.filter(b => !libraryIds.has(b.id))];
+    // Find related books on the platform (scoped to personalized intake first)
+    const allPlatformBooks = [
+      ...personalizedLibraryBooks,
+      ...personalizedStoreCatalog.filter(b => !libraryIds.has(b.id)),
+    ];
     
     const related: { book: Book; reason: string; inLibrary: boolean }[] = [];
     const seenRelatedIds = new Set<string>();
@@ -412,7 +469,7 @@ export function Header({
       directStoreBooks: storeMatches,
       relatedBooks: related.slice(0, 4)
     };
-  }, [books, searchLow]);
+  }, [books, searchLow, personalizedLibraryBooks, personalizedStoreCatalog]);
 
   const filteredPaths = useMemo(() => {
     if (!searchLow) return [];
@@ -693,19 +750,25 @@ export function Header({
                   <div>
                     <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 mb-2">
                       <TrendingUp className="w-3.5 h-3.5 text-brand-500" />
-                      <span>Trending & Recommended Searches</span>
+                      <span>Recommended For Your Subjects</span>
                     </div>
                     <div className="flex flex-wrap gap-1.5">
-                      {[
-                        { label: 'Computer Science', icon: '💻' },
-                        { label: 'Calculus & Physics', icon: '📐' },
-                        { label: 'African Literature', icon: '🌍' },
-                        { label: 'Kenyan CBC Grade 9', icon: '🇰🇪' },
-                        { label: 'Data Structures & Algorithms', icon: '⚡' },
-                        { label: 'Microbiology & Chemistry', icon: '🧬' },
-                        { label: 'Business & Finance', icon: '📊' },
-                        { label: 'Things Fall Apart', icon: '📖' },
-                      ].map((item) => (
+                      {(academicProfile.isConfigured
+                        ? [
+                            ...academicProfile.subjects.slice(0, 5).map((sub) => ({ label: sub, icon: '📚' })),
+                            ...(academicProfile.curriculum ? [{ label: academicProfile.curriculum, icon: '🎓' }] : []),
+                            ...(academicProfile.fieldOfStudy ? [{ label: academicProfile.fieldOfStudy, icon: '🎯' }] : []),
+                            ...(academicProfile.country ? [{ label: academicProfile.country, icon: '🌍' }] : []),
+                          ]
+                        : [
+                            { label: 'Mathematics', icon: '📐' },
+                            { label: 'Physics', icon: '⚡' },
+                            { label: 'Chemistry', icon: '🧪' },
+                            { label: 'Biology', icon: '🧬' },
+                            { label: 'Computer Science', icon: '💻' },
+                            { label: 'Business Studies', icon: '📊' },
+                          ]
+                      ).map((item) => (
                         <button
                           key={item.label}
                           onClick={() => setQuery(item.label)}
@@ -717,6 +780,37 @@ export function Header({
                       ))}
                     </div>
                   </div>
+
+                  {aiSearchRecommendations.length > 0 && (
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400 mb-2">
+                        <Sparkles className="w-3.5 h-3.5" />
+                        <span>AI Picks For Your Intake</span>
+                      </div>
+                      <div className="space-y-1">
+                        {aiSearchRecommendations.slice(0, 3).map(({ book, matchReason }) => (
+                          <button
+                            key={`ai-pick-${book.id}`}
+                            onClick={() => {
+                              onBookSelect(book);
+                              setIsFocused(false);
+                            }}
+                            className="w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/70 text-left transition-colors cursor-pointer"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-semibold text-slate-800 dark:text-slate-100 truncate">
+                                {book.title}
+                              </div>
+                              <div className="text-[10px] text-slate-500 dark:text-slate-400 truncate">
+                                {matchReason}
+                              </div>
+                            </div>
+                            <ArrowRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
 
                   {/* Quick Shortcuts */}
                   <div className="pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 gap-2">
@@ -732,7 +826,7 @@ export function Header({
                       </div>
                       <div>
                         <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-emerald-600">Your Library</div>
-                        <div className="text-[10px] text-slate-400">{books.length} books available</div>
+                        <div className="text-[10px] text-slate-400">{personalizedLibraryBooks.length} tailored books</div>
                       </div>
                     </button>
 
@@ -748,7 +842,7 @@ export function Header({
                       </div>
                       <div>
                         <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600">Bookstore Catalog</div>
-                        <div className="text-[10px] text-slate-400">Official syllabuses & preps</div>
+                        <div className="text-[10px] text-slate-400">{personalizedStoreCatalog.length} intake syllabuses</div>
                       </div>
                     </button>
                   </div>

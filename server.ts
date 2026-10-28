@@ -58,37 +58,75 @@ function writeDeletedBookIds(ids: string[]): void {
   }
 }
 
+function isRealUrlEnv(val?: string): val is string {
+  if (!val) return false;
+  const trimmed = val.trim();
+  return (
+    trimmed.startsWith("http") &&
+    !trimmed.includes("placeholder") &&
+    !trimmed.includes("your-project") &&
+    !trimmed.includes("your_") &&
+    !trimmed.startsWith("MY_")
+  );
+}
+
+function isRealKeyEnv(val?: string): val is string {
+  if (!val) return false;
+  const trimmed = val.trim();
+  return (
+    trimmed.length > 15 &&
+    !trimmed.includes("placeholder") &&
+    !trimmed.includes("your-key") &&
+    !trimmed.includes("your_") &&
+    !trimmed.startsWith("MY_")
+  );
+}
+
+function getResolvedSupabaseUrlEnv(): string {
+  return (
+    [
+      process.env.VITE_SUPABASE_URL,
+      process.env.NEXT_PUBLIC_SUPABASE_URL,
+      process.env.SUPABASE_URL,
+    ].find(isRealUrlEnv) || ""
+  );
+}
+
+function getPublicSupabaseAnonKeyEnv(): string {
+  return (
+    [
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      process.env.VITE_SUPABASE_ANON_KEY,
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      process.env.SUPABASE_PUBLISHABLE_KEY,
+      process.env.SUPABASE_ANON_KEY,
+    ].find(isRealKeyEnv) || ""
+  );
+}
+
+function getServerSupabaseKeyEnv(): string {
+  return (
+    [
+      process.env.SUPABASE_SERVICE_ROLE_KEY,
+      process.env.SUPABASE_SECRET_KEY,
+      process.env.VITE_SUPABASE_PUBLISHABLE_KEY,
+      process.env.VITE_SUPABASE_ANON_KEY,
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+      process.env.SUPABASE_PUBLISHABLE_KEY,
+      process.env.SUPABASE_ANON_KEY,
+    ].find(isRealKeyEnv) || ""
+  );
+}
+
 function getServerSupabase(): SupabaseClient | null {
-  const sbUrl =
-    process.env.VITE_SUPABASE_URL ||
-    process.env.NEXT_PUBLIC_SUPABASE_URL ||
-    process.env.SUPABASE_URL ||
-    "";
-  const sbKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ||
-    process.env.SUPABASE_SECRET_KEY ||
-    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
-    process.env.VITE_SUPABASE_ANON_KEY ||
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
-    "";
-
-  const isRealUrl = Boolean(
-    sbUrl &&
-      sbUrl.startsWith("http") &&
-      !sbUrl.includes("placeholder") &&
-      !sbUrl.includes("your-project") &&
-      !sbUrl.includes("your_")
-  );
-  const isRealKey = Boolean(
-    sbKey &&
-      !sbKey.includes("placeholder") &&
-      !sbKey.includes("your-key") &&
-      !sbKey.includes("your_")
-  );
-
-  if (!isRealUrl || !isRealKey) return null;
-  return createClient(sbUrl, sbKey);
+  const sbUrl = getResolvedSupabaseUrlEnv();
+  const sbKey = getServerSupabaseKeyEnv();
+  if (!sbUrl || !sbKey) return null;
+  return createClient(sbUrl, sbKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  });
 }
 
 const rawEndpoint = process.env.B2_ENDPOINT || "https://s3.us-west-004.backblazeb2.com";
@@ -633,6 +671,397 @@ app.get("/api/health", (req, res) => {
   });
 });
 
+// Public runtime Supabase config (strictly public URL + public anon/publishable key only — never secret/service-role keys)
+app.get("/api/public-config", (_req, res) => {
+  const supabaseUrl = getResolvedSupabaseUrlEnv();
+  const supabaseAnonKey = getPublicSupabaseAnonKeyEnv();
+  const serverAuthReady = Boolean(getServerSupabase());
+  res.setHeader("Cache-Control", "no-store");
+  res.json({
+    supabaseUrl,
+    supabaseAnonKey,
+    serverAuthReady,
+  });
+});
+
+// Verify OAuth / Supabase access_token and return session + user profile
+app.post("/api/auth/session", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const accessToken = typeof req.body?.access_token === "string" ? req.body.access_token.trim() : "";
+  const refreshToken = typeof req.body?.refresh_token === "string" ? req.body.refresh_token.trim() : "";
+  if (!accessToken) {
+    return res.status(401).json({ error: "Missing access token." });
+  }
+  try {
+    const { data: userData, error: userErr } = await sb.auth.getUser(accessToken);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Invalid or expired session." });
+    }
+    let profile = null;
+    try {
+      const { data: profileData } = await sb
+        .from("profiles")
+        .select("*")
+        .eq("id", userData.user.id)
+        .maybeSingle();
+      profile = profileData || null;
+    } catch (_) {}
+
+    return res.json({
+      session: {
+        access_token: accessToken,
+        refresh_token: refreshToken || null,
+        user: userData.user,
+      },
+      profile,
+    });
+  } catch (err) {
+    console.error("[Auth] /api/auth/session verification failed:", err);
+    return res.status(500).json({ error: "Could not verify authentication session." });
+  }
+});
+
+// Validate active Bearer JWT (and optionally refresh via x-refresh-token if expired)
+app.get("/api/auth/user", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const refreshToken = typeof req.headers["x-refresh-token"] === "string" ? req.headers["x-refresh-token"].trim() : "";
+
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    let activeUser = null;
+    let refreshedSession: any = null;
+
+    const { data: userData, error: userErr } = await sb.auth.getUser(token);
+    if (!userErr && userData?.user) {
+      activeUser = userData.user;
+    } else if (refreshToken) {
+      const authSb = getServerSupabase();
+      if (authSb) {
+        const { data: refreshData, error: refreshErr } = await authSb.auth.refreshSession({
+          refresh_token: refreshToken,
+        });
+        if (!refreshErr && refreshData?.session?.user) {
+          activeUser = refreshData.session.user;
+          refreshedSession = {
+            access_token: refreshData.session.access_token,
+            refresh_token: refreshData.session.refresh_token,
+            user: refreshData.session.user,
+          };
+        }
+      }
+    }
+
+    if (!activeUser) {
+      return res.status(401).json({ error: "Session expired or invalid." });
+    }
+
+    let profile = null;
+    try {
+      const { data: profileData } = await sb
+        .from("profiles")
+        .select("*")
+        .eq("id", activeUser.id)
+        .maybeSingle();
+      profile = profileData || null;
+    } catch (_) {}
+
+    return res.json({
+      user: activeUser,
+      profile,
+      refreshedSession,
+    });
+  } catch (err) {
+    console.error("[Auth] /api/auth/user failed:", err);
+    return res.status(401).json({ error: "Session verification failed." });
+  }
+});
+
+// Server-proxied Email Sign-In fallback when browser anon key env var is not yet injected
+app.post("/api/auth/signin", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  try {
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error || !data?.session) {
+      return res.status(401).json({ error: error?.message || "Invalid email or password." });
+    }
+
+    let profile = null;
+    try {
+      const profSb = getServerSupabase();
+      if (profSb && data.user?.id) {
+        const { data: profileData } = await profSb
+          .from("profiles")
+          .select("*")
+          .eq("id", data.user.id)
+          .maybeSingle();
+        profile = profileData || null;
+      }
+    } catch (_) {}
+
+    return res.json({
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        user: data.user,
+      },
+      profile,
+    });
+  } catch (err) {
+    console.error("[Auth] /api/auth/signin error:", err);
+    return res.status(500).json({ error: "Sign-in failed. Please try again." });
+  }
+});
+
+// Server-proxied Email Sign-Up fallback
+app.post("/api/auth/signup", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
+  const metadata = req.body?.metadata && typeof req.body.metadata === "object" ? req.body.metadata : {};
+  const emailRedirectTo = typeof req.body?.emailRedirectTo === "string" ? req.body.emailRedirectTo : undefined;
+
+  if (!email || !password) {
+    return res.status(400).json({ error: "Email and password are required." });
+  }
+
+  try {
+    const { data, error } = await sb.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo,
+        data: metadata,
+      },
+    });
+    if (error) {
+      return res.status(400).json({ error: error.message || "Could not create account." });
+    }
+
+    return res.json({
+      session: data.session
+        ? {
+            access_token: data.session.access_token,
+            refresh_token: data.session.refresh_token,
+            user: data.user,
+          }
+        : null,
+      user: data.user || null,
+    });
+  } catch (err) {
+    console.error("[Auth] /api/auth/signup error:", err);
+    return res.status(500).json({ error: "Sign-up failed. Please try again." });
+  }
+});
+
+// Server-proxied Phone OTP Send & Verify fallbacks
+app.post("/api/auth/otp-send", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number is required." });
+  }
+  try {
+    const { error } = await sb.auth.signInWithOtp({ phone });
+    if (error) {
+      return res.status(400).json({ error: error.message || "Could not send verification code." });
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[Auth] /api/auth/otp-send error:", err);
+    return res.status(500).json({ error: "Could not send verification code." });
+  }
+});
+
+app.post("/api/auth/otp-verify", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const phone = typeof req.body?.phone === "string" ? req.body.phone.trim() : "";
+  const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
+  if (!phone || !token) {
+    return res.status(400).json({ error: "Phone number and code are required." });
+  }
+  try {
+    const { data, error } = await sb.auth.verifyOtp({ phone, token, type: "sms" });
+    if (error || !data?.session) {
+      return res.status(401).json({ error: error?.message || "Invalid verification code." });
+    }
+    return res.json({
+      session: {
+        access_token: data.session.access_token,
+        refresh_token: data.session.refresh_token,
+        user: data.user,
+      },
+    });
+  } catch (err) {
+    console.error("[Auth] /api/auth/otp-verify error:", err);
+    return res.status(500).json({ error: "OTP verification failed." });
+  }
+});
+
+// Save or update user's academic preferences (country, education_level, curriculum, field_of_study, subjects) — strictly verifies caller Bearer JWT
+app.post("/api/auth/preferences", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    const { data: userData, error: userErr } = await sb.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const userId = userData.user.id;
+    const country = typeof req.body?.country === "string" ? req.body.country.trim() : "";
+    const education_level = typeof req.body?.education_level === "string" ? req.body.education_level.trim() : "";
+    const curriculum = typeof req.body?.curriculum === "string" ? req.body.curriculum.trim() : "";
+    const field_of_study = typeof req.body?.field_of_study === "string" ? req.body.field_of_study.trim() : "";
+    const subjects = Array.isArray(req.body?.subjects)
+      ? req.body.subjects.map((s: any) => String(s).trim()).filter(Boolean).join(", ")
+      : typeof req.body?.subjects === "string"
+        ? req.body.subjects.trim()
+        : "";
+    const full_name = typeof req.body?.full_name === "string" ? req.body.full_name.trim() : "";
+
+    const profilePatch: Record<string, any> = {
+      id: userId,
+      country: country || null,
+      location: country || null,
+      education_level: education_level || null,
+      curriculum: curriculum || null,
+      field_of_study: field_of_study || null,
+      subjects: subjects || null,
+      updated_at: new Date().toISOString(),
+    };
+    if (full_name) {
+      profilePatch.full_name = full_name;
+    }
+
+    let updatedProfile = null;
+    try {
+      const { data: profData, error: profErr } = await sb
+        .from("profiles")
+        .upsert(profilePatch, { onConflict: "id" })
+        .select("*")
+        .maybeSingle();
+      if (!profErr && profData) {
+        updatedProfile = profData;
+      }
+    } catch (profEx) {
+      console.warn("[Auth] profiles upsert notice:", profEx);
+    }
+
+    // Opportunistically sync auth user_metadata if service role key is configured on server
+    try {
+      const mergedMeta = {
+        ...(userData.user.user_metadata || {}),
+        country,
+        education_level,
+        curriculum,
+        field_of_study,
+        subjects,
+        ...(full_name ? { full_name } : {}),
+      };
+      if (sb.auth?.admin?.updateUserById) {
+        await sb.auth.admin.updateUserById(userId, { user_metadata: mergedMeta });
+      }
+    } catch (_) {}
+
+    return res.json({
+      ok: true,
+      profile: updatedProfile || profilePatch,
+    });
+  } catch (err) {
+    console.error("[Auth] /api/auth/preferences error:", err);
+    return res.status(500).json({ error: "Could not save academic preferences." });
+  }
+});
+
+// OAuth callback relay for Supabase Auth (Google, Apple, GitHub) — supports both popup mode (AI Studio iframe) and full-tab mode
+app.get(["/auth/callback", "/auth/callback/"], (_req, res) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Signing in to Edu AI...</title>
+    <style>
+      body { font-family: system-ui, -apple-system, sans-serif; background: #0f172a; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+      .card { text-align: center; padding: 24px 32px; background: #1e293b; border: 1px solid #334155; border-radius: 16px; max-width: 360px; }
+      .spinner { width: 28px; height: 28px; border: 3px solid #334155; border-top-color: #6366f1; border-radius: 50%; animation: spin 0.8s linear infinite; margin: 0 auto 14px; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+      p { margin: 0; font-size: 14px; color: #cbd5e1; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="spinner"></div>
+      <p>Completing sign-in, this window will close automatically...</p>
+    </div>
+    <script>
+      (function () {
+        var searchParams = new URLSearchParams(window.location.search);
+        var rawHash = window.location.hash ? window.location.hash.substring(1) : "";
+        var hashParams = new URLSearchParams(rawHash);
+        var payload = {
+          type: "EDU_SUPABASE_OAUTH_CALLBACK",
+          code: searchParams.get("code") || hashParams.get("code") || null,
+          access_token: hashParams.get("access_token") || searchParams.get("access_token") || null,
+          refresh_token: hashParams.get("refresh_token") || searchParams.get("refresh_token") || null,
+          error: searchParams.get("error") || hashParams.get("error") || null,
+          error_description: searchParams.get("error_description") || hashParams.get("error_description") || null
+        };
+        if (window.opener && !window.opener.closed) {
+          try {
+            window.opener.postMessage(payload, window.location.origin);
+          } catch (e) {
+            window.opener.postMessage(payload, "*");
+          }
+          setTimeout(function () { window.close(); }, 120);
+        } else {
+          window.location.replace("/" + window.location.search + window.location.hash);
+        }
+      })();
+    </script>
+  </body>
+</html>`);
+});
+
 // Unified Server-Persisted Books Catalog API (/api/books)
 app.get("/api/books", async (req, res) => {
   try {
@@ -703,8 +1132,15 @@ app.get("/api/books", async (req, res) => {
               rating: 4.8,
               description: b.description || "",
               level: b.education_level || "All",
-              curriculum: b.curriculum ? [b.curriculum] : undefined,
-              subjects: b.subjects ? b.subjects.split(",").map((s: string) => s.trim()).filter(Boolean) : undefined,
+              curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (isKlb ? ["CBC", "KCSE"] : undefined),
+              subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)) : undefined,
+              country: b.country
+                ? (Array.isArray(b.country) ? b.country : [b.country])
+                : b.description?.includes("Location: ")
+                  ? [b.description.split("Location: ")[1].trim()]
+                  : isKlb
+                    ? ["Kenya"]
+                    : undefined,
               fileUrl: b.file_url,
             };
           });

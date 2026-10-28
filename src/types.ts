@@ -20,7 +20,7 @@ export interface Book {
   readProgress?: number;
   description: string;
   aiInsights?: string[];
-  level?: 'School' | 'University' | 'All';
+  level?: 'Primary' | 'High School' | 'School' | 'College' | 'University' | 'Graduate' | 'Postgraduate' | 'Vocational' | 'All';
   curriculum?: string[];
   subjects?: string[];
   country?: string[];

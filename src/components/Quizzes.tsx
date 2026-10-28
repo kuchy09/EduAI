@@ -1,5 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { safeStorage } from '../lib/safeStorage';
+import {
+  extractUserAcademicProfile,
+  getPersonalizedBooks,
+  ACADEMIC_PREFS_EVENT,
+} from '../lib/bookPersonalization';
 import { 
   FileQuestion, Play, Trophy, Sparkles, BookOpen, Clock, 
   CheckCircle2, AlertCircle, RefreshCw, ChevronRight, Lock, 
@@ -24,10 +29,11 @@ interface Quiz {
 
 interface QuizzesProps {
   user?: any;
+  profile?: any;
   books?: any[];
 }
 
-export function Quizzes({ user, books = [] }: QuizzesProps) {
+export function Quizzes({ user, profile, books = [] }: QuizzesProps) {
   const [quizzes, setQuizzes] = useState<Quiz[]>(() => {
     const saved = safeStorage.getItem('generated_quizzes');
     if (saved) {
@@ -137,11 +143,35 @@ export function Quizzes({ user, books = [] }: QuizzesProps) {
     safeStorage.setItem('generated_quizzes', JSON.stringify(quizzes));
   }, [quizzes]);
 
-  // Read all subjects and calculate reading progress statistics
+  const [prefsTick, setPrefsTick] = useState(0);
+  useEffect(() => {
+    const refreshPrefs = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
+  }, []);
+
+  const academicProfile = React.useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
+
+  const scopedBooks = React.useMemo(
+    () => getPersonalizedBooks(books as any, academicProfile),
+    [books, academicProfile]
+  );
+
+  // Read all subjects and calculate reading progress statistics scoped to user's academic intake
   const subjectStats = React.useMemo(() => {
     const subjectsMap: { [key: string]: { total: number; progressSum: number; activeCount: number; booksList: any[] } } = {};
     
-    books.forEach(book => {
+    academicProfile.subjects.forEach((sub) => {
+      const cleanSub = sub.trim();
+      if (cleanSub && !subjectsMap[cleanSub]) {
+        subjectsMap[cleanSub] = { total: 0, progressSum: 0, activeCount: 0, booksList: [] };
+      }
+    });
+
+    scopedBooks.forEach(book => {
       const bookSubjects = book.subjects || [];
       const prog = book.readProgress || 0;
       
@@ -164,18 +194,18 @@ export function Quizzes({ user, books = [] }: QuizzesProps) {
 
     return Object.keys(subjectsMap).map(subjectName => {
       const data = subjectsMap[subjectName];
-      const avgProg = Math.round(data.progressSum / data.total);
+      const avgProg = data.total > 0 ? Math.round(data.progressSum / data.total) : 0;
       
       return {
         name: subjectName,
         totalBooks: data.total,
         avgProgress: avgProg,
         activeBooks: data.activeCount,
-        isActive: data.activeCount > 0,
+        isActive: data.activeCount > 0 || academicProfile.subjects.includes(subjectName),
         books: data.booksList
       };
-    }).sort((a, b) => b.avgProgress - a.avgProgress || b.name.localeCompare(a.name));
-  }, [books]);
+    }).sort((a, b) => b.avgProgress - a.avgProgress || b.totalBooks - a.totalBooks || a.name.localeCompare(b.name));
+  }, [scopedBooks, academicProfile]);
 
   const activeSubjects = React.useMemo(() => subjectStats.filter(s => s.isActive), [subjectStats]);
 

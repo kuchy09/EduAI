@@ -11,6 +11,10 @@ class AppConfig {
 
   static const supabaseUrl = String.fromEnvironment('SUPABASE_URL');
   static const supabaseAnonKey = String.fromEnvironment('SUPABASE_ANON_KEY');
+  static const authRedirectUri = String.fromEnvironment(
+    'AUTH_REDIRECT_URI',
+    defaultValue: 'io.supabase.eduai://login-callback',
+  );
 
   static void assertConfigured() {
     if (supabaseUrl.isEmpty || supabaseAnonKey.isEmpty) {

@@ -14,6 +14,14 @@ import { fetchUserDashboardMetrics, UserStatsSummary } from '../lib/userHomeData
 import { isAppOnline } from '../lib/offlineManager';
 import { useUserAvatar } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
+import { platformBookStoreCatalog } from '../data';
+import {
+  extractUserAcademicProfile,
+  getPersonalizedBooks,
+  getAiRecommendedBooks,
+  findMatchingUserSubjects,
+  ACADEMIC_PREFS_EVENT,
+} from '../lib/bookPersonalization';
 
 interface DashboardProps {
   books: Book[];
@@ -22,9 +30,10 @@ interface DashboardProps {
   profile?: any;
   onNavigate?: (view: any) => void;
   onAddBookToLibrary?: (book: Book) => void;
+  onOpenAcademicPrefs?: () => void;
 }
 
-export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: DashboardProps) {
+export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAddBookToLibrary, onOpenAcademicPrefs }: DashboardProps) {
   const avatarUrl = useUserAvatar(user);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
@@ -47,20 +56,21 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
   const [isOnline, setIsOnline] = useState<boolean>(true);
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
-  // Fallback to user_metadata if profile not found/loaded yet
-  const educationLevel = profile?.education_level || user?.user_metadata?.education_level;
-  const fieldOfStudy = profile?.field_of_study || user?.user_metadata?.field_of_study;
-  const userCurriculum = profile?.curriculum || user?.user_metadata?.curriculum;
-  const userCountry = profile?.country || user?.user_metadata?.country || '';
-  const userSubjectsRaw = profile?.subjects || user?.user_metadata?.subjects || '';
+  const [prefsTick, setPrefsTick] = useState(0);
+  useEffect(() => {
+    const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+  }, []);
 
-  const userSubjects = Array.isArray(userSubjectsRaw) 
-    ? userSubjectsRaw.map((s: string) => s.toLowerCase()) 
-    : typeof userSubjectsRaw === 'string' 
-      ? userSubjectsRaw.split(',').map(s => s.trim().toLowerCase()).filter(Boolean) 
-      : [];
+  const academicProfile = React.useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
 
-  const isSchool = educationLevel === 'Primary' || educationLevel === 'High School';
+  const educationLevel = academicProfile.educationLevel;
+  const fieldOfStudy = academicProfile.fieldOfStudy;
+  const isSchool = academicProfile.isSchoolLevel;
 
   // Real-time metrics loading and event listener
   useEffect(() => {
@@ -98,47 +108,59 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
     };
   }, [user?.id, books]);
 
-  const personalizedBooks = books.filter(book => {
-    const bookSubjects = (book.subjects || []).map(s => s.toLowerCase());
-    
-    // Always strict match subjects if user has subjects defined
-    const matchesSubjects = userSubjects.length > 0 
-      ? bookSubjects.some(s => userSubjects.includes(s)) || book.level === 'All'
-      : book.level === 'All' || book.category === 'Information and Communication Technologies (ICT)';
+  const personalizedBooks = React.useMemo(
+    () => getPersonalizedBooks(books, academicProfile, { allowFallbackIfEmpty: true, includeStartedBooks: true }),
+    [books, academicProfile]
+  );
 
-    if (isSchool) {
-      // Filter school books by curriculum and subjects
-      const matchesCurriculum = (book.curriculum?.some(c => c.toLowerCase().includes(userCurriculum?.toLowerCase() || '')) || !book.curriculum || !userCurriculum);
-      const matchesCountry = (book.country?.some(c => c.toLowerCase().includes(userCountry?.toLowerCase() || '')) || !book.country || !userCountry);
-      const bLevel = book.level?.toLowerCase() || '';
-      const isLevelMatch = bLevel === 'school' || bLevel.includes('school');
-      return isLevelMatch && matchesCurriculum && matchesCountry && matchesSubjects;
-    } else if (educationLevel) {
-      // Filter university books by field of study and subjects
-      const matchesField = book.category === fieldOfStudy || !fieldOfStudy || book.level === 'All';
-      const bLevel = book.level?.toLowerCase() || '';
-      const isLevelMatch = bLevel === 'university' || bLevel.includes('uni');
-      return isLevelMatch && (matchesField || matchesSubjects);
+  // Merge library + unowned bookstore catalog items for comprehensive AI Recommendations
+  const unifiedRecommendationPool = React.useMemo(() => {
+    const seen = new Set(books.map((b) => b.id));
+    const extras = platformBookStoreCatalog.filter((b) => !seen.has(b.id));
+    return [...books, ...extras];
+  }, [books]);
+
+  const aiRecommendations = React.useMemo(
+    () => getAiRecommendedBooks(unifiedRecommendationPool, academicProfile, 6),
+    [unifiedRecommendationPool, academicProfile]
+  );
+
+  const libraryBookIdSet = React.useMemo(() => new Set(books.map((b) => b.id)), [books]);
+
+  // Sort continue reading by most recently read / active progress within personalized shelf
+  const continueReading = React.useMemo(
+    () =>
+      personalizedBooks
+        .filter((b) => b.readProgress && b.readProgress > 0 && b.readProgress < 100)
+        .sort((a, b) => (b.readProgress || 0) - (a.readProgress || 0)),
+    [personalizedBooks]
+  );
+
+  // Subject & category chips tailored to user's sign-up subjects
+  const categories = React.useMemo(() => {
+    if (academicProfile.subjects.length > 0) {
+      return ['All', ...academicProfile.subjects];
     }
-    
-    // If no setup, don't show school or university specific books unless they are general.
-    return book.level === 'All' || book.category === 'General' || matchesSubjects; 
-  });
+    return ['All', ...Array.from(new Set(personalizedBooks.map((b) => b.category).filter(Boolean)))].slice(0, 7);
+  }, [academicProfile.subjects, personalizedBooks]);
 
-  // Sort continue reading by most recently read / active progress
-  const continueReading = books
-    .filter(b => b.readProgress && b.readProgress > 0 && b.readProgress < 100)
-    .sort((a, b) => (b.readProgress || 0) - (a.readProgress || 0));
+  useEffect(() => {
+    if (selectedCategory !== 'All' && !categories.includes(selectedCategory)) {
+      setSelectedCategory('All');
+    }
+  }, [categories, selectedCategory]);
 
-  const recommended = (personalizedBooks.length > 0 ? personalizedBooks : books)
-    .filter(b => b.rating >= 4.5)
-    .slice(0, 6);
-
-  const exploreList = selectedCategory === 'All'
-    ? books.slice(0, 8)
-    : books.filter(b => b.category === selectedCategory);
-
-  const categories = ['All', ...Array.from(new Set(books.map(b => b.category).filter(Boolean)))].slice(0, 6);
+  const exploreList = React.useMemo(() => {
+    if (selectedCategory === 'All') {
+      return personalizedBooks;
+    }
+    return personalizedBooks.filter(
+      (b) =>
+        findMatchingUserSubjects(b, [selectedCategory]).length > 0 ||
+        b.category === selectedCategory ||
+        b.subjects?.some((s) => s.toLowerCase() === selectedCategory.toLowerCase())
+    );
+  }, [personalizedBooks, selectedCategory]);
 
   const greeting = (() => {
     const hour = new Date().getHours();
@@ -187,19 +209,28 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
     }
   };
 
-  const fullName = profile?.full_name || user?.user_metadata?.full_name || (user?.email ? user.email.split('@')[0] : 'Alex Morgan');
+  const fullName = profile?.full_name || user?.user_metadata?.full_name || (user?.email ? user.email.split('@')[0] : 'Learner');
   const firstName = fullName.split(' ')[0] || 'Learner';
   const displayField = isSchool
-    ? 'General Studies'
+    ? (academicProfile.curriculum || 'School Curriculum')
     : fieldOfStudy;
 
-  const defaultSubject = userSubjects.length > 0 
-    ? (userSubjects[0].charAt(0).toUpperCase() + userSubjects[0].slice(1))
-    : (displayField || 'Computer Science & AI');
+  const defaultSubject = academicProfile.subjects.length > 0
+    ? academicProfile.subjects[0]
+    : (displayField || 'General Studies');
 
   const [activeSubject, setActiveSubject] = useState<string>(() => {
-    return safeStorage.getItem('edu_ai_active_subject') || defaultSubject;
+    const saved = safeStorage.getItem('edu_ai_active_subject');
+    if (saved && academicProfile.subjects.includes(saved)) return saved;
+    return defaultSubject;
   });
+
+  useEffect(() => {
+    if (academicProfile.subjects.length > 0 && !academicProfile.subjects.includes(activeSubject)) {
+      setActiveSubject(academicProfile.subjects[0]);
+      safeStorage.setItem('edu_ai_active_subject', academicProfile.subjects[0]);
+    }
+  }, [academicProfile.subjects, activeSubject]);
 
   const [completedModules, setCompletedModules] = useState<number>(() => {
     const saved = safeStorage.getItem('edu_ai_weekly_modules');
@@ -219,15 +250,16 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
     safeStorage.setItem('edu_ai_weekly_modules', String(nextVal));
   };
 
-  const availableSubjects = Array.from(new Set([
-    activeSubject,
-    ...userSubjects.map((s: string) => s.charAt(0).toUpperCase() + s.slice(1)),
-    'Computer Science & AI',
-    'Interactive Design Systems',
-    'Data Structures & Algorithms',
-    'Cognitive Psychology',
-    'Business & Innovation'
-  ])).filter(Boolean);
+  const availableSubjects = Array.from(
+    new Set(
+      academicProfile.subjects.length > 0
+        ? [activeSubject, ...academicProfile.subjects]
+        : [
+            activeSubject,
+            ...personalizedBooks.flatMap((b) => b.subjects || []).slice(0, 6),
+          ]
+    )
+  ).filter(Boolean);
 
   const insight = fieldInsights[displayField as keyof typeof fieldInsights] || {
     quote: "Education is the most powerful weapon which you can use to change the world.",
@@ -290,6 +322,19 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
                 <span className="text-xs sm:text-sm font-medium text-slate-500 dark:text-[#A0A0A0] truncate max-w-full">
                   • <strong className="font-semibold text-slate-700 dark:text-[#EDEDED]">{fullName}</strong>
                 </span>
+
+                {/* Active Academic Intake Pill */}
+                <button
+                  type="button"
+                  onClick={() => onOpenAcademicPrefs?.()}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer"
+                  title="Edit Country, Curriculum, Education Level & Subjects"
+                >
+                  <Sparkles className="w-3 h-3 text-indigo-500 shrink-0" />
+                  <span className="truncate max-w-[220px] sm:max-w-xs">
+                    {academicProfile.isConfigured ? academicProfile.summaryLabel : 'Set Curriculum & Subjects'}
+                  </span>
+                </button>
               </div>
 
               {/* Exact user request sentence: "Welcome to Edu AI. You've completed.....modules this week" */}
@@ -647,56 +692,78 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
 
       {/* AI Recommended / Curated For You */}
       <section className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400">
-              <Star className="w-5 h-5 fill-amber-400 text-amber-400" />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-400">
+                <Sparkles className="w-5 h-5 text-amber-500" />
+              </div>
+              <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 font-display">
+                AI Recommendations For Your Studies
+              </h3>
             </div>
-            <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 font-display">
-              Recommended For Your Studies
-            </h3>
+            {academicProfile.isConfigured && (
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                Matched to <strong className="text-slate-700 dark:text-slate-200">{academicProfile.summaryLabel}</strong>
+                {academicProfile.subjects.length > 0 && (
+                  <span> • {academicProfile.subjects.slice(0, 4).join(', ')}{academicProfile.subjects.length > 4 ? ` +${academicProfile.subjects.length - 4} more` : ''}</span>
+                )}
+              </p>
+            )}
           </div>
           <button 
             onClick={() => onNavigate?.('library')}
             className="px-3 py-1.5 text-xs sm:text-sm font-semibold text-brand-600 dark:text-brand-400 hover:text-brand-700 flex items-center gap-1 transition-colors cursor-pointer"
           >
-            <span>Explore All</span>
+            <span>Explore Library</span>
             <ChevronRight className="w-4 h-4" />
           </button>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-4">
-          {recommended.map((book, idx) => (
-            <motion.div 
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: idx * 0.05 + 0.1 }}
-              onClick={() => onBookSelect(book)}
-              key={book.id} 
-              className="group cursor-pointer flex flex-col liquid-glass-card p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 hover:border-brand-300 dark:hover:border-brand-500/50 hover:shadow-lg transition-all duration-300"
-            >
-              <div className="w-full aspect-[2/3] rounded-xl overflow-hidden shadow-sm group-hover:shadow-md transition-shadow relative mb-2.5 bg-slate-100 dark:bg-slate-800">
-                <BookCoverVisual book={book} className="w-full h-full object-cover absolute inset-0 group-hover:scale-105 transition-transform duration-500" />
-                <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10 backdrop-blur-[2px]">
-                  <PlayCircle className="w-8 h-8 text-white drop-shadow-md" />
+          {aiRecommendations.map(({ book, matchReason }, idx) => {
+            const isInLibrary = libraryBookIdSet.has(book.id);
+            return (
+              <motion.div 
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: idx * 0.05 + 0.1 }}
+                onClick={() => {
+                  if (!isInLibrary && onAddBookToLibrary) {
+                    onAddBookToLibrary(book);
+                  }
+                  onBookSelect(book);
+                }}
+                key={book.id} 
+                className="group cursor-pointer flex flex-col liquid-glass-card p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800 hover:border-brand-300 dark:hover:border-brand-500/50 hover:shadow-lg transition-all duration-300"
+              >
+                <div className="w-full aspect-[2/3] rounded-xl overflow-hidden shadow-sm group-hover:shadow-md transition-shadow relative mb-2.5 bg-slate-100 dark:bg-slate-800">
+                  <BookCoverVisual book={book} className="w-full h-full object-cover absolute inset-0 group-hover:scale-105 transition-transform duration-500" />
+                  <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center z-10 backdrop-blur-[2px]">
+                    <PlayCircle className="w-8 h-8 text-white drop-shadow-md" />
+                  </div>
                 </div>
-              </div>
-              <h4 className="font-bold text-slate-900 dark:text-slate-100 leading-tight text-xs line-clamp-2 mb-1 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
-                {book.title}
-              </h4>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
-                {book.author}
-              </p>
-            </motion.div>
-          ))}
+                <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 rounded-full truncate mb-1.5">
+                  <Sparkles className="w-2.5 h-2.5 shrink-0" />
+                  <span className="truncate">{matchReason}</span>
+                </span>
+                <h4 className="font-bold text-slate-900 dark:text-slate-100 leading-tight text-xs line-clamp-2 mb-1 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
+                  {book.title}
+                </h4>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 line-clamp-1">
+                  {book.author}
+                </p>
+              </motion.div>
+            );
+          })}
         </div>
       </section>
 
-      {/* Category Pills & Explore Catalog */}
+      {/* Subject Pills & Personalized Shelf */}
       <section className="space-y-4 pt-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h3 className="text-lg sm:text-xl font-bold text-slate-800 dark:text-slate-100 font-display">
-            Browse by Subject & Category
+            Your Personalized Subject Shelf
           </h3>
           
           {/* Filter Chips */}
@@ -717,8 +784,8 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          {exploreList.slice(0, 4).map((book) => (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {exploreList.slice(0, 8).map((book) => (
             <div
               key={book.id}
               onClick={() => onBookSelect(book)}
@@ -729,12 +796,12 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate }: Da
               </div>
               <div className="flex flex-col justify-center min-w-0">
                 <span className="text-[10px] uppercase font-bold text-brand-600 dark:text-brand-400 tracking-wider truncate">
-                  {book.category}
+                  {book.subjects?.[0] || book.category.split(',')[0]}
                 </span>
                 <h4 className="font-bold text-xs text-slate-900 dark:text-slate-100 line-clamp-2 leading-snug group-hover:text-brand-600 transition-colors">
                   {book.title}
                 </h4>
-                <p className="text-[11px] text-slate-500 truncate mt-0.5">{book.author}</p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">{book.author}</p>
               </div>
             </div>
           ))}

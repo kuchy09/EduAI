@@ -4,6 +4,13 @@ import { Search, ShoppingBag, CheckCircle, Sparkles, Star, ChevronRight, ShieldC
 import { Book } from '../types';
 import { BookCoverVisual } from './BookCoverVisual';
 import { platformBookStoreCatalog } from '../data';
+import {
+  extractUserAcademicProfile,
+  getPersonalizedBooks,
+  getAiRecommendedBooks,
+  findMatchingUserSubjects,
+  ACADEMIC_PREFS_EVENT,
+} from '../lib/bookPersonalization';
 
 interface BookStoreProps {
   books: Book[];
@@ -12,11 +19,20 @@ interface BookStoreProps {
   profile: any;
   onBookSelect?: (book: Book) => void;
   onNavigate?: (view: any) => void;
+  onOpenAcademicPrefs?: () => void;
 }
 
-export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSelect }: BookStoreProps) {
+export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSelect, onOpenAcademicPrefs }: BookStoreProps) {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
+  const [catalogScope, setCatalogScope] = useState<'personalized' | 'all'>('personalized');
+  const [prefsTick, setPrefsTick] = useState(0);
+
+  useEffect(() => {
+    const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+  }, []);
 
   // Load prefilled search query if navigating from Header, Home, or Library
   useEffect(() => {
@@ -53,10 +69,43 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
   const [activeModalItem, setActiveModalItem] = useState<Book | null>(null);
   const [purchaseStep, setPurchaseStep] = useState<'details' | 'buying' | 'success'>('details');
 
+  const academicProfile = useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
+
+  const personalizedStoreCatalog = useMemo(
+    () => getPersonalizedBooks(allStoreCatalog, academicProfile, { allowFallbackIfEmpty: true }),
+    [allStoreCatalog, academicProfile]
+  );
+
+  const activeCatalog = catalogScope === 'personalized' && academicProfile.isConfigured
+    ? personalizedStoreCatalog
+    : allStoreCatalog;
+
+  const aiRecommendedStoreBooks = useMemo(
+    () => getAiRecommendedBooks(personalizedStoreCatalog, academicProfile, 3),
+    [personalizedStoreCatalog, academicProfile]
+  );
+
+  const subjectFilterPills = useMemo(() => {
+    if (academicProfile.subjects.length > 0 && catalogScope === 'personalized') {
+      return ['All', ...academicProfile.subjects];
+    }
+    const cats = Array.from(new Set(activeCatalog.map(b => b.category).filter(Boolean)));
+    return ['All', ...cats];
+  }, [academicProfile.subjects, catalogScope, activeCatalog]);
+
+  useEffect(() => {
+    if (selectedCategory !== 'All' && !subjectFilterPills.includes(selectedCategory)) {
+      setSelectedCategory('All');
+    }
+  }, [subjectFilterPills, selectedCategory]);
+
   // Filter items across comprehensive criteria
   const q = searchQuery.toLowerCase().trim();
   const filteredItems = useMemo(() => {
-    return allStoreCatalog.filter(item => {
+    return activeCatalog.filter(item => {
       const matchesSearch = !q ||
                             item.title.toLowerCase().includes(q) || 
                             item.author.toLowerCase().includes(q) ||
@@ -66,10 +115,15 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
                             (item.curriculum && item.curriculum.some(c => c.toLowerCase().includes(q))) ||
                             (item.country && item.country.some(c => c.toLowerCase().includes(q)));
       
-      const matchesCategory = selectedCategory === 'All' || item.category === selectedCategory || item.category.includes(selectedCategory);
+      const matchesCategory =
+        selectedCategory === 'All' ||
+        item.category === selectedCategory ||
+        item.category.includes(selectedCategory) ||
+        findMatchingUserSubjects(item, [selectedCategory]).length > 0 ||
+        (item.subjects && item.subjects.some(s => s.toLowerCase() === selectedCategory.toLowerCase()));
       return matchesSearch && matchesCategory;
     });
-  }, [allStoreCatalog, q, selectedCategory]);
+  }, [activeCatalog, q, selectedCategory]);
 
   // Breakdown for dropdown
   const libraryBooks = useMemo(() => {
@@ -153,13 +207,25 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
       {/* Header section with branding */}
       <div className="mb-8 sm:mb-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4 sm:gap-6 w-full">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 text-indigo-600 dark:text-indigo-400 font-semibold text-xs sm:text-sm tracking-wider uppercase mb-1">
-            <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-            Premium Course Library
+          <div className="flex flex-wrap items-center gap-2 mb-1.5">
+            <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 font-semibold text-xs sm:text-sm tracking-wider uppercase">
+              <Sparkles className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+              <span>Premium Course Library</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onOpenAcademicPrefs?.()}
+              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer"
+              title="Customize Country, Curriculum, Level & Subjects"
+            >
+              <span>{academicProfile.isConfigured ? academicProfile.summaryLabel : 'Set Academic Intake'}</span>
+            </button>
           </div>
           <h2 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight">Syllabus & Textbook Store</h2>
           <p className="text-sm sm:text-base text-slate-500 dark:text-slate-300 mt-1 max-w-2xl">
-            Browse and unlock official curriculum publications, accredited CBC materials, and high school test-preps powered by Edu AI learning pathways.
+            {academicProfile.isConfigured && catalogScope === 'personalized'
+              ? `Curated textbooks, syllabus guides, and course packs matched to ${academicProfile.summaryLabel}${academicProfile.subjects.length > 0 ? ` • ${academicProfile.subjects.join(', ')}` : ''}.`
+              : 'Browse and unlock official curriculum publications, accredited study materials, and academic course packs.'}
           </p>
         </div>
         
@@ -175,27 +241,116 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
         </div>
       </div>
 
-      {/* Filter Options */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-6 sm:mb-8 w-full max-w-full">
-        <div className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-300">
-          Showing <span className="font-bold text-slate-800 dark:text-slate-200">{filteredItems.length}</span> textbooks & curriculum courses
+      {/* AI Recommended Syllabus Shelf */}
+      {!q && aiRecommendedStoreBooks.length > 0 && (
+        <section className="mb-8 p-4 sm:p-6 rounded-3xl bg-gradient-to-br from-indigo-50/80 via-white to-violet-50/50 dark:from-slate-900 dark:via-[#16161d] dark:to-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-indigo-600 text-white shadow-xs">
+                <Sparkles className="w-4 h-4" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-slate-900 dark:text-white">
+                  AI Recommended For Your Intake
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Top syllabus matches for {academicProfile.summaryLabel}
+                </p>
+              </div>
+            </div>
+            {academicProfile.isConfigured && (
+              <button
+                type="button"
+                onClick={() => setCatalogScope(prev => prev === 'personalized' ? 'all' : 'personalized')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors cursor-pointer ${
+                  catalogScope === 'personalized'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
+                    : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
+                }`}
+              >
+                {catalogScope === 'personalized' ? 'Matched To My Subjects' : 'Viewing Global Catalog'}
+              </button>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {aiRecommendedStoreBooks.map(({ book, matchReason }) => {
+              const isOwned = purchasedBookIds.includes(book.id);
+              return (
+                <div
+                  key={`store-ai-${book.id}`}
+                  onClick={() => handleOpenPurchase(book)}
+                  className="bg-white dark:bg-slate-900/90 p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-500/50 shadow-xs hover:shadow-md transition-all cursor-pointer flex gap-3.5 items-center group"
+                >
+                  <div className="w-14 h-20 aspect-[2/3] rounded-xl overflow-hidden shrink-0 bg-slate-100 dark:bg-slate-800 shadow-xs">
+                    <BookCoverVisual book={book} className="w-full h-full object-cover" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/70 px-2 py-0.5 rounded-full max-w-full truncate mb-1">
+                      <Sparkles className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate">{matchReason}</span>
+                    </span>
+                    <h4 className="font-bold text-xs sm:text-sm text-slate-900 dark:text-white line-clamp-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                      {book.title}
+                    </h4>
+                    <div className="flex items-center justify-between mt-1.5">
+                      <span className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-[120px]">{book.author}</span>
+                      <span className={`text-[10px] font-bold ${isOwned ? 'text-emerald-600 dark:text-emerald-400' : 'text-indigo-600 dark:text-indigo-400'}`}>
+                        {isOwned ? 'In Library' : 'Unlock'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Search & Subject Filter Bar */}
+      <div className="space-y-3 mb-6 sm:mb-8 w-full max-w-full">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search syllabus textbooks, authors, or subjects..."
+              className="w-full pl-10 pr-8 py-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          <div className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-300">
+            Showing <span className="font-bold text-slate-800 dark:text-slate-200">{filteredItems.length}</span> matched textbooks
+          </div>
         </div>
-        
-        <select
-          value={selectedCategory}
-          onChange={(e) => setSelectedCategory(e.target.value)}
-          className="w-full sm:w-80 max-w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-2xl py-2.5 px-4 shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 text-xs sm:text-sm font-medium text-slate-700 dark:text-slate-200 truncate cursor-pointer"
-        >
-          <option value="All">All Categories & Curriculums</option>
-          <option value="Information and Communication Technologies (ICT)">Computer Science & ICT</option>
-          <option value="Natural Sciences, Mathematics, and Statistics">Mathematics & Science</option>
-          <option value="Arts and Humanities">Arts & Humanities</option>
-          <option value="Social Sciences">Social Sciences</option>
-          <option value="Business, Administration, and Law">Business, Administration & Law</option>
-          <option value="Health and Welfare">Health & Welfare</option>
-          <option value="Engineering, Manufacturing, and Construction">Engineering & Tech</option>
-          <option value="Agriculture, Forestry, Fisheries, and Veterinary">Agriculture & Environment</option>
-        </select>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 scrollbar-hide">
+          {subjectFilterPills.map((pill) => (
+            <button
+              key={pill}
+              type="button"
+              onClick={() => setSelectedCategory(pill)}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-semibold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
+                selectedCategory === pill
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+              }`}
+            >
+              {pill}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Main Grid or Empty State */}
@@ -288,15 +443,17 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
         })}
       </div>
       ) : (
-        <div className="py-20 text-center bg-white rounded-3xl border border-slate-200 shadow-sm p-8">
-          <ShoppingBag className="w-12 h-12 mx-auto text-slate-300 mb-3" />
-          <h3 className="text-base font-semibold text-slate-800">No syllabus textbooks found</h3>
-          <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            We couldn't find any textbooks matching "{searchQuery}". Try searching for another subject or curriculum.
+        <div className="py-20 text-center bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-sm p-8">
+          <ShoppingBag className="w-12 h-12 mx-auto text-slate-300 dark:text-slate-600 mb-3" />
+          <h3 className="text-base font-semibold text-slate-800 dark:text-slate-100">No syllabus textbooks found</h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm mx-auto">
+            {searchQuery
+              ? `We couldn't find any textbooks matching "${searchQuery}".`
+              : 'No textbooks matched this specific filter.'}
           </p>
           <button
             onClick={() => { setSearchQuery(''); setSelectedCategory('All'); }}
-            className="mt-4 px-4 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
+            className="mt-4 px-4 py-2 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 text-indigo-600 dark:text-indigo-300 font-semibold text-xs rounded-xl transition-colors cursor-pointer"
           >
             Clear all filters
           </button>
@@ -374,30 +531,30 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
 
               {purchaseStep === 'buying' && (
                 <div className="p-12 flex flex-col items-center justify-center text-center space-y-4">
-                  <div className="w-12 h-12 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin"></div>
+                  <div className="w-12 h-12 border-4 border-indigo-200 dark:border-indigo-900 border-t-indigo-600 dark:border-t-indigo-400 rounded-full animate-spin"></div>
                   <div>
-                    <h4 className="font-bold text-slate-900">Authorizing Grant Funds...</h4>
-                    <p className="text-xs text-slate-500 mt-1">Acquiring course materials from East African educational servers.</p>
+                    <h4 className="font-bold text-slate-900 dark:text-white">Authorizing Grant Funds...</h4>
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Acquiring syllabus materials for your study library.</p>
                   </div>
                 </div>
               )}
 
               {purchaseStep === 'success' && (
                 <div className="p-8 flex flex-col items-center justify-center text-center space-y-4">
-                  <div className="w-14 h-14 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center shadow-lg shadow-emerald-100/50">
+                  <div className="w-14 h-14 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center shadow-lg shadow-emerald-100/50 dark:shadow-none">
                     <CheckCircle className="w-8 h-8" />
                   </div>
                   <div>
-                    <h4 className="font-bold text-lg text-slate-900">Syllabus Unlocked!</h4>
-                    <p className="text-xs text-slate-600 mt-1.5 max-w-xs leading-relaxed">
-                      "{activeModalItem.title}" has been added to your primary study Library. You can now access full AI study notes and custom quizzes.
+                    <h4 className="font-bold text-lg text-slate-900 dark:text-white">Syllabus Unlocked!</h4>
+                    <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 max-w-xs leading-relaxed">
+                      "{activeModalItem.title}" has been added to your Library. You can now access full AI study notes and custom quizzes.
                     </p>
                   </div>
                   <button
                     onClick={() => setActiveModalItem(null)}
-                    className="w-full py-3 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold rounded-2xl transition-colors mt-4"
+                    className="w-full py-3 bg-slate-900 dark:bg-indigo-600 hover:bg-slate-800 dark:hover:bg-indigo-700 text-white text-xs font-semibold rounded-2xl transition-colors mt-4 cursor-pointer"
                   >
-                    Close & Go To Library
+                    Close & Continue
                   </button>
                 </div>
               )}

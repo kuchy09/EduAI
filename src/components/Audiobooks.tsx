@@ -1,14 +1,23 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Book } from '../types';
 import { Headphones, Play, Pause, SkipForward, SkipBack, Volume2, Sparkles, Clock, Star, PlayCircle, MessageSquareText, Radio, VolumeX, Search, X } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
+import {
+  extractUserAcademicProfile,
+  getPersonalizedBooks,
+  getAiRecommendedBooks,
+  findMatchingUserSubjects,
+  buildPersonalizedNarration,
+  ACADEMIC_PREFS_EVENT,
+} from '../lib/bookPersonalization';
 
 interface AudiobooksProps {
   books: Book[];
   onBookSelect: (book: Book) => void;
   user?: any;
   profile?: any;
+  onOpenAcademicPrefs?: () => void;
 }
 
 const VOICE_PROFILES = [
@@ -17,8 +26,36 @@ const VOICE_PROFILES = [
   { id: 'aria', name: 'Aria', description: 'Soft & Eloquent', gender: 'Female', speed: '0.95x' },
 ];
 
-export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksProps) {
-  const [playingBook, setPlayingBook] = useState<Book | null>(books[0] || null);
+export function Audiobooks({ books, onBookSelect, user, profile, onOpenAcademicPrefs }: AudiobooksProps) {
+  const [prefsTick, setPrefsTick] = useState(0);
+  const [catalogScope, setCatalogScope] = useState<'personalized' | 'all'>('personalized');
+
+  useEffect(() => {
+    const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+  }, []);
+
+  const academicProfile = useMemo(
+    () => extractUserAcademicProfile(profile, user),
+    [profile, user, prefsTick]
+  );
+
+  const personalizedAudiobooks = useMemo(
+    () => getPersonalizedBooks(books, academicProfile, { allowFallbackIfEmpty: true, includeStartedBooks: true }),
+    [books, academicProfile]
+  );
+
+  const activeAudioCatalog = catalogScope === 'personalized' && academicProfile.isConfigured
+    ? personalizedAudiobooks
+    : books;
+
+  const aiRecommendedAudiobooks = useMemo(
+    () => getAiRecommendedBooks(personalizedAudiobooks, academicProfile, 3),
+    [personalizedAudiobooks, academicProfile]
+  );
+
+  const [playingBook, setPlayingBook] = useState<Book | null>(() => personalizedAudiobooks[0] || books[0] || null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackProgress, setPlaybackProgress] = useState(35); // percentage
   const [selectedVoice, setSelectedVoice] = useState('seraphina');
@@ -27,6 +64,15 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
   const [currentParagraphIndex, setCurrentParagraphIndex] = useState(0);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
+
+  // Keep playingBook aligned with user's personalized shelf when profile/books load
+  useEffect(() => {
+    if (activeAudioCatalog.length === 0) return;
+    if (!playingBook || !activeAudioCatalog.some((b) => b.id === playingBook.id)) {
+      setPlayingBook(activeAudioCatalog[0]);
+      setCurrentParagraphIndex(0);
+    }
+  }, [activeAudioCatalog, playingBook]);
 
   // Load prefilled search query if navigating from Header
   useEffect(() => {
@@ -42,13 +88,11 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
   // Animated visualizer heights
   const [visualizerHeights, setVisualizerHeights] = useState<number[]>([15, 25, 45, 10, 30, 20, 50, 25, 15, 40]);
 
-  // Simulated audiobook narration paragraphs
-  const narrationParagraphs = [
-    "In our modern scientific era, the pursuit of fundamental truths requires challenging standard intuition. Physics is the language through which nature speaks its deepest mathematical secrets.",
-    "When Dirac formulated the relativistic wave equation, he was guided by a profound sense of mathematical beauty. The existence of antimatter was not just a theoretical speculation, but an inevitable consequence.",
-    "To fully grasp quantum mechanics, we must shed our macro-world biases. The microscopic world is governed by probabilities, superposition, and non-local entanglement.",
-    "Every physical model we construct is an approximation—a shadow of the deeper reality that lies just beyond our current mathematical horizons.",
-  ];
+  // Personalized, textbook-specific audiobook narration paragraphs
+  const narrationParagraphs = useMemo(
+    () => buildPersonalizedNarration(playingBook, academicProfile),
+    [playingBook, academicProfile]
+  );
 
   // Tick the playback progress when isPlaying is true
   useEffect(() => {
@@ -105,37 +149,140 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
     }
   };
 
-  const filteredAudiobooks = books.filter(book => {
+  const subjectPills = useMemo(() => {
+    if (academicProfile.subjects.length > 0 && catalogScope === 'personalized') {
+      return ['All', ...academicProfile.subjects];
+    }
+    const cats = Array.from(new Set(activeAudioCatalog.map((b) => b.category.split(',')[0]).filter(Boolean)));
+    return ['All', ...cats];
+  }, [academicProfile.subjects, catalogScope, activeAudioCatalog]);
+
+  useEffect(() => {
+    if (selectedCategory !== 'All' && !subjectPills.includes(selectedCategory)) {
+      setSelectedCategory('All');
+    }
+  }, [subjectPills, selectedCategory]);
+
+  const filteredAudiobooks = useMemo(() => {
     const q = searchQuery.toLowerCase().trim();
-    if (!q) return true;
-    const matchesTitle = book.title.toLowerCase().includes(q);
-    const matchesAuthor = book.author.toLowerCase().includes(q);
-    const matchesCategory = book.category.toLowerCase().includes(q);
-    const matchesSubjects = book.subjects?.some(s => s.toLowerCase().includes(q)) || false;
-    return matchesTitle || matchesAuthor || matchesCategory || matchesSubjects;
-  });
+    return activeAudioCatalog.filter((book) => {
+      const matchesSubjectPill =
+        selectedCategory === 'All' ||
+        findMatchingUserSubjects(book, [selectedCategory]).length > 0 ||
+        book.category.toLowerCase().includes(selectedCategory.toLowerCase()) ||
+        (book.subjects && book.subjects.some((s) => s.toLowerCase() === selectedCategory.toLowerCase()));
+
+      if (!matchesSubjectPill) return false;
+      if (!q) return true;
+      const matchesTitle = book.title.toLowerCase().includes(q);
+      const matchesAuthor = book.author.toLowerCase().includes(q);
+      const matchesCategory = book.category.toLowerCase().includes(q);
+      const matchesSubjects = book.subjects?.some((s) => s.toLowerCase().includes(q)) || false;
+      return matchesTitle || matchesAuthor || matchesCategory || matchesSubjects;
+    });
+  }, [activeAudioCatalog, searchQuery, selectedCategory]);
 
   return (
     <div className="p-4 sm:p-8 max-w-6xl mx-auto space-y-8 select-none" id="audiobooks-view-container">
       {/* Header section */}
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex flex-wrap items-center gap-2 mb-2">
             <span className="p-1.5 bg-indigo-50 dark:bg-indigo-900/40 rounded-lg text-indigo-600 dark:text-indigo-400">
               <Headphones className="w-5 h-5 animate-pulse" />
             </span>
             <span className="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
               Edu AI Audio Sync
             </span>
+            <button
+              type="button"
+              onClick={() => onOpenAcademicPrefs?.()}
+              className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200/70 dark:border-indigo-800/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer"
+              title="Customize Country, Curriculum, Level & Subjects"
+            >
+              <Sparkles className="w-3 h-3 shrink-0" />
+              <span>{academicProfile.isConfigured ? academicProfile.summaryLabel : 'Set Academic Intake'}</span>
+            </button>
           </div>
           <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-white tracking-tight mb-2">
             AI Audiobooks
           </h2>
-          <p className="text-slate-500 dark:text-slate-300">
-            Listen to expert AI-narrated books with synchronized highlight tracking.
+          <p className="text-slate-500 dark:text-slate-300 text-sm sm:text-base">
+            {academicProfile.isConfigured && catalogScope === 'personalized'
+              ? `Tutor-narrated syllabus audiobooks matched to ${academicProfile.summaryLabel}${academicProfile.subjects.length > 0 ? ` (${academicProfile.subjects.join(', ')})` : ''}.`
+              : 'Listen to expert AI-narrated books with synchronized highlight tracking.'}
           </p>
         </div>
+
+        {academicProfile.isConfigured && (
+          <button
+            type="button"
+            onClick={() => setCatalogScope((prev) => (prev === 'personalized' ? 'all' : 'personalized'))}
+            className={`px-3.5 py-2 rounded-xl text-xs font-semibold border transition-colors cursor-pointer self-start md:self-auto ${
+              catalogScope === 'personalized'
+                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800/60'
+                : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-800'
+            }`}
+          >
+            {catalogScope === 'personalized' ? 'My Curriculum Shelf' : 'Showing All Audiobooks'}
+          </button>
+        )}
       </div>
+
+      {/* AI Recommended Audiobooks Shelf */}
+      {!searchQuery && aiRecommendedAudiobooks.length > 0 && (
+        <section className="p-4 sm:p-5 rounded-3xl bg-gradient-to-br from-indigo-50/70 via-white to-purple-50/40 dark:from-slate-900 dark:via-[#16161d] dark:to-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 space-y-3.5">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-indigo-600 text-white shadow-xs">
+              <Sparkles className="w-4 h-4" />
+            </div>
+            <div>
+              <h3 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white">
+                AI Recommended Audiobooks For Your Subjects
+              </h3>
+              <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400">
+                Personalized listening queue for {academicProfile.summaryLabel}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+            {aiRecommendedAudiobooks.map(({ book, matchReason }) => {
+              const active = playingBook?.id === book.id;
+              return (
+                <div
+                  key={`ai-audio-${book.id}`}
+                  onClick={() => {
+                    setPlayingBook(book);
+                    setIsPlaying(true);
+                    setPlaybackProgress(0);
+                    setCurrentParagraphIndex(0);
+                  }}
+                  className={`p-3 rounded-2xl border transition-all cursor-pointer flex gap-3 items-center group ${
+                    active
+                      ? 'bg-indigo-50/90 dark:bg-indigo-950/40 border-indigo-300 dark:border-indigo-700 shadow-xs'
+                      : 'bg-white/90 dark:bg-slate-900/90 border-slate-200/70 dark:border-slate-800 hover:border-indigo-300 dark:hover:border-indigo-600'
+                  }`}
+                >
+                  <div className="w-12 h-18 aspect-[2/3] rounded-lg overflow-hidden shrink-0 bg-slate-100 dark:bg-slate-800 shadow-xs">
+                    <BookCoverVisual book={book} className="w-full h-full object-cover" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/70 px-2 py-0.5 rounded-full max-w-full truncate mb-1">
+                      <Sparkles className="w-2.5 h-2.5 shrink-0" />
+                      <span className="truncate">{matchReason}</span>
+                    </span>
+                    <h4 className="text-xs font-bold text-slate-900 dark:text-white line-clamp-2 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
+                      {book.title}
+                    </h4>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">{book.author}</p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
         
@@ -375,6 +522,24 @@ export function Audiobooks({ books, onBookSelect, user, profile }: AudiobooksPro
                 <X className="w-3.5 h-3.5" />
               </button>
             )}
+          </div>
+
+          {/* Subject Filter Pills */}
+          <div className="flex items-center gap-1.5 overflow-x-auto pb-1 scrollbar-hide">
+            {subjectPills.map((pill) => (
+              <button
+                key={pill}
+                type="button"
+                onClick={() => setSelectedCategory(pill)}
+                className={`px-3 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap transition-all cursor-pointer shrink-0 ${
+                  selectedCategory === pill
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800'
+                }`}
+              >
+                {pill}
+              </button>
+            ))}
           </div>
 
           <div className="space-y-3 overflow-y-auto max-h-[520px] pr-1" id="audiobook-playlist-scroller">

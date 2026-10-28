@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { supabase, clearStaleSupabaseTokens } from './lib/supabase';
+import {
+  supabase,
+  clearStaleSupabaseTokens,
+  ensureSupabaseRuntimeConfig,
+  getSupabaseClient,
+  SERVER_VERIFIED_SESSION_KEY,
+} from './lib/supabase';
 import { Auth } from './components/Auth';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -43,6 +49,8 @@ import {
   syncUserDailyGoalFromSupabase, 
   setupHomeRealtimeSubscriptions 
 } from './lib/userHomeDataService';
+import { AcademicPreferencesModal } from './components/AcademicPreferencesModal';
+import { extractUserAcademicProfile } from './lib/bookPersonalization';
 
 export interface SystemHealth {
   status: 'checking' | 'healthy' | 'degraded' | 'offline';
@@ -63,17 +71,11 @@ const VALID_VIEWS: Set<ViewState> = new Set([
 export default function App() {
   const [session, setSession] = useState<any>(null);
   const [profile, setProfile] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
+  const [profileChecked, setProfileChecked] = useState(false);
+  const [isAcademicModalOpen, setIsAcademicModalOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [loadingSeconds, setLoadingSeconds] = useState(0);
-  const [isGuest, setIsGuest] = useState<boolean>(() => {
-    try {
-      const local = safeStorage.getItem('edu_ai_guest_mode');
-      if (local !== null) return local === 'true';
-      const sessionVal = safeSessionStorage.getItem('edu_ai_guest_mode');
-      if (sessionVal !== null) return sessionVal === 'true';
-    } catch (_) {}
-    return true; // Default to instant guest access so the app always loads immediately
-  });
+  const isGuest = false;
 
   // System Health & Diagnostics State
   const [systemHealth, setSystemHealth] = useState<SystemHealth>({
@@ -270,6 +272,10 @@ export default function App() {
       if (res.ok) {
         backendOk = true;
         latency = Date.now() - startTime;
+        const healthPayload = await res.json().catch(() => null);
+        if (healthPayload?.cloudConnected?.supabase) {
+          dbStatus = 'connected';
+        }
       } else {
         errorMsg = `Server returned HTTP ${res.status}`;
       }
@@ -278,12 +284,13 @@ export default function App() {
       errorMsg = err.name === 'AbortError' ? 'Server ping timed out' : (err.message || 'Server unreachable');
     }
 
-    // 3. Supabase verification
-    if (supabase) {
+    // 3. Supabase verification (browser client check when available)
+    const activeSb = getSupabaseClient() || supabase;
+    if (activeSb) {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 2000);
-        const { error } = await supabase.from('books').select('id').limit(1).abortSignal(controller.signal);
+        const { error } = await activeSb.from('books').select('id').limit(1).abortSignal(controller.signal);
         clearTimeout(timeoutId);
         dbStatus = error ? 'unreachable' : 'connected';
       } catch {
@@ -316,13 +323,15 @@ export default function App() {
   const handleEmergencyRecovery = useCallback((mode: 'soft' | 'full' = 'soft') => {
     try {
       clearStaleSupabaseTokens();
+      safeStorage.removeItem('edu_ai_guest_mode');
+      safeSessionStorage.removeItem('edu_ai_guest_mode');
+      safeStorage.removeItem('edu_demo_user');
       safeSessionStorage.removeItem('edu_ai_active_book');
       safeSessionStorage.removeItem('edu_ai_current_view');
       setActiveBook(null);
       setCurrentView('dashboard');
-      setIsGuest(true);
-      safeStorage.setItem('edu_ai_guest_mode', 'true');
-      safeSessionStorage.setItem('edu_ai_guest_mode', 'true');
+      setSession(null);
+      setProfile(null);
       setLoading(false);
 
       if (mode === 'full') {
@@ -338,14 +347,14 @@ export default function App() {
         show: true,
         type: 'success',
         message: mode === 'full' 
-          ? 'Storage reset complete. Restored to clean dashboard.' 
-          : 'Self-repair complete. Restored to healthy dashboard.'
+          ? 'Storage reset complete. Please sign in to continue.' 
+          : 'Session cache repaired. Please sign in to continue.'
       });
       setTimeout(() => setRecoveryNotice(prev => ({ ...prev, show: false })), 4000);
     } catch (err: any) {
       console.warn('Recovery error caught:', err);
+      setSession(null);
       setLoading(false);
-      setIsGuest(true);
     }
   }, [checkSystemHealth]);
 
@@ -395,11 +404,9 @@ export default function App() {
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
-    // 5. Strict Watchdog Timer: Guarantees loading state never stays stuck beyond 2.8s
+    // 5. Strict Watchdog Timer: Guarantees loading state never stays stuck beyond 2.8s (falls through to Auth screen if unauthenticated)
     const watchdogTimer = setTimeout(() => {
       setLoading(false);
-      setIsGuest(true);
-      safeStorage.setItem('edu_ai_guest_mode', 'true');
     }, 2800);
 
     return () => {
@@ -458,9 +465,15 @@ export default function App() {
               rating: 4.5,
               description: b.description || '',
               level: b.education_level,
-              curriculum: b.curriculum ? [b.curriculum] : undefined,
-              subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
-              country: b.description && b.description.includes('Location: ') ? [b.description.split('Location: ')[1].trim()] : undefined,
+              curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (kicd ? ['CBC', 'KCSE'] : undefined),
+              subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(',').map((s: string) => s.trim())) : undefined,
+              country: b.country
+                ? (Array.isArray(b.country) ? b.country : [b.country])
+                : b.description && b.description.includes('Location: ')
+                  ? [b.description.split('Location: ')[1].trim()]
+                  : kicd
+                    ? ['Kenya']
+                    : undefined,
               fileUrl: b.file_url,
               publisher: inferredPublisher || undefined,
               isKicdApproved: kicd,
@@ -538,121 +551,241 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Purge any legacy guest or demo bypass flags so unauthenticated visitors never bypass login
+    try {
+      safeStorage.removeItem('edu_ai_guest_mode');
+      safeSessionStorage.removeItem('edu_ai_guest_mode');
+      safeStorage.removeItem('edu_demo_user');
+    } catch (_) {}
+
     loadUnifiedCatalog();
 
-    if (!supabase) {
-      try {
-        const storedDemo = safeStorage.getItem('edu_demo_user');
-        if (storedDemo) {
-          const parsed = JSON.parse(storedDemo);
-          if (parsed?.user) {
-            setSession(parsed);
-            setProfile({
-              id: parsed.user.id,
-              full_name: parsed.user.user_metadata?.full_name || 'Alex Johnson',
-              email: parsed.user.email,
-              education_level: parsed.user.user_metadata?.education_level || 'High School',
-              role: parsed.user.user_metadata?.role || 'student'
-            });
-          }
-        }
-      } catch (_) {}
-      setLoading(false);
-      return;
-    }
+    let unsubscribe = () => {};
+    let isMounted = true;
 
     const initAuth = async () => {
       // Timeout fallback to ensure the app never gets stuck on the loading spinner
       const timeoutId = setTimeout(() => {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }, 2500);
 
       try {
-        const { data, error } = await supabase.auth.getSession();
-        if (error) {
-          console.warn("Supabase getSession error (handling gracefully):", error.message);
-          if (
-            error.message?.includes('Refresh Token') ||
-            error.message?.includes('refresh_token') ||
-            error.message?.includes('Invalid') ||
-            error.message?.includes('Failed to fetch')
-          ) {
+        const runtimeCfg = await ensureSupabaseRuntimeConfig();
+        const client = runtimeCfg.client || getSupabaseClient();
+
+        // Check URL hash or query for full-tab OAuth callback return
+        let urlAccessToken = '';
+        let urlRefreshToken = '';
+        let urlCode = '';
+        if (typeof window !== 'undefined') {
+          try {
+            const url = new URL(window.location.href);
+            urlCode = url.searchParams.get('code') || '';
+            const rawHash = window.location.hash ? window.location.hash.substring(1) : '';
+            const hashParams = new URLSearchParams(rawHash);
+            urlAccessToken = hashParams.get('access_token') || url.searchParams.get('access_token') || '';
+            urlRefreshToken = hashParams.get('refresh_token') || url.searchParams.get('refresh_token') || '';
+
+            if (urlCode || urlAccessToken) {
+              url.searchParams.delete('code');
+              url.searchParams.delete('state');
+              url.searchParams.delete('access_token');
+              url.searchParams.delete('refresh_token');
+              window.history.replaceState({}, '', url.pathname + url.search);
+            }
+          } catch (_) {}
+        }
+
+        if (client) {
+          if (urlCode) {
             try {
-              await supabase.auth.signOut({ scope: 'local' });
+              await client.auth.exchangeCodeForSession(urlCode);
             } catch (_) {}
-            clearStaleSupabaseTokens();
-          }
-          setSession(null);
-        } else {
-          const currentSession = data?.session || null;
-          setSession(currentSession);
-          if (currentSession?.user) {
+          } else if (urlAccessToken && urlRefreshToken) {
             try {
-              const { data: profileData, error: profileErr } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', currentSession.user.id)
-                .single();
-              if (profileData && !profileErr) setProfile(profileData);
-            } catch (err) {
-              console.warn("Profile fetch ignored:", err);
+              await client.auth.setSession({
+                access_token: urlAccessToken,
+                refresh_token: urlRefreshToken,
+              });
+            } catch (_) {}
+          }
+
+          const { data, error } = await client.auth.getSession();
+          if (error) {
+            console.warn('Supabase getSession error (handling gracefully):', error.message);
+            if (
+              error.message?.includes('Refresh Token') ||
+              error.message?.includes('refresh_token') ||
+              error.message?.includes('Invalid') ||
+              error.message?.includes('Failed to fetch')
+            ) {
+              try {
+                await client.auth.signOut({ scope: 'local' });
+              } catch (_) {}
+              clearStaleSupabaseTokens();
+            }
+            if (isMounted) setSession(null);
+          } else {
+            const currentSession = data?.session || null;
+            if (isMounted) setSession(currentSession);
+            if (currentSession?.user) {
+              try {
+                const { data: profileData, error: profileErr } = await client
+                  .from('profiles')
+                  .select('*')
+                  .eq('id', currentSession.user.id)
+                  .single();
+                if (isMounted && profileData && !profileErr) setProfile(profileData);
+              } catch (err) {
+                console.warn('Profile fetch ignored:', err);
+              }
+            }
+          }
+
+          try {
+            const { data: subData } = client.auth.onAuthStateChange(async (event, nextSession) => {
+              if (!isMounted) return;
+              if (event === 'SIGNED_OUT' || !nextSession) {
+                setSession(null);
+                setBookmarks([]);
+                setActiveBook(null);
+                setProfile(null);
+              } else if (nextSession) {
+                setSession(nextSession);
+                if (nextSession.user) {
+                  try {
+                    const { data: profileData } = await client
+                      .from('profiles')
+                      .select('*')
+                      .eq('id', nextSession.user.id)
+                      .single();
+                    if (isMounted && profileData) setProfile(profileData);
+                  } catch (err) {
+                    console.warn('Profile fetch ignored:', err);
+                  }
+                }
+              }
+            });
+            if (subData?.subscription) {
+              unsubscribe = () => subData.subscription.unsubscribe();
+            }
+          } catch (err: any) {
+            console.warn('onAuthStateChange error ignored:', err);
+          }
+        } else {
+          // Server-verified Supabase session mode (when VITE_SUPABASE_URL + server Supabase are active)
+          if (urlAccessToken) {
+            const verifyRes = await fetch('/api/auth/session', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                access_token: urlAccessToken,
+                refresh_token: urlRefreshToken,
+              }),
+            });
+            const verifyJson = await verifyRes.json().catch(() => ({}));
+            if (verifyRes.ok && verifyJson?.session?.user) {
+              try {
+                safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(verifyJson.session));
+              } catch (_) {}
+              if (isMounted) {
+                setSession(verifyJson.session);
+                if (verifyJson.profile) setProfile(verifyJson.profile);
+              }
+            } else if (isMounted) {
+              setSession(null);
+            }
+          } else {
+            let storedServerSession: any = null;
+            try {
+              const raw = safeStorage.getItem(SERVER_VERIFIED_SESSION_KEY);
+              if (raw) storedServerSession = JSON.parse(raw);
+            } catch (_) {}
+
+            if (storedServerSession?.access_token) {
+              const userRes = await fetch('/api/auth/user', {
+                headers: {
+                  Authorization: `Bearer ${storedServerSession.access_token}`,
+                  ...(storedServerSession.refresh_token
+                    ? { 'x-refresh-token': String(storedServerSession.refresh_token) }
+                    : {}),
+                },
+              });
+              const userJson = await userRes.json().catch(() => ({}));
+              if (userRes.ok && userJson?.user) {
+                const activeSess = userJson.refreshedSession || {
+                  ...storedServerSession,
+                  user: userJson.user,
+                };
+                try {
+                  safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(activeSess));
+                } catch (_) {}
+                if (isMounted) {
+                  setSession(activeSess);
+                  if (userJson.profile) setProfile(userJson.profile);
+                }
+              } else {
+                try {
+                  safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
+                } catch (_) {}
+                if (isMounted) setSession(null);
+              }
+            } else if (isMounted) {
+              setSession(null);
             }
           }
         }
       } catch (err: any) {
-        console.warn("Failed to get Supabase session (handled):", err);
+        console.warn('Failed to get Supabase session (handled):', err);
         const errMsg = err?.message || String(err || '');
         if (
-          errMsg.includes('Refresh Token') || 
-          errMsg.includes('refresh_token') || 
+          errMsg.includes('Refresh Token') ||
+          errMsg.includes('refresh_token') ||
           errMsg.includes('Failed to fetch')
         ) {
-          try {
-            await supabase.auth.signOut({ scope: 'local' });
-          } catch (_) {}
+          const client = getSupabaseClient();
+          if (client) {
+            try {
+              await client.auth.signOut({ scope: 'local' });
+            } catch (_) {}
+          }
           clearStaleSupabaseTokens();
         }
-        setSession(null);
+        if (isMounted) setSession(null);
       } finally {
         clearTimeout(timeoutId);
-        setLoading(false);
+        if (isMounted) {
+          setProfileChecked(true);
+          setLoading(false);
+        }
       }
     };
 
     initAuth();
 
-    let unsubscribe = () => {};
-    try {
-      const { data } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (event === 'SIGNED_OUT' || !session) {
-          setSession(null);
-          setBookmarks([]);
-          setActiveBook(null);
-          setProfile(null);
-        } else if (session) {
-          setSession(session);
-          if (session.user) {
-            try {
-              const { data: profileData } = await supabase.from('profiles').select('*').eq('id', session.user.id).single();
-              if (profileData) setProfile(profileData);
-            } catch (err) {
-              console.warn("Profile fetch ignored:", err);
-            }
-          }
-        }
-      });
-      if (data?.subscription) {
-        unsubscribe = () => data.subscription.unsubscribe();
-      }
-    } catch (err: any) {
-      console.warn("onAuthStateChange error ignored:", err);
-      if (err?.message?.includes('Refresh Token') || err?.message?.includes('Failed to fetch')) {
-        clearStaleSupabaseTokens();
-      }
-    }
-
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, [loadUnifiedCatalog]);
+
+  // Prompt newly signed-in OAuth / Phone users to select their Country, Curriculum, Level & Subjects if not configured yet
+  useEffect(() => {
+    const authed = Boolean(
+      session?.user?.id &&
+      session?.access_token &&
+      session.access_token !== 'demo_token' &&
+      session.access_token !== 'local_token'
+    );
+    if (!authed || !profileChecked || loading) return;
+
+    const academic = extractUserAcademicProfile(profile, session?.user);
+    const promptDismissedKey = `edu_academic_prompted_${session.user.id}`;
+    if (!academic.isConfigured && !safeSessionStorage.getItem(promptDismissedKey)) {
+      setIsAcademicModalOpen(true);
+      safeSessionStorage.setItem(promptDismissedKey, '1');
+    }
+  }, [session, profile, profileChecked, loading]);
 
   // Real-time synchronization for user reading progress & goals
   useEffect(() => {
@@ -716,16 +849,11 @@ export default function App() {
     setBookmarks(prev => [bookmark, ...prev]);
   };
 
-  const handleContinueAsGuest = useCallback(() => {
-    setIsGuest(true);
-    safeStorage.setItem('edu_ai_guest_mode', 'true');
-    safeSessionStorage.setItem('edu_ai_guest_mode', 'true');
-  }, []);
-
   const handleSignOut = useCallback(async () => {
-    if (supabase) {
+    const activeSb = getSupabaseClient() || supabase;
+    if (activeSb) {
       try {
-        await supabase.auth.signOut({ scope: 'local' });
+        await activeSb.auth.signOut({ scope: 'local' });
       } catch (err) {
         console.warn('Sign out notice:', err);
       }
@@ -733,10 +861,9 @@ export default function App() {
 
     clearStaleSupabaseTokens();
     try {
+      safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
       safeStorage.removeItem('edu_ai_guest_mode');
       safeSessionStorage.removeItem('edu_ai_guest_mode');
-      safeStorage.setItem('edu_ai_guest_mode', 'false');
-      safeSessionStorage.setItem('edu_ai_guest_mode', 'false');
       safeStorage.removeItem('edu_search_prefill');
       safeStorage.removeItem('edu_demo_user');
     } catch (_) {}
@@ -745,7 +872,6 @@ export default function App() {
     setProfile(null);
     setBookmarks([]);
     setActiveBook(null);
-    setIsGuest(false);
     setCurrentView('dashboard');
   }, []);
 
@@ -818,14 +944,11 @@ export default function App() {
             <button
               onClick={() => {
                 setLoading(false);
-                setIsGuest(true);
-                safeStorage.setItem('edu_ai_guest_mode', 'true');
-                safeSessionStorage.setItem('edu_ai_guest_mode', 'true');
               }}
               className="py-2.5 px-2 bg-brand-600 hover:bg-brand-500 text-white rounded-xl font-semibold text-xs transition-all shadow-md shadow-brand-600/30 flex items-center justify-center gap-1.5 cursor-pointer active:scale-98 text-center"
             >
               <ArrowRight className="w-3.5 h-3.5 shrink-0" />
-              <span className="truncate">Launch Guest</span>
+              <span className="truncate">Sign In</span>
             </button>
 
             <button
@@ -848,27 +971,40 @@ export default function App() {
     );
   }
 
-  // Display authentication if user is not signed in and has not chosen guest mode
-  if (!session && !isGuest) {
+  const isAuthenticated = Boolean(
+    session?.user?.id &&
+    session?.access_token &&
+    session.access_token !== 'demo_token' &&
+    session.access_token !== 'local_token'
+  );
+
+  // Enforce strict authentication gate: unauthenticated visitors always stay on Sign In / Sign Up
+  if (!isAuthenticated) {
     return (
       <Auth 
-        onContinueAsGuest={handleContinueAsGuest} 
-        onLoginSuccess={(newSession) => {
+        onLoginSuccess={(newSession, incomingProfile) => {
+          if (!newSession?.user?.id || !newSession?.access_token) return;
           setSession(newSession);
-          setIsGuest(false);
           try {
-            safeStorage.setItem('edu_ai_guest_mode', 'false');
-            safeSessionStorage.setItem('edu_ai_guest_mode', 'false');
+            safeStorage.removeItem('edu_ai_guest_mode');
+            safeSessionStorage.removeItem('edu_ai_guest_mode');
           } catch (_) {}
-          if (newSession?.user) {
+          if (incomingProfile) {
+            setProfile(incomingProfile);
+          } else if (newSession?.user) {
             setProfile({
               id: newSession.user.id,
-              full_name: newSession.user.user_metadata?.full_name || 'Edu AI Learner',
+              full_name: newSession.user.user_metadata?.full_name || newSession.user.user_metadata?.name || 'Edu AI Learner',
               email: newSession.user.email,
-              education_level: newSession.user.user_metadata?.education_level || 'General',
+              country: newSession.user.user_metadata?.country || '',
+              education_level: newSession.user.user_metadata?.education_level || '',
+              curriculum: newSession.user.user_metadata?.curriculum || '',
+              field_of_study: newSession.user.user_metadata?.field_of_study || '',
+              subjects: newSession.user.user_metadata?.subjects || '',
               role: newSession.user.user_metadata?.role || 'student'
             });
           }
+          setProfileChecked(true);
         }}
       />
     );
@@ -935,6 +1071,7 @@ export default function App() {
                   });
                 }}
                 user={session?.user}
+                profile={profile}
                 books={books}
                 onToggleSageSidebar={() => setIsSageSidebarOpen(prev => !prev)}
                 isSageSidebarOpen={isSageSidebarOpen}
@@ -965,6 +1102,7 @@ export default function App() {
                         user={session?.user} 
                         profile={profile} 
                         onNavigate={(view) => changeView(view)}
+                        onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
                         onAddBookToLibrary={(newBook) => {
                           setBooks(prev => {
                             if (prev.some(b => b.id === newBook.id)) return prev;
@@ -989,6 +1127,7 @@ export default function App() {
                         user={session?.user} 
                         profile={profile} 
                         onNavigate={(view) => changeView(view)}
+                        onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
                         onAddBookToLibrary={(newBook) => {
                           setBooks(prev => {
                             if (prev.some(b => b.id === newBook.id)) return prev;
@@ -997,7 +1136,7 @@ export default function App() {
                         }}
                       />
                     )}
-                    {currentView === 'learning-path' && <LearningPath user={session?.user} />}
+                    {currentView === 'learning-path' && <LearningPath user={session?.user} profile={profile} />}
                     {currentView === 'ai-tutor' && (
                       <AiTutor 
                         user={session?.user} 
@@ -1006,14 +1145,14 @@ export default function App() {
                         onSidebarStateChange={(open) => setIsSageSidebarOpen(open)}
                       />
                     )}
-                    {currentView === 'quizzes' && <Quizzes user={session?.user} books={books} />}
+                    {currentView === 'quizzes' && <Quizzes user={session?.user} profile={profile} books={books} />}
                     {currentView === 'community' && <Community />}
                     {currentView === 'users-portal' && <UserPortal user={session?.user} profile={profile} onStartChat={(userId) => changeView('chat')} onNavigate={(view) => changeView(view as any)} />}
                     {currentView === 'chat' && <Chat user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} />}
                     {currentView === 'settings' && <Settings user={session?.user} onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
                     {currentView === 'support' && <Settings user={session?.user} initialTab="support" onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
                     {currentView === 'developer' && <Settings user={session?.user} initialTab="developer" onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
-                    {currentView === 'profile' && <Profile user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
+                    {currentView === 'profile' && <Profile user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)} />}
                     {currentView === 'workspace' && <Workspace />}
                     {currentView === 'admin' && (
                       <Admin 
@@ -1050,6 +1189,7 @@ export default function App() {
                         user={session?.user} 
                         profile={profile} 
                         onNavigate={(view) => changeView(view)}
+                        onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
                       />
                     )}
                     {currentView === 'audiobooks' && (
@@ -1058,6 +1198,7 @@ export default function App() {
                         onBookSelect={(book) => { setActiveBook(book); }} 
                         user={session?.user} 
                         profile={profile} 
+                        onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
                       />
                     )}
                   </motion.div>
@@ -1212,7 +1353,7 @@ export default function App() {
                     <Users className="w-3.5 h-3.5 text-purple-500" /> Access State:
                   </span>
                   <span className="font-mono font-medium text-slate-700 dark:text-slate-300">
-                    {session?.user ? `User (${session.user.email || 'Active'})` : isGuest ? 'Instant Guest Mode' : 'Authenticating'}
+                    {session?.user ? `Authenticated (${session.user.email || session.user.phone || 'Active'})` : 'Unauthenticated'}
                   </span>
                 </div>
               </div>
@@ -1254,6 +1395,40 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+
+      {/* Academic Intake Setup & Personalization Modal */}
+      <AcademicPreferencesModal
+        isOpen={isAcademicModalOpen}
+        onClose={() => setIsAcademicModalOpen(false)}
+        canDismiss={true}
+        user={session?.user}
+        profile={profile}
+        accessToken={session?.access_token}
+        onSaved={(updatedProfile, updatedMeta) => {
+          setProfile(updatedProfile);
+          if (updatedMeta) {
+            setSession((prev: any) => {
+              if (!prev?.user) return prev;
+              const nextSess = {
+                ...prev,
+                user: {
+                  ...prev.user,
+                  user_metadata: {
+                    ...(prev.user.user_metadata || {}),
+                    ...updatedMeta,
+                  },
+                },
+              };
+              try {
+                if (safeStorage.getItem(SERVER_VERIFIED_SESSION_KEY)) {
+                  safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(nextSess));
+                }
+              } catch (_) {}
+              return nextSess;
+            });
+          }
+        }}
+      />
     </>
   );
 }
