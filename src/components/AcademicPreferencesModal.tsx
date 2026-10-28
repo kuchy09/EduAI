@@ -11,8 +11,7 @@ import {
   extractUserAcademicProfile,
   saveStoredAcademicPrefs,
 } from '../lib/bookPersonalization';
-import { getSupabaseClient, SERVER_VERIFIED_SESSION_KEY } from '../lib/supabase';
-import { safeStorage } from '../lib/safeStorage';
+import { getSupabaseClient, getActiveEphemeralSession } from '../lib/supabase';
 
 interface AcademicPreferencesModalProps {
   isOpen: boolean;
@@ -173,12 +172,7 @@ export function AcademicPreferencesModal({
         } catch (_) {}
       }
       if (!bearerToken) {
-        try {
-          const rawSess = safeStorage.getItem(SERVER_VERIFIED_SESSION_KEY);
-          if (rawSess) {
-            bearerToken = JSON.parse(rawSess)?.access_token || '';
-          }
-        } catch (_) {}
+        bearerToken = getActiveEphemeralSession()?.access_token || '';
       }
 
       if (bearerToken) {

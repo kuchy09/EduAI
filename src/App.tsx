@@ -5,7 +5,11 @@ import {
   clearStaleSupabaseTokens,
   ensureSupabaseRuntimeConfig,
   getSupabaseClient,
-  SERVER_VERIFIED_SESSION_KEY,
+  authorizeInteractiveSession,
+  isInteractiveSessionAuthorized,
+  revokeInteractiveSession,
+  consumeOAuthRedirectPending,
+  hasValidOAuthRedirectPending,
 } from './lib/supabase';
 import { Auth } from './components/Auth';
 import { Sidebar } from './components/Sidebar';
@@ -73,7 +77,20 @@ export default function App() {
   const [profile, setProfile] = useState<any>(null);
   const [profileChecked, setProfileChecked] = useState(false);
   const [isAcademicModalOpen, setIsAcademicModalOpen] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [securityNotice, setSecurityNotice] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    try {
+      const search = window.location.search || '';
+      const hash = window.location.hash || '';
+      const hasOAuthReturn =
+        (search.includes('code=') || hash.includes('access_token=') || search.includes('access_token=')) &&
+        hasValidOAuthRedirectPending();
+      return hasOAuthReturn;
+    } catch (_) {
+      return false;
+    }
+  });
   const [loadingSeconds, setLoadingSeconds] = useState(0);
   const isGuest = false;
 
@@ -322,7 +339,7 @@ export default function App() {
   // Automatic Self-Repair & Emergency Error Recovery
   const handleEmergencyRecovery = useCallback((mode: 'soft' | 'full' = 'soft') => {
     try {
-      clearStaleSupabaseTokens();
+      revokeInteractiveSession();
       safeStorage.removeItem('edu_ai_guest_mode');
       safeSessionStorage.removeItem('edu_ai_guest_mode');
       safeStorage.removeItem('edu_demo_user');
@@ -570,10 +587,7 @@ export default function App() {
       }, 2500);
 
       try {
-        const runtimeCfg = await ensureSupabaseRuntimeConfig();
-        const client = runtimeCfg.client || getSupabaseClient();
-
-        // Check URL hash or query for full-tab OAuth callback return
+        // Check URL hash or query ONLY for an actively initiated full-tab OAuth callback return
         let urlAccessToken = '';
         let urlRefreshToken = '';
         let urlCode = '';
@@ -596,49 +610,64 @@ export default function App() {
           } catch (_) {}
         }
 
-        if (client) {
-          if (urlCode) {
-            try {
-              await client.auth.exchangeCodeForSession(urlCode);
-            } catch (_) {}
-          } else if (urlAccessToken && urlRefreshToken) {
-            try {
-              await client.auth.setSession({
-                access_token: urlAccessToken,
-                refresh_token: urlRefreshToken,
-              });
-            } catch (_) {}
-          }
+        const isLegitimateOAuthRedirect =
+          Boolean(urlCode || urlAccessToken) && consumeOAuthRedirectPending();
 
-          const { data, error } = await client.auth.getSession();
-          if (error) {
-            console.warn('Supabase getSession error (handling gracefully):', error.message);
-            if (
-              error.message?.includes('Refresh Token') ||
-              error.message?.includes('refresh_token') ||
-              error.message?.includes('Invalid') ||
-              error.message?.includes('Failed to fetch')
-            ) {
+        // Zero Auto-Login Protocol:
+        // Never restore sessions automatically from browser storage when opening or reloading the platform URL.
+        if (!isLegitimateOAuthRedirect) {
+          revokeInteractiveSession();
+          if (isMounted) {
+            setSession(null);
+            setProfile(null);
+            setLoading(false);
+          }
+        }
+
+        const runtimeCfg = await ensureSupabaseRuntimeConfig();
+        const client = runtimeCfg.client || getSupabaseClient();
+
+        if (client) {
+          if (isLegitimateOAuthRedirect) {
+            let exchangedSession: any = null;
+            if (urlCode) {
               try {
-                await client.auth.signOut({ scope: 'local' });
+                const { data } = await client.auth.exchangeCodeForSession(urlCode);
+                exchangedSession = data?.session || null;
               } catch (_) {}
-              clearStaleSupabaseTokens();
-            }
-            if (isMounted) setSession(null);
-          } else {
-            const currentSession = data?.session || null;
-            if (isMounted) setSession(currentSession);
-            if (currentSession?.user) {
+            } else if (urlAccessToken && urlRefreshToken) {
               try {
-                const { data: profileData, error: profileErr } = await client
-                  .from('profiles')
-                  .select('*')
-                  .eq('id', currentSession.user.id)
-                  .single();
-                if (isMounted && profileData && !profileErr) setProfile(profileData);
-              } catch (err) {
-                console.warn('Profile fetch ignored:', err);
+                const { data } = await client.auth.setSession({
+                  access_token: urlAccessToken,
+                  refresh_token: urlRefreshToken,
+                });
+                exchangedSession = data?.session || null;
+              } catch (_) {}
+            }
+
+            if (exchangedSession?.user?.id && exchangedSession?.access_token) {
+              // Verify token live against Supabase Auth server before authorizing
+              const { data: verifiedUser, error: verifyErr } = await client.auth.getUser(
+                exchangedSession.access_token
+              );
+              if (!verifyErr && verifiedUser?.user?.id) {
+                authorizeInteractiveSession(verifiedUser.user.id, exchangedSession);
+                if (isMounted) setSession(exchangedSession);
+                try {
+                  const { data: profileData, error: profileErr } = await client
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', verifiedUser.user.id)
+                    .single();
+                  if (isMounted && profileData && !profileErr) setProfile(profileData);
+                } catch (_) {}
+              } else {
+                revokeInteractiveSession();
+                if (isMounted) setSession(null);
               }
+            } else {
+              revokeInteractiveSession();
+              if (isMounted) setSession(null);
             }
           }
 
@@ -646,23 +675,28 @@ export default function App() {
             const { data: subData } = client.auth.onAuthStateChange(async (event, nextSession) => {
               if (!isMounted) return;
               if (event === 'SIGNED_OUT' || !nextSession) {
+                revokeInteractiveSession();
                 setSession(null);
                 setBookmarks([]);
                 setActiveBook(null);
                 setProfile(null);
-              } else if (nextSession) {
-                setSession(nextSession);
-                if (nextSession.user) {
-                  try {
-                    const { data: profileData } = await client
-                      .from('profiles')
-                      .select('*')
-                      .eq('id', nextSession.user.id)
-                      .single();
-                    if (isMounted && profileData) setProfile(profileData);
-                  } catch (err) {
-                    console.warn('Profile fetch ignored:', err);
-                  }
+                return;
+              }
+              // Block any automatic INITIAL_SESSION or unsealed background session from auto-logging in
+              if (!isInteractiveSessionAuthorized(nextSession?.user?.id)) {
+                return;
+              }
+              setSession(nextSession);
+              if (nextSession.user) {
+                try {
+                  const { data: profileData } = await client
+                    .from('profiles')
+                    .select('*')
+                    .eq('id', nextSession.user.id)
+                    .single();
+                  if (isMounted && profileData) setProfile(profileData);
+                } catch (err) {
+                  console.warn('Profile fetch ignored:', err);
                 }
               }
             });
@@ -672,85 +706,30 @@ export default function App() {
           } catch (err: any) {
             console.warn('onAuthStateChange error ignored:', err);
           }
-        } else {
-          // Server-verified Supabase session mode (when VITE_SUPABASE_URL + server Supabase are active)
-          if (urlAccessToken) {
-            const verifyRes = await fetch('/api/auth/session', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                access_token: urlAccessToken,
-                refresh_token: urlRefreshToken,
-              }),
-            });
-            const verifyJson = await verifyRes.json().catch(() => ({}));
-            if (verifyRes.ok && verifyJson?.session?.user) {
-              try {
-                safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(verifyJson.session));
-              } catch (_) {}
-              if (isMounted) {
-                setSession(verifyJson.session);
-                if (verifyJson.profile) setProfile(verifyJson.profile);
-              }
-            } else if (isMounted) {
-              setSession(null);
+        } else if (isLegitimateOAuthRedirect && urlAccessToken) {
+          const verifyRes = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              access_token: urlAccessToken,
+              refresh_token: urlRefreshToken,
+            }),
+          });
+          const verifyJson = await verifyRes.json().catch(() => ({}));
+          if (verifyRes.ok && verifyJson?.session?.user?.id) {
+            authorizeInteractiveSession(verifyJson.session.user.id, verifyJson.session);
+            if (isMounted) {
+              setSession(verifyJson.session);
+              if (verifyJson.profile) setProfile(verifyJson.profile);
             }
           } else {
-            let storedServerSession: any = null;
-            try {
-              const raw = safeStorage.getItem(SERVER_VERIFIED_SESSION_KEY);
-              if (raw) storedServerSession = JSON.parse(raw);
-            } catch (_) {}
-
-            if (storedServerSession?.access_token) {
-              const userRes = await fetch('/api/auth/user', {
-                headers: {
-                  Authorization: `Bearer ${storedServerSession.access_token}`,
-                  ...(storedServerSession.refresh_token
-                    ? { 'x-refresh-token': String(storedServerSession.refresh_token) }
-                    : {}),
-                },
-              });
-              const userJson = await userRes.json().catch(() => ({}));
-              if (userRes.ok && userJson?.user) {
-                const activeSess = userJson.refreshedSession || {
-                  ...storedServerSession,
-                  user: userJson.user,
-                };
-                try {
-                  safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(activeSess));
-                } catch (_) {}
-                if (isMounted) {
-                  setSession(activeSess);
-                  if (userJson.profile) setProfile(userJson.profile);
-                }
-              } else {
-                try {
-                  safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
-                } catch (_) {}
-                if (isMounted) setSession(null);
-              }
-            } else if (isMounted) {
-              setSession(null);
-            }
+            revokeInteractiveSession();
+            if (isMounted) setSession(null);
           }
         }
       } catch (err: any) {
-        console.warn('Failed to get Supabase session (handled):', err);
-        const errMsg = err?.message || String(err || '');
-        if (
-          errMsg.includes('Refresh Token') ||
-          errMsg.includes('refresh_token') ||
-          errMsg.includes('Failed to fetch')
-        ) {
-          const client = getSupabaseClient();
-          if (client) {
-            try {
-              await client.auth.signOut({ scope: 'local' });
-            } catch (_) {}
-          }
-          clearStaleSupabaseTokens();
-        }
+        console.warn('Auth initialization check handled:', err);
+        revokeInteractiveSession();
         if (isMounted) setSession(null);
       } finally {
         clearTimeout(timeoutId);
@@ -774,6 +753,7 @@ export default function App() {
     const authed = Boolean(
       session?.user?.id &&
       session?.access_token &&
+      isInteractiveSessionAuthorized(session.user.id) &&
       session.access_token !== 'demo_token' &&
       session.access_token !== 'local_token'
     );
@@ -849,31 +829,69 @@ export default function App() {
     setBookmarks(prev => [bookmark, ...prev]);
   };
 
-  const handleSignOut = useCallback(async () => {
+  const handleSignOut = useCallback(async (reasonNotice?: string) => {
+    const tokenToRevoke = session?.access_token;
     const activeSb = getSupabaseClient() || supabase;
+
+    // Immediately revoke client interactive seal & React state so UI locks with 0ms delay
+    revokeInteractiveSession();
+    setSession(null);
+    setProfile(null);
+    setBookmarks([]);
+    setActiveBook(null);
+    setIsAcademicModalOpen(false);
+    setCurrentView('dashboard');
+    setSecurityNotice(typeof reasonNotice === 'string' ? reasonNotice : null);
+
+    try {
+      safeStorage.removeItem('edu_ai_guest_mode');
+      safeSessionStorage.removeItem('edu_ai_guest_mode');
+      safeStorage.removeItem('edu_search_prefill');
+      safeStorage.removeItem('edu_demo_user');
+      safeSessionStorage.removeItem('edu_ai_active_book');
+      safeSessionStorage.removeItem('edu_ai_current_view');
+    } catch (_) {}
+
     if (activeSb) {
       try {
-        await activeSb.auth.signOut({ scope: 'local' });
+        await activeSb.auth.signOut();
       } catch (err) {
         console.warn('Sign out notice:', err);
       }
     }
 
-    clearStaleSupabaseTokens();
-    try {
-      safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
-      safeStorage.removeItem('edu_ai_guest_mode');
-      safeSessionStorage.removeItem('edu_ai_guest_mode');
-      safeStorage.removeItem('edu_search_prefill');
-      safeStorage.removeItem('edu_demo_user');
-    } catch (_) {}
+    if (tokenToRevoke) {
+      try {
+        await fetch('/api/auth/signout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${tokenToRevoke}` },
+        });
+      } catch (_) {}
+    }
+  }, [session?.access_token]);
 
-    setSession(null);
-    setProfile(null);
-    setBookmarks([]);
-    setActiveBook(null);
-    setCurrentView('dashboard');
-  }, []);
+  // 30-Minute Inactivity Auto-Lock for authenticated sessions
+  useEffect(() => {
+    if (!session?.user?.id || !session?.access_token) return;
+    const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
+    let idleTimer: ReturnType<typeof setTimeout>;
+
+    const resetIdleTimer = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        handleSignOut('For your security, you were signed out after 30 minutes of inactivity.');
+      }, INACTIVITY_LIMIT_MS);
+    };
+
+    resetIdleTimer();
+    const activityEvents = ['mousedown', 'keydown', 'touchstart', 'scroll'];
+    activityEvents.forEach((evt) => window.addEventListener(evt, resetIdleTimer, { passive: true }));
+
+    return () => {
+      clearTimeout(idleTimer);
+      activityEvents.forEach((evt) => window.removeEventListener(evt, resetIdleTimer));
+    };
+  }, [session?.user?.id, session?.access_token, handleSignOut]);
 
   if (loading) {
     return (
@@ -974,6 +992,7 @@ export default function App() {
   const isAuthenticated = Boolean(
     session?.user?.id &&
     session?.access_token &&
+    isInteractiveSessionAuthorized(session.user.id) &&
     session.access_token !== 'demo_token' &&
     session.access_token !== 'local_token'
   );
@@ -982,8 +1001,11 @@ export default function App() {
   if (!isAuthenticated) {
     return (
       <Auth 
+        securityNotice={securityNotice}
         onLoginSuccess={(newSession, incomingProfile) => {
           if (!newSession?.user?.id || !newSession?.access_token) return;
+          authorizeInteractiveSession(newSession.user.id, newSession);
+          setSecurityNotice(null);
           setSession(newSession);
           try {
             safeStorage.removeItem('edu_ai_guest_mode');
@@ -1419,11 +1441,7 @@ export default function App() {
                   },
                 },
               };
-              try {
-                if (safeStorage.getItem(SERVER_VERIFIED_SESSION_KEY)) {
-                  safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(nextSess));
-                }
-              } catch (_) {}
+              authorizeInteractiveSession(nextSess.user.id, nextSess);
               return nextSess;
             });
           }

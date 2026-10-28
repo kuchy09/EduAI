@@ -1,7 +1,95 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { safeStorage } from './safeStorage';
+import { safeSessionStorage } from './safeStorage';
 
 export const SERVER_VERIFIED_SESSION_KEY = 'edu_sb_verified_session';
+const OAUTH_REDIRECT_PENDING_KEY = 'edu_oauth_redirect_pending_v1';
+const OAUTH_REDIRECT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes max for full-tab OAuth callback
+
+// Strictly ephemeral in-memory session store (never persisted to localStorage or sessionStorage)
+const inMemoryAuthStore = new Map<string, string>();
+let interactiveAuthorizedUserId: string | null = null;
+let ephemeralServerSession: any = null;
+
+export function markOAuthRedirectPending(): void {
+  try {
+    safeSessionStorage.setItem(
+      OAUTH_REDIRECT_PENDING_KEY,
+      JSON.stringify({ ts: Date.now() })
+    );
+  } catch (_) {}
+}
+
+export function hasValidOAuthRedirectPending(): boolean {
+  try {
+    const raw = safeSessionStorage.getItem(OAUTH_REDIRECT_PENDING_KEY);
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.ts || typeof parsed.ts !== 'number') return false;
+    return Date.now() - parsed.ts <= OAUTH_REDIRECT_MAX_AGE_MS;
+  } catch (_) {
+    return false;
+  }
+}
+
+export function consumeOAuthRedirectPending(): boolean {
+  const valid = hasValidOAuthRedirectPending();
+  try {
+    safeSessionStorage.removeItem(OAUTH_REDIRECT_PENDING_KEY);
+  } catch (_) {}
+  return valid;
+}
+
+export function authorizeInteractiveSession(userId: string, sessionObj?: any): void {
+  if (!userId) return;
+  interactiveAuthorizedUserId = userId;
+  if (sessionObj) {
+    ephemeralServerSession = sessionObj;
+  }
+}
+
+export function isInteractiveSessionAuthorized(userId?: string | null): boolean {
+  if (!interactiveAuthorizedUserId) return false;
+  if (userId && interactiveAuthorizedUserId !== userId) return false;
+  return true;
+}
+
+export function getActiveEphemeralSession(): any {
+  return ephemeralServerSession;
+}
+
+export function revokeInteractiveSession(): void {
+  interactiveAuthorizedUserId = null;
+  ephemeralServerSession = null;
+  inMemoryAuthStore.clear();
+  try {
+    safeSessionStorage.removeItem(OAUTH_REDIRECT_PENDING_KEY);
+  } catch (_) {}
+  clearStaleSupabaseTokens();
+}
+
+const ephemeralAuthStorage = {
+  getItem(key: string): string | null {
+    // Allow temporary PKCE code-verifier across popup/redirect OAuth exchange only
+    if (key.includes('code-verifier')) {
+      return safeSessionStorage.getItem(key);
+    }
+    return inMemoryAuthStore.get(key) ?? null;
+  },
+  setItem(key: string, value: string): void {
+    if (key.includes('code-verifier')) {
+      safeSessionStorage.setItem(key, value);
+      return;
+    }
+    inMemoryAuthStore.set(key, String(value));
+  },
+  removeItem(key: string): void {
+    if (key.includes('code-verifier')) {
+      safeSessionStorage.removeItem(key);
+      return;
+    }
+    inMemoryAuthStore.delete(key);
+  },
+};
 
 export function isRealSupabaseUrl(val?: string | null): val is string {
   if (!val || typeof val !== 'string') return false;
@@ -56,7 +144,8 @@ let currentSupabaseApiKey =
 
 let serverAuthReadyFlag = false;
 
-export function clearStaleSupabaseTokens() {
+export function clearStaleSupabaseTokens(preserveOAuthVerifier = false) {
+  inMemoryAuthStore.clear();
   if (typeof window === 'undefined') return;
   try {
     const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
@@ -71,7 +160,9 @@ export function clearStaleSupabaseTokens() {
             key.includes('supabase.auth.token') || 
             key.includes('sb_edu_ai_token') ||
             key.includes('-auth-token') ||
-            key === SERVER_VERIFIED_SESSION_KEY
+            key === SERVER_VERIFIED_SESSION_KEY ||
+            key === 'edu_ai_guest_mode' ||
+            key === 'edu_demo_user'
           )
         ) {
           keysToRemove.push(key);
@@ -93,14 +184,19 @@ export function clearStaleSupabaseTokens() {
       const keysToRemove: string[] = [];
       for (let i = 0; i < ss.length; i++) {
         const key = ss.key(i);
+        if (!key) continue;
+        if (preserveOAuthVerifier && (key.includes('code-verifier') || key === OAUTH_REDIRECT_PENDING_KEY)) {
+          continue;
+        }
         if (
-          key && (
-            key.startsWith('sb-') || 
-            key.startsWith('sb_') ||
-            key.includes('supabase.auth.token') || 
-            key.includes('sb_edu_ai_token') ||
-            key.includes('-auth-token')
-          )
+          key.startsWith('sb-') || 
+          key.startsWith('sb_') ||
+          key.includes('supabase.auth.token') || 
+          key.includes('sb_edu_ai_token') ||
+          key.includes('-auth-token') ||
+          key === SERVER_VERIFIED_SESSION_KEY ||
+          key === 'edu_ai_guest_mode' ||
+          key === 'edu_demo_user'
         ) {
           keysToRemove.push(key);
         }
@@ -117,49 +213,9 @@ export function clearStaleSupabaseTokens() {
 }
 
 export function sanitizeStoredSupabaseSession() {
-  if (typeof window === 'undefined') return;
-  try {
-    const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
-    if (!ls) return;
-    for (let i = 0; i < ls.length; i++) {
-      const key = ls.key(i);
-      if (
-        key && (
-          key.startsWith('sb-') || 
-          key.startsWith('sb_') ||
-          key.includes('supabase.auth.token') || 
-          key.includes('sb_edu_ai_token') ||
-          key.includes('-auth-token')
-        )
-      ) {
-        const item = ls.getItem(key);
-        if (!item) continue;
-        try {
-          const parsed = JSON.parse(item);
-          if (!parsed || typeof parsed !== 'object') {
-            ls.removeItem(key);
-            continue;
-          }
-          // If the stored item lacks a valid refresh_token or has placeholder strings
-          if (
-            !parsed.refresh_token || 
-            typeof parsed.refresh_token !== 'string' || 
-            parsed.refresh_token.length < 5 ||
-            parsed.refresh_token.includes('placeholder') ||
-            parsed.refresh_token.includes('your_')
-          ) {
-            ls.removeItem(key);
-            continue;
-          }
-        } catch {
-          // Corrupt JSON
-          ls.removeItem(key);
-        }
-      }
-    }
-  } catch (e) {
-    console.warn('Session sanitization notice:', e);
-  }
+  // Enforce zero persistent browser auto-login: purge any lingering auth tokens in localStorage/sessionStorage on boot
+  const keepVerifier = hasValidOAuthRedirectPending();
+  clearStaleSupabaseTokens(keepVerifier);
 }
 
 // Global interceptors for auth errors (e.g. invalid refresh tokens or unreachable auth server)
@@ -273,10 +329,10 @@ sanitizeStoredSupabaseSession();
 function buildBrowserSupabaseClient(url: string, key: string): SupabaseClient {
   return createClient(url.trim(), key.trim(), {
     auth: {
-      storage: safeStorage,
+      storage: ephemeralAuthStorage,
       persistSession: true,
       autoRefreshToken: true,
-      detectSessionInUrl: true,
+      detectSessionInUrl: false,
     },
   });
 }

@@ -1011,6 +1011,36 @@ app.post("/api/auth/preferences", async (req, res) => {
   }
 });
 
+// Revoke caller's active Supabase session server-side on Sign Out (strictly verifies Bearer JWT)
+app.post("/api/auth/signout", async (req, res) => {
+  const sb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  try {
+    const { data: userData, error: userErr } = await sb.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    try {
+      if (sb.auth?.admin?.signOut) {
+        await sb.auth.admin.signOut(token);
+      }
+    } catch (revokeErr) {
+      console.warn("[Auth] Admin token signOut notice:", revokeErr);
+    }
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[Auth] /api/auth/signout error:", err);
+    return res.status(500).json({ error: "Could not complete sign out." });
+  }
+});
+
 // OAuth callback relay for Supabase Auth (Google, Apple, GitHub) — supports both popup mode (AI Studio iframe) and full-tab mode
 app.get(["/auth/callback", "/auth/callback/"], (_req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");

@@ -6,9 +6,9 @@ import {
   getSupabaseClient,
   getResolvedSupabaseUrl,
   isServerAuthAvailable,
-  SERVER_VERIFIED_SESSION_KEY,
+  authorizeInteractiveSession,
+  markOAuthRedirectPending,
 } from '../lib/supabase';
-import { safeStorage } from '../lib/safeStorage';
 import {
   EDUCATION_LEVELS,
   COUNTRIES_WITH_CURRICULA,
@@ -18,7 +18,7 @@ import {
   COLLEGE_SUBJECTS_MAP,
   saveStoredAcademicPrefs,
 } from '../lib/bookPersonalization';
-import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2 } from 'lucide-react';
+import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2, ShieldAlert } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AuthMode = 'email' | 'phone';
@@ -27,9 +27,10 @@ type OAuthProviderType = 'google' | 'apple' | 'github';
 
 interface AuthProps {
   onLoginSuccess?: (session: any, profile?: any) => void;
+  securityNotice?: string | null;
 }
 
-export function Auth({ onLoginSuccess }: AuthProps = {}) {
+export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
   const [mode, setMode] = useState<AuthMode>('email');
   const [state, setState] = useState<AuthState>('sign_in');
   const [isLoading, setIsLoading] = useState(false);
@@ -144,12 +145,10 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
           }
           activeSession = verifyJson.session;
           fetchedProfile = verifyJson.profile || null;
-          try {
-            safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(activeSession));
-          } catch (_) {}
         }
 
-        if (activeSession && onLoginSuccess) {
+        if (activeSession?.user?.id && activeSession?.access_token && onLoginSuccess) {
+          authorizeInteractiveSession(activeSession.user.id, activeSession);
           onLoginSuccess(activeSession, fetchedProfile);
         }
       } catch (err: any) {
@@ -223,6 +222,7 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
           setError(`Popup blocked. Please allow popups in your browser to continue with ${providerLabel}.`);
           return;
         }
+        markOAuthRedirectPending();
         window.location.assign(oauthUrl);
         return;
       }
@@ -274,7 +274,8 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
             password,
           });
           if (error) throw error;
-          if (signInData?.session && onLoginSuccess) {
+          if (signInData?.session?.user?.id && onLoginSuccess) {
+            authorizeInteractiveSession(signInData.session.user.id, signInData.session);
             onLoginSuccess(signInData.session);
           }
         } else {
@@ -284,12 +285,10 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
             body: JSON.stringify({ email: email.trim(), password }),
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok || !data?.session) {
+          if (!res.ok || !data?.session?.user?.id) {
             throw new Error(data?.error || 'Invalid email or password.');
           }
-          try {
-            safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(data.session));
-          } catch (_) {}
+          authorizeInteractiveSession(data.session.user.id, data.session);
           if (onLoginSuccess) {
             onLoginSuccess(data.session, data.profile || null);
           }
@@ -355,7 +354,8 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
               subjects: subjectsJoined,
             });
           }
-          if (signUpData?.session) {
+          if (signUpData?.session?.user?.id) {
+            authorizeInteractiveSession(signUpData.session.user.id, signUpData.session);
             if (onLoginSuccess) {
               onLoginSuccess(signUpData.session, {
                 id: createdUserId,
@@ -398,10 +398,8 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
               subjects: subjectsJoined,
             });
           }
-          if (data?.session) {
-            try {
-              safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(data.session));
-            } catch (_) {}
+          if (data?.session?.user?.id) {
+            authorizeInteractiveSession(data.session.user.id, data.session);
             if (onLoginSuccess) {
               onLoginSuccess(data.session, {
                 id: createdUserId,
@@ -460,7 +458,8 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
             type: 'sms',
           });
           if (error) throw error;
-          if (otpData?.session && onLoginSuccess) {
+          if (otpData?.session?.user?.id && onLoginSuccess) {
+            authorizeInteractiveSession(otpData.session.user.id, otpData.session);
             onLoginSuccess(otpData.session);
           }
         } else {
@@ -470,12 +469,10 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
             body: JSON.stringify({ phone: phone.trim(), token: otp.trim() }),
           });
           const data = await res.json().catch(() => ({}));
-          if (!res.ok || !data?.session) {
+          if (!res.ok || !data?.session?.user?.id) {
             throw new Error(data?.error || 'Invalid verification code.');
           }
-          try {
-            safeStorage.setItem(SERVER_VERIFIED_SESSION_KEY, JSON.stringify(data.session));
-          } catch (_) {}
+          authorizeInteractiveSession(data.session.user.id, data.session);
           if (onLoginSuccess) {
             onLoginSuccess(data.session);
           }
@@ -561,6 +558,13 @@ export function Auth({ onLoginSuccess }: AuthProps = {}) {
         </div>
 
         <div className="p-8">
+          {securityNotice && !infoMessage && !error && (
+            <div className="mb-6 p-3.5 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-xs sm:text-sm rounded-xl border border-amber-200 dark:border-amber-800/60 flex items-start gap-2.5">
+              <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+              <span>{securityNotice}</span>
+            </div>
+          )}
+
           {infoMessage && (
             <div className="mb-6 p-3.5 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 text-sm rounded-xl border border-emerald-200 dark:border-emerald-800/60 flex items-start gap-2.5">
               <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-600 dark:text-emerald-400" />
