@@ -3,7 +3,7 @@ import {
   Send, Plus, MessageSquare, Trash2, Menu, Calendar, 
   Sparkles, Clock, Copy, Check, Volume2, VolumeX, Lightbulb, 
   HelpCircle, Compass, BookOpen, Layers, ArrowUp, Zap, ChevronDown,
-  Mic, MicOff, FileText, X, AudioLines, Square
+  Mic, MicOff, FileText, X, AudioLines, Square, Pencil, RotateCcw
 } from 'lucide-react';
 import { AstroidIcon } from './icons/AstroidIcon';
 import { motion, AnimatePresence } from 'motion/react';
@@ -36,6 +36,8 @@ interface AiTutorProps {
 export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateChange }: AiTutorProps) {
   const [input, setInput] = useState('');
   const [provider, setProvider] = useState<'gemini' | 'anthropic'>('gemini');
+  const [speedMode, setSpeedMode] = useState<'fast' | 'deep'>('fast');
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [learningActive] = useState(() => {
     try {
       return JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
@@ -77,8 +79,13 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     onSidebarStateChange?.(isOpen);
   }, [isMobileSidebarOpen, isDesktopSidebarOpen, onSidebarStateChange]);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [liveStreamingText, setLiveStreamingText] = useState<string>('');
+  const [liveThoughtText, setLiveThoughtText] = useState<string>('');
+  const [isThoughtOpen, setIsThoughtOpen] = useState<boolean>(true);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
+  const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
+  const [editInputText, setEditInputText] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -350,7 +357,9 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         body: JSON.stringify({
           prompt: userPrompt,
           provider: provider,
-          history: [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
+          speedMode: 'fast',
+          stream: false,
+          history: [...messages, userMessage].slice(-6).map(m => ({ role: m.role, content: m.content })),
           allowDataCollection
         })
       });
@@ -586,7 +595,105 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     inputRef.current?.focus();
   };
 
-  const handleSubmit = async (e?: React.FormEvent, directPrompt?: string) => {
+  // Helper to determine if a specific user inquiry is not answered or resulted in an error
+  const isInputUnanswered = (msgIndex: number): boolean => {
+    const nextMsg = messages[msgIndex + 1];
+    if (!nextMsg) return true; // Last user message without a response
+    if (nextMsg.role !== 'assistant') return true;
+    if (!nextMsg.content || nextMsg.content.trim().length === 0) return true;
+    const content = nextMsg.content.toLowerCase();
+    if (
+      content.includes('sorry, i encountered an error') ||
+      content.includes('network error') ||
+      nextMsg.id.endsWith('err') ||
+      nextMsg.id.endsWith('err2')
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  // Retry generating an answer for a specific user prompt
+  const handleRetryPrompt = (promptText: string, msgIndex: number) => {
+    if (isGenerating || !promptText.trim() || !activeSession) return;
+    const baseMessages = messages.slice(0, msgIndex + 1);
+    setSessions(prev => prev.map(s => {
+      if (s.id === activeSession.id) {
+        return {
+          ...s,
+          messages: baseMessages
+        };
+      }
+      return s;
+    }));
+    handleSubmit(undefined, promptText.trim(), {
+      skipAppendUserMessage: true,
+      historyMessages: baseMessages.slice(0, -1),
+    });
+  };
+
+  // Edit user input and re-submit
+  const handleSaveEditAndRetry = (msgId: string, newText: string, msgIndex: number) => {
+    const trimmed = newText.trim();
+    if (!trimmed || isGenerating || !activeSession) return;
+
+    setEditingMsgId(null);
+    setEditInputText('');
+
+    const updatedBase = messages.slice(0, msgIndex + 1).map((m) =>
+      m.id === msgId ? { ...m, content: trimmed } : m
+    );
+
+    setSessions(prev => prev.map(s => {
+      if (s.id === activeSession.id) {
+        return {
+          ...s,
+          messages: updatedBase
+        };
+      }
+      return s;
+    }));
+
+    handleSubmit(undefined, trimmed, {
+      skipAppendUserMessage: true,
+      historyMessages: updatedBase.slice(0, -1),
+    });
+  };
+
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (liveStreamingText.trim() && activeSession) {
+      const textToSave = liveStreamingText.trim();
+      setSessions(prev => prev.map(s => {
+        if (s.id === activeSession.id) {
+          return {
+            ...s,
+            messages: [
+              ...s.messages,
+              {
+                id: Date.now().toString() + 'ai',
+                role: 'assistant',
+                content: textToSave
+              }
+            ]
+          };
+        }
+        return s;
+      }));
+    }
+    setLiveStreamingText('');
+    setLiveThoughtText('');
+    setIsGenerating(false);
+  };
+
+  const handleSubmit = async (
+    e?: React.FormEvent,
+    directPrompt?: string,
+    options?: { skipAppendUserMessage?: boolean; historyMessages?: Message[] }
+  ) => {
     if (e) e.preventDefault();
     const rawPrompt = (directPrompt || input).trim();
     if ((!rawPrompt && !attachedFile) || !activeSession || isGenerating) return;
@@ -601,42 +708,139 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
       setAttachedFile(null);
     }
 
-    setInput('');
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    if (!options?.skipAppendUserMessage) {
+      setInput('');
+    }
+    setLiveStreamingText('');
+    setLiveThoughtText('');
     setIsGenerating(true);
 
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: promptToSend };
     
-    // Add user message to active session list and rename session from default if needed
-    setSessions(prev => prev.map(s => {
-      if (s.id === activeSession.id) {
-        let updatedTitle = s.title;
-        if (s.title === 'Introduction with Sage' || s.title === 'New Conversation') {
-          updatedTitle = promptToSend.length > 28 ? promptToSend.substring(0, 25) + '...' : promptToSend;
+    if (!options?.skipAppendUserMessage) {
+      // Add user message to active session list and rename session from default if needed
+      setSessions(prev => prev.map(s => {
+        if (s.id === activeSession.id) {
+          let updatedTitle = s.title;
+          if (s.title === 'Introduction with Sage' || s.title === 'New Conversation') {
+            updatedTitle = promptToSend.length > 28 ? promptToSend.substring(0, 25) + '...' : promptToSend;
+          }
+          return {
+            ...s,
+            title: updatedTitle,
+            messages: [...s.messages, userMessage]
+          };
         }
-        return {
-          ...s,
-          title: updatedTitle,
-          messages: [...s.messages, userMessage]
-        };
-      }
-      return s;
-    }));
+        return s;
+      }));
+    }
+
+    const assistantMsgId = Date.now().toString() + 'ai';
+    const historyToSend = (options?.historyMessages ?? messages).slice(-8).map(m => ({ role: m.role, content: m.content }));
 
     try {
       const allowDataCollection = JSON.parse(localStorage.getItem('privacy_data') ?? 'true');
       
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
+        },
+        signal: controller.signal,
         body: JSON.stringify({
           prompt: promptToSend,
           provider: provider,
-          history: [...messages, userMessage].map(m => ({ role: m.role, content: m.content })),
+          speedMode: speedMode,
+          stream: true,
+          history: historyToSend,
           allowDataCollection
         })
       });
 
-      if (response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (response.ok && contentType.includes('text/event-stream') && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let accumulated = '';
+        let accumulatedThought = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') {
+              break;
+            }
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.thought) {
+                accumulatedThought += parsed.thought;
+                setLiveThoughtText(accumulatedThought);
+              }
+              if (parsed.text) {
+                accumulated += parsed.text;
+                setLiveStreamingText(accumulated);
+              } else if (parsed.error) {
+                accumulated += `\n\n*(Error: ${parsed.error})*`;
+                setLiveStreamingText(accumulated);
+              }
+            } catch {
+              // Partial line or JSON parse failure
+            }
+          }
+        }
+
+        // Flush any trailing line left in buffer
+        const trailing = buffer.trim();
+        if (trailing.startsWith('data:')) {
+          const dataStr = trailing.slice(5).trim();
+          if (dataStr && dataStr !== '[DONE]') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.text) accumulated += parsed.text;
+              else if (parsed.error) accumulated += `\n\n*(Error: ${parsed.error})*`;
+            } catch {}
+          }
+        }
+
+        setSessions(prev => prev.map(s => {
+          if (s.id === activeSession.id) {
+            return {
+              ...s,
+              messages: [
+                ...s.messages,
+                accumulated.trim()
+                  ? {
+                      id: assistantMsgId,
+                      role: 'assistant',
+                      content: accumulated.trim()
+                    }
+                  : {
+                      id: Date.now().toString() + 'err',
+                      role: 'assistant',
+                      content: 'Sorry, I encountered an error receiving a response. Please click Retry.'
+                    }
+              ]
+            };
+          }
+          return s;
+        }));
+      } else if (response.ok) {
         const data = await response.json();
         setSessions(prev => prev.map(s => {
           if (s.id === activeSession.id) {
@@ -645,9 +849,9 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
               messages: [
                 ...s.messages,
                 { 
-                  id: Date.now().toString() + 'ai', 
+                  id: assistantMsgId, 
                   role: 'assistant', 
-                  content: data.reply 
+                  content: data.reply || '' 
                 }
               ]
             };
@@ -673,7 +877,10 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
           return s;
         }));
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return;
+      }
       setSessions(prev => prev.map(s => {
         if (s.id === activeSession.id) {
           return {
@@ -691,6 +898,9 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         return s;
       }));
     } finally {
+      abortControllerRef.current = null;
+      setLiveStreamingText('');
+      setLiveThoughtText('');
       setIsGenerating(false);
     }
   };
@@ -897,10 +1107,112 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                   className={`flex w-full ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
                 >
                   {msg.role === 'user' ? (
-                    <div className="group relative max-w-[85%] sm:max-w-[78%]">
-                      <div className="bg-gradient-to-br from-indigo-600 via-brand-600 to-purple-700 text-white px-5 py-3.5 rounded-3xl rounded-tr-sm text-[14.5px] sm:text-[15px] leading-relaxed break-words shadow-md shadow-brand-600/15 border border-white/15">
-                        {msg.content}
-                      </div>
+                    <div className="group relative max-w-[85%] sm:max-w-[78%] flex flex-col items-end">
+                      {editingMsgId === msg.id ? (
+                        /* Inline Edit Mode */
+                        <div className="w-full min-w-[260px] sm:min-w-[340px] bg-white dark:bg-[#1C1C1E] border border-brand-500 dark:border-brand-500 rounded-3xl p-3.5 shadow-xl shadow-brand-500/10 space-y-2.5">
+                          <textarea
+                            value={editInputText}
+                            onChange={(e) => setEditInputText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && !e.shiftKey) {
+                                e.preventDefault();
+                                handleSaveEditAndRetry(msg.id, editInputText, index);
+                              } else if (e.key === 'Escape') {
+                                setEditingMsgId(null);
+                              }
+                            }}
+                            className="w-full bg-slate-50 dark:bg-[#282828] border border-slate-200 dark:border-[#383838] rounded-2xl p-2.5 text-slate-900 dark:text-white placeholder:text-slate-400 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 resize-none min-h-[70px] scrollbar-thin"
+                            autoFocus
+                            rows={3}
+                          />
+                          <div className="flex items-center justify-between pt-1">
+                            <span className="text-[10px] text-slate-400">Esc to cancel • Enter to save</span>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => setEditingMsgId(null)}
+                                className="px-3 py-1.5 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl transition-colors cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleSaveEditAndRetry(msg.id, editInputText, index)}
+                                disabled={!editInputText.trim() || isGenerating}
+                                className="px-3 py-1.5 text-xs font-semibold bg-brand-600 hover:bg-brand-500 text-white rounded-xl shadow-xs transition-colors cursor-pointer disabled:opacity-50"
+                              >
+                                Save & Retry
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Standard User Message Bubble + Action Icons Container */
+                        <>
+                          <div className="bg-gradient-to-br from-indigo-600 via-brand-600 to-purple-700 text-white px-5 py-3.5 rounded-3xl rounded-tr-sm text-[14.5px] sm:text-[15px] leading-relaxed break-words shadow-md shadow-brand-600/15 border border-white/15">
+                            {msg.content}
+                          </div>
+
+                          {/* Action Toolbar: Retry (if unanswered or re-ask), Copy, Edit Pen */}
+                          <div className="flex items-center gap-1 mt-1.5 px-1 select-none">
+                            {/* Retry Icon - highlighted if unanswered, accessible on every input container */}
+                            {isInputUnanswered(index) ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRetryPrompt(msg.content, index)}
+                                disabled={isGenerating}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 rounded-xl transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
+                                title="This inquiry is not answered yet. Click to retry generating response."
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                                <span>Retry</span>
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleRetryPrompt(msg.content, index)}
+                                disabled={isGenerating}
+                                className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl transition-colors cursor-pointer active:scale-95 disabled:opacity-50"
+                                title="Retry / Re-ask this question"
+                                aria-label="Retry inquiry"
+                              >
+                                <RotateCcw className="w-3.5 h-3.5" />
+                              </button>
+                            )}
+
+                            {/* Copy Icon */}
+                            <button
+                              type="button"
+                              onClick={() => handleCopyMessage(msg.id, msg.content)}
+                              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl transition-colors cursor-pointer active:scale-95"
+                              title="Copy input text"
+                              aria-label="Copy input"
+                            >
+                              {copiedMsgId === msg.id ? (
+                                <Check className="w-3.5 h-3.5 text-emerald-500" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+
+                            {/* Edit Pen Icon */}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingMsgId(msg.id);
+                                setEditInputText(msg.content);
+                              }}
+                              disabled={isGenerating}
+                              className="p-1.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-white/10 rounded-xl transition-colors cursor-pointer active:scale-95 disabled:opacity-50"
+                              title="Edit input text"
+                              aria-label="Edit input"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-start gap-3 sm:gap-4 w-full">
@@ -975,25 +1287,78 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
               ))
             )}
 
-            {/* Live Generating Animation Indicator */}
+            {/* Live Real-Time Streaming Assistant Response */}
             {isGenerating && (
               <motion.div 
                 initial={{ opacity: 0, y: 8 }}
                 animate={{ opacity: 1, y: 0 }}
                 className="flex items-start gap-3 sm:gap-4 w-full"
               >
-                <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-brand-600 to-indigo-600 flex items-center justify-center shrink-0 text-white shadow-sm animate-pulse mt-1">
-                  <AstroidIcon className="w-4 h-4" />
+                {/* AI Avatar */}
+                <div className="w-8 h-8 rounded-2xl bg-gradient-to-br from-brand-600 via-indigo-600 to-purple-600 flex items-center justify-center shrink-0 text-white shadow-sm shadow-brand-500/20 mt-1">
+                  <AstroidIcon className="w-4 h-4 animate-spin-slow" />
                 </div>
-                <div className="bg-white dark:bg-[#181818] rounded-2xl px-5 py-4 border border-slate-200/70 dark:border-[#282828] shadow-xs flex items-center gap-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-2 h-2 rounded-full bg-brand-500 animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+
+                {/* Live Stream Card */}
+                <div className="flex-1 min-w-0 bg-white dark:bg-[#181818] rounded-3xl p-5 sm:p-6 border border-brand-500/30 dark:border-indigo-500/30 shadow-md shadow-brand-500/5 space-y-3">
+                  {/* Live Thinking Accordion (streaming thoughts as it reasons) */}
+                  {liveThoughtText && (
+                    <div className="rounded-2xl border border-indigo-200/80 dark:border-indigo-900/60 bg-indigo-50/60 dark:bg-indigo-950/30 overflow-hidden text-xs">
+                      <button
+                        type="button"
+                        onClick={() => setIsThoughtOpen(prev => !prev)}
+                        className="w-full flex items-center justify-between px-3.5 py-2 text-indigo-700 dark:text-indigo-300 font-semibold cursor-pointer hover:bg-indigo-100/50 dark:hover:bg-indigo-900/40 transition-colors"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-spin" />
+                          <span>Sage's Reasoning {liveStreamingText ? '(completed)' : '(thinking in real-time...)'}</span>
+                        </div>
+                        <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-200 ${isThoughtOpen ? 'rotate-180' : ''}`} />
+                      </button>
+                      {isThoughtOpen && (
+                        <div className="px-3.5 pb-2.5 pt-1 text-slate-600 dark:text-slate-300 font-mono text-[11px] leading-relaxed max-h-36 overflow-y-auto whitespace-pre-wrap select-text">
+                          {liveThoughtText}
+                          {!liveStreamingText && (
+                            <span className="inline-block w-1.5 h-3 ml-0.5 bg-indigo-500 animate-pulse rounded-full align-middle" />
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Live Text Body (Streaming Word-by-Word in real time) */}
+                  {liveStreamingText ? (
+                    <div className="gemini-markdown text-slate-800 dark:text-[#EDEDED] text-[14.5px] sm:text-[15px] leading-relaxed select-text overflow-x-auto">
+                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {liveStreamingText}
+                      </ReactMarkdown>
+                      <span className="inline-block w-1.5 h-4 ml-1 bg-brand-500 animate-pulse rounded-full align-middle shadow-xs shadow-brand-500" />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2.5 py-1 text-xs font-semibold text-slate-500 dark:text-[#D1D1D6]">
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-2 h-2 rounded-full bg-brand-500 animate-bounce" style={{ animationDelay: '0ms' }} />
+                        <span className="w-2 h-2 rounded-full bg-indigo-500 animate-bounce" style={{ animationDelay: '150ms' }} />
+                        <span className="w-2 h-2 rounded-full bg-purple-500 animate-bounce" style={{ animationDelay: '300ms' }} />
+                      </div>
+                      <span>
+                        {liveThoughtText 
+                          ? 'Formulating response from reasoning...' 
+                          : speedMode === 'fast' 
+                          ? 'Sage is answering instantly...' 
+                          : 'Sage is thinking deeply...'}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Live streaming status tag */}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-white/10 text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    <span className="flex items-center gap-1.5 text-brand-600 dark:text-brand-400 font-bold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-brand-500 animate-ping" />
+                      Streaming live
+                    </span>
+                    <span>{speedMode === 'fast' ? 'Fast Mode' : 'Deep Think'}</span>
                   </div>
-                  <span className="text-xs font-semibold text-slate-500 dark:text-[#D1D1D6]">
-                    Sage AI is thinking...
-                  </span>
                 </div>
               </motion.div>
             )}
@@ -1083,8 +1448,32 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                   </button>
                 </div>
 
-                {/* Controls on the Right: Model Selector, Voice Mic, Send */}
+                {/* Controls on the Right: Speed Mode, Model Selector, Voice Mic, Send / Stop */}
                 <div className="flex items-center gap-1.5 sm:gap-2">
+                  {/* Speed Mode Toggle (Fast vs Deep Think) */}
+                  <button
+                    type="button"
+                    onClick={() => setSpeedMode(prev => prev === 'fast' ? 'deep' : 'fast')}
+                    className={`inline-flex items-center gap-1 text-[11px] font-semibold rounded-xl px-2.5 py-1.5 transition-all cursor-pointer border ${
+                      speedMode === 'fast'
+                        ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/30 hover:bg-amber-500/20'
+                        : 'bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 border-indigo-500/30 hover:bg-indigo-500/20'
+                    }`}
+                    title={speedMode === 'fast' ? "Fast Mode: Minimal thinking delay, instantaneous streamed response (Click to switch to Deep Think)" : "Deep Think Mode: Extended step-by-step reasoning (Click to switch to Fast Mode)"}
+                  >
+                    {speedMode === 'fast' ? (
+                      <>
+                        <Zap className="w-3.5 h-3.5 fill-current text-amber-500" />
+                        <span>Fast</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="w-3.5 h-3.5 text-indigo-500" />
+                        <span>Deep</span>
+                      </>
+                    )}
+                  </button>
+
                   {/* Model Selector Mini Toggle */}
                   <select
                     value={provider}
@@ -1092,7 +1481,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                     className="text-[11px] font-semibold bg-slate-100 dark:bg-[#202020] text-slate-600 dark:text-[#EDEDED] rounded-xl px-2.5 py-1.5 outline-none border border-transparent dark:border-[#282828] hover:border-slate-200 dark:hover:border-white/20 cursor-pointer transition-colors"
                     title="Choose AI Model"
                   >
-                    <option value="gemini">Gemini 3.6 Flash</option>
+                    <option value="gemini">Gemini 4 Flash</option>
                     <option value="anthropic">Claude 3.7</option>
                   </select>
 
@@ -1127,17 +1516,30 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
                     <AudioLines className="w-4 h-4 text-purple-100 group-hover:scale-110 transition-transform" />
                   </motion.button>
 
-                  {/* Send Button */}
-                  <motion.button 
-                    whileTap={{ scale: 0.92 }}
-                    type="submit"
-                    disabled={(!input.trim() && !attachedFile) || isGenerating}
-                    className="p-1.5 sm:p-2 bg-gradient-to-tr from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 disabled:opacity-40 disabled:hover:from-brand-600 disabled:hover:to-indigo-600 text-white rounded-xl transition-all shadow-sm shadow-brand-500/20 flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
-                    title="Send message (Enter)"
-                    aria-label="Send message"
-                  >
-                    <Send className="w-4 h-4" />
-                  </motion.button>
+                  {/* Send / Stop Button */}
+                  {isGenerating ? (
+                    <motion.button 
+                      whileTap={{ scale: 0.92 }}
+                      type="button"
+                      onClick={handleStopGeneration}
+                      className="p-1.5 sm:p-2 bg-rose-600 hover:bg-rose-500 text-white rounded-xl transition-all shadow-sm shadow-rose-500/20 flex items-center justify-center shrink-0 cursor-pointer active:scale-95 animate-pulse"
+                      title="Stop response generation"
+                      aria-label="Stop response generation"
+                    >
+                      <Square className="w-4 h-4 fill-current" />
+                    </motion.button>
+                  ) : (
+                    <motion.button 
+                      whileTap={{ scale: 0.92 }}
+                      type="submit"
+                      disabled={!input.trim() && !attachedFile}
+                      className="p-1.5 sm:p-2 bg-gradient-to-tr from-brand-600 to-indigo-600 hover:from-brand-500 hover:to-indigo-500 disabled:opacity-40 disabled:hover:from-brand-600 disabled:hover:to-indigo-600 text-white rounded-xl transition-all shadow-sm shadow-brand-500/20 flex items-center justify-center shrink-0 cursor-pointer active:scale-95"
+                      title="Send message (Enter)"
+                      aria-label="Send message"
+                    >
+                      <Send className="w-4 h-4" />
+                    </motion.button>
+                  )}
                 </div>
               </div>
             </form>

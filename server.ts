@@ -2,7 +2,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { GoogleGenAI, Type } from "@google/genai";
+import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
@@ -1638,7 +1638,7 @@ Return a JSON object with a single 'steps' array. Each step should have:
 - duration: The estimated duration to complete (e.g., "2 weeks")
 `;
 
-      const modelsToTry = ["gemini-3.8-flash", "gemini-3.1-flash-lite"];
+      const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
       let parsedSteps: any = null;
 
       for (const modelName of modelsToTry) {
@@ -1706,7 +1706,21 @@ Return a JSON object with a single 'steps' array. Each step should have:
 
   app.post("/api/chat", async (req, res) => {
     try {
-      const { prompt, history, provider = 'gemini', allowDataCollection, bookContext } = req.body;
+      const {
+        prompt,
+        history,
+        provider = 'gemini',
+        allowDataCollection,
+        bookContext,
+        speedMode = 'fast', // 'fast' (default, low thinking latency) | 'deep' (extended thinking)
+        stream = false
+      } = req.body;
+
+      const isStreamingRequested = Boolean(
+        stream === true ||
+        req.headers.accept?.includes('text/event-stream') ||
+        req.query?.stream === 'true'
+      );
 
       const studyPatternsText = allowDataCollection 
         ? "The user has allowed data collection for their learning patterns. Please analyze the user's progress implicitly, be encouraging about their reading habits, and adjust your tutoring style based on any apparent strengths or weaknesses in the conversation."
@@ -1727,6 +1741,24 @@ CRITICAL READING HOVER TUTOR RULES:
 5. If the user asks about highlighted text, directly analyze and explain the highlighted excerpt.
 ` : '';
 
+      // Prune history to the last 8 messages to prevent token bloat and reduce TTFT latency
+      const recentHistory = (Array.isArray(history) ? history : []).slice(-8);
+
+      const systemPrompt = `As Sage AI, you are an exceptionally intuitive, fast, supportive, and deeply analytical AI educational companion for students. Your core engineering goal is absolute personalization with high response speed: observe and adapt to the student's learning style, curriculum, and pace. Deliver immediate conceptual intuition first, followed by clear, structured, and scannable answers.
+
+${studyPatternsText}
+${bookGroundingText}
+
+Core Pedagogical & Speed Rules:
+- Direct Intuition First: Explain the 'why' behind a concept with immediate, vivid real-world metaphors or practical intuition before formal definitions.
+- Crisp, Scannable Formatting: Use bold headings and bullet points for key takeaways. Keep explanations prompt, clear, and focused without unnecessary conversational preambles.
+- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters: $$E = mc^2$$ or $f(x) = y$.
+- Proactive Follow-Up: Conclude with a single brief, thought-provoking checkpoint question.
+
+Behavioral Persona:
+- Tone: Encouraging, expert, collaborative, and peer-like co-pilot.`;
+
+      // Anthropic Handler
       if (provider === 'anthropic') {
         const apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
@@ -1734,32 +1766,61 @@ CRITICAL READING HOVER TUTOR RULES:
         }
 
         const anthropic = new Anthropic({ apiKey });
-        
-        const systemPrompt = `As Sage AI, you are an exceptionally intuitive, supportive, and deeply analytical AI educational companion for students. Your core engineering goal is absolute personalization: you must constantly observe and adapt to the specific student's intellectual style, current curriculum or university context, and learning pace. Always prioritize clarity, deep intuition, and structured scannability over short or generic answers.
-
-${studyPatternsText}
-${bookGroundingText}
-
-Core Pedagogical Rules:
-- Build Intuition First: Never just dump an answer or formula. Explain the 'why' behind a concept using concrete real-world metaphors, practical examples, or visual descriptions before diving into formal academic definitions or calculations.
-- Deep, Structured Breakdown: When a student asks a question, break it down step-by-step. Use beautiful, roomy typography with distinct headings (such as H3 or H4 headers), highly readable line spacing, and bullet points with bolded labels to make complex topics instantly scannable.
-- Dynamic Personalization: Analyze the user's input to gauge their background, confidence level, and unique perspective.
-- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters. For standalone equations on a new line (display mode), wrap the LaTeX in double dollar signs: $$E = mc^2$$. For minor variables or short equations embedded directly inside a sentence (inline mode), wrap the LaTeX in single dollar signs: $f(x) = y$.
-
-Behavioral Persona:
-- Tone: Encouraging, expert, collaborative, and entirely peer-like. You are a brilliant co-pilot walking beside them through their syllabus.
-- Proactive Engagement: End your explanations with a single, highly engaging, open-ended follow-up question or quick check.`;
-        
         const anthropicMessages: any[] = [];
-        if (history && history.length > 0) {
-          for (const msg of history) {
-            anthropicMessages.push({
-              role: msg.role === 'user' ? 'user' : 'assistant',
-              content: msg.content
-            });
-          }
+        for (const msg of recentHistory) {
+          anthropicMessages.push({
+            role: msg.role === 'user' ? 'user' : 'assistant',
+            content: msg.content
+          });
         }
         anthropicMessages.push({ role: 'user', content: prompt });
+
+        if (isStreamingRequested) {
+          res.setHeader('Content-Type', 'text/event-stream');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('Connection', 'keep-alive');
+          res.flushHeaders?.();
+
+          let clientAborted = false;
+          res.on('close', () => {
+            if (!res.writableEnded) {
+              clientAborted = true;
+            }
+          });
+
+          try {
+            const streamResponse = anthropic.messages.stream({
+              model: 'claude-3-7-sonnet-latest',
+              max_tokens: 1024,
+              system: systemPrompt,
+              messages: anthropicMessages
+            });
+
+            for await (const chunk of streamResponse) {
+              if (clientAborted) break;
+              if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
+                const text = chunk.delta.text;
+                if (text) {
+                  res.write(`data: ${JSON.stringify({ text })}\n\n`);
+                }
+              }
+            }
+
+            if (!clientAborted) {
+              res.write(`data: [DONE]\n\n`);
+              res.end();
+            }
+            return;
+          } catch (anthropicErr: any) {
+            console.error("[AI Tutor Anthropic Stream Error]:", anthropicErr?.message || anthropicErr);
+            if (!clientAborted) {
+              res.write(`data: ${JSON.stringify({ error: anthropicErr?.message || "Anthropic generation error" })}\n\n`);
+              res.write(`data: [DONE]\n\n`);
+              res.end();
+            }
+            return;
+          }
+        }
 
         const response = await anthropic.messages.create({
           model: 'claude-3-7-sonnet-latest',
@@ -1796,6 +1857,120 @@ ${reasonText ? `*Note: ${reasonText}*` : ''}
 Would you like me to walk through a concrete numerical example or test your understanding with a quick practice problem?`;
       };
 
+      let chatContext = '';
+      if (recentHistory.length > 0) {
+        chatContext += recentHistory.map((m: any) => `${m.role === 'user' ? 'Student' : 'Sage AI'}: ${m.content}`).join('\n\n');
+        chatContext += '\n\n';
+      }
+      chatContext += `Student: ${prompt}\n\nSage AI:`;
+
+      // Model cascade:
+      // In fast mode: prioritize gemini-3.1-flash-lite for immediate sub-second word-by-word streaming
+      // In deep mode: prioritize gemini-4-hydrogen for extended chain-of-thought mathematical derivation
+      const modelsToTry = speedMode === 'fast'
+        ? ["gemini-3.1-flash-lite", "gemini-4-hydrogen"]
+        : ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+
+      // Helper to configure system instruction and thinking level for minimal latency
+      const getModelConfig = (modelName: string) => {
+        const config: any = {
+          systemInstruction: systemPrompt
+        };
+        if (modelName === "gemini-4-hydrogen") {
+          config.thinkingConfig = {
+            thinkingLevel: speedMode === 'deep' ? ThinkingLevel.MEDIUM : ThinkingLevel.LOW
+          };
+        }
+        return config;
+      };
+
+      // Real-time Server-Sent Events (SSE) Streaming
+      if (isStreamingRequested) {
+        res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-cache, no-transform');
+        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('X-Accel-Buffering', 'no');
+        res.flushHeaders?.();
+        res.write(`: ping\n\n`);
+        if (typeof (res as any).flush === 'function') (res as any).flush();
+
+        let clientAborted = false;
+        res.on('close', () => {
+          if (!res.writableEnded) {
+            clientAborted = true;
+          }
+        });
+
+        if (!apiKey) {
+          const fallback = generateEducationalFallback();
+          res.write(`data: ${JSON.stringify({ text: fallback })}\n\n`);
+          res.write(`data: [DONE]\n\n`);
+          return res.end();
+        }
+
+        const ai = new GoogleGenAI({
+          apiKey,
+          httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+        });
+
+        let streamedAny = false;
+        for (const modelName of modelsToTry) {
+          if (clientAborted) break;
+          try {
+            const config = getModelConfig(modelName);
+            const responseStream = await ai.models.generateContentStream({
+              model: modelName,
+              contents: chatContext,
+              config,
+            });
+
+            for await (const chunk of responseStream) {
+              if (clientAborted) break;
+
+              const parts = chunk.candidates?.[0]?.content?.parts || [];
+              let handledPart = false;
+
+              for (const part of parts) {
+                if ((part as any).thought && part.text) {
+                  res.write(`data: ${JSON.stringify({ thought: part.text })}\n\n`);
+                  if (typeof (res as any).flush === 'function') (res as any).flush();
+                  handledPart = true;
+                } else if (part.text && !(part as any).thought) {
+                  res.write(`data: ${JSON.stringify({ text: part.text })}\n\n`);
+                  if (typeof (res as any).flush === 'function') (res as any).flush();
+                  streamedAny = true;
+                  handledPart = true;
+                }
+              }
+
+              if (!handledPart && chunk.text) {
+                res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+                if (typeof (res as any).flush === 'function') (res as any).flush();
+                streamedAny = true;
+              }
+            }
+
+            if (streamedAny) {
+              break;
+            }
+          } catch (modelErr: any) {
+            console.warn(`[AI Tutor Stream] Model ${modelName} call failed, trying next fallback:`, modelErr?.message || modelErr);
+          }
+        }
+
+        if (!streamedAny && !clientAborted) {
+          const fallbackNote = "Generated via Edu AI Local Knowledge Engine while the live cloud model recovers from temporary rate-limits.";
+          res.write(`data: ${JSON.stringify({ text: generateEducationalFallback(fallbackNote) })}\n\n`);
+        }
+
+        if (!clientAborted) {
+          res.write(`data: [DONE]\n\n`);
+          res.end();
+        }
+        return;
+      }
+
+      // Standard non-streaming JSON generation
       if (!apiKey) {
         return res.json({ reply: generateEducationalFallback() });
       }
@@ -1805,45 +1980,22 @@ Would you like me to walk through a concrete numerical example or test your unde
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
 
-      let chatContext = `As Sage AI, you are an exceptionally intuitive, supportive, and deeply analytical AI educational companion for students. Your core engineering goal is absolute personalization: you must constantly observe and adapt to the specific student's intellectual style, current curriculum or university context, and learning pace. Always prioritize clarity, deep intuition, and structured scannability over short or generic answers.
-
-${studyPatternsText}
-${bookGroundingText}
-
-Core Pedagogical Rules:
-- Build Intuition First: Never just dump an answer or formula. Explain the 'why' behind a concept using concrete real-world metaphors, practical examples, or visual descriptions before diving into formal academic definitions or calculations.
-- Deep, Structured Breakdown: When a student asks a question, break it down step-by-step. Use distinct headings, highly readable spacing, and bullet points with bolded labels to make complex topics instantly scannable.
-- Seamless LaTeX Integration: For any mathematical expressions, scientific formulas, constants, or variables, you MUST strictly format them using LaTeX delimiters: $$E = mc^2$$ or $f(x) = y$.
-
-Behavioral Persona:
-- Tone: Encouraging, expert, collaborative, and peer-like.
-- Proactive Engagement: End your explanations with a single, highly engaging, open-ended follow-up question that challenges the student to apply the concept themselves.\n\n`;
-
-      if (history && history.length > 0) {
-        chatContext += history.map((m: any) => `${m.role === 'user' ? 'User' : 'Sage AI'}: ${m.content}`).join('\n');
-      }
-      chatContext += `\nUser: ${prompt}\nSage AI:`;
-
-      // Model cascade: try primary gemini-3.8-flash, fallback to gemini-3.1-flash-lite, then educational synthesizer
-      const modelsToTry = ["gemini-3.8-flash", "gemini-3.1-flash-lite"];
-      let lastAiError: any = null;
       let generatedText: string | null = null;
-
       for (const modelName of modelsToTry) {
         try {
+          const config = getModelConfig(modelName);
           const response = await ai.models.generateContent({
             model: modelName,
             contents: chatContext,
+            config,
           });
           if (response?.text) {
             generatedText = response.text;
             break;
           }
         } catch (modelErr: any) {
-          lastAiError = modelErr;
           console.warn(`[AI Tutor] Model ${modelName} call failed, trying next fallback:`, modelErr?.message || modelErr);
           const errStr = (modelErr?.message || String(modelErr)).toLowerCase();
-          // If quota exhausted or overloaded, proceed immediately to next model or fallback
           if (errStr.includes('quota') || errStr.includes('resource_exhausted') || errStr.includes('overloaded') || errStr.includes('503') || errStr.includes('429')) {
             continue;
           }
@@ -1854,7 +2006,6 @@ Behavioral Persona:
         return res.json({ reply: generatedText });
       }
 
-      // If both models hit quota limits or temporary server overload, provide smart offline educational synthesis
       const fallbackNote = "Generated via Edu AI Local Knowledge Engine while the live cloud model recovers from temporary rate-limits.";
       return res.json({ reply: generateEducationalFallback(fallbackNote) });
     } catch (error: any) {

@@ -20,7 +20,9 @@ import {
   Move, 
   Mic, 
   MicOff,
-  ChevronDown
+  ChevronDown,
+  Square,
+  Pencil
 } from 'lucide-react';
 import { AstroidIcon } from './icons/AstroidIcon';
 import { Book } from '../types';
@@ -80,6 +82,7 @@ export function ReaderAiHoverTutor({
 
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [liveStreamingText, setLiveStreamingText] = useState<string>('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
@@ -88,6 +91,7 @@ export function ReaderAiHoverTutor({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const recognitionRef = useRef<any>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Sync messages to localStorage per book
   useEffect(() => {
@@ -200,12 +204,47 @@ export function ReaderAiHoverTutor({
     localStorage.removeItem(`sage_reader_chat_${book.id}`);
   };
 
+  const isInputUnanswered = (msgIndex: number): boolean => {
+    const nextMsg = messages[msgIndex + 1];
+    if (!nextMsg) return true;
+    if (nextMsg.role !== 'assistant') return true;
+    if (!nextMsg.content || nextMsg.content.trim().length === 0) return true;
+    const content = nextMsg.content.toLowerCase();
+    return content.includes('error') || nextMsg.id.includes('err');
+  };
+
+  const handleStopGeneration = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (liveStreamingText.trim()) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: Date.now().toString() + '_ai',
+          role: 'assistant',
+          content: liveStreamingText.trim(),
+        },
+      ]);
+    }
+    setLiveStreamingText('');
+    setIsGenerating(false);
+  };
+
   const handleSubmit = async (directPrompt?: string) => {
     const promptToSend = (directPrompt || input).trim();
     if (!promptToSend || isGenerating) return;
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     triggerCapsuleFeedback({ pitch: 680, volume: 0.15, hapticDuration: 14 });
     setInput('');
+    setLiveStreamingText('');
     if (selectedText) onClearSelectedText();
     setIsGenerating(true);
 
@@ -217,15 +256,23 @@ export function ReaderAiHoverTutor({
 
     setMessages((prev) => [...prev, userMsg]);
 
+    const assistantMsgId = Date.now().toString() + '_ai';
+
     try {
       const allowDataCollection = JSON.parse(localStorage.getItem('privacy_data') ?? 'true');
 
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream'
+        },
+        signal: controller.signal,
         body: JSON.stringify({
           prompt: promptToSend,
           provider: 'gemini',
+          speedMode: 'fast',
+          stream: true,
           allowDataCollection,
           history: messages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
           bookContext: {
@@ -239,12 +286,74 @@ export function ReaderAiHoverTutor({
         }),
       });
 
-      if (response.ok) {
+      const contentType = response.headers.get('content-type') || '';
+      if (response.ok && contentType.includes('text/event-stream') && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let accumulated = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data:')) continue;
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]') break;
+
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.text) {
+                accumulated += parsed.text;
+                setLiveStreamingText(accumulated);
+              } else if (parsed.error) {
+                accumulated += `\n\n*(Error: ${parsed.error})*`;
+                setLiveStreamingText(accumulated);
+              }
+            } catch {
+              // Partial JSON chunk
+            }
+          }
+        }
+
+        // Flush any trailing line left in buffer
+        const trailing = buffer.trim();
+        if (trailing.startsWith('data:')) {
+          const dataStr = trailing.slice(5).trim();
+          if (dataStr && dataStr !== '[DONE]') {
+            try {
+              const parsed = JSON.parse(dataStr);
+              if (parsed.text) accumulated += parsed.text;
+              else if (parsed.error) accumulated += `\n\n*(Error: ${parsed.error})*`;
+            } catch {}
+          }
+        }
+
+        setMessages((prev) => [
+          ...prev,
+          accumulated.trim()
+            ? {
+                id: assistantMsgId,
+                role: 'assistant',
+                content: accumulated.trim(),
+              }
+            : {
+                id: Date.now().toString() + '_err',
+                role: 'assistant',
+                content: 'Sorry, I encountered an error receiving a response. Please click Retry.',
+              },
+        ]);
+      } else if (response.ok) {
         const data = await response.json();
         setMessages((prev) => [
           ...prev,
           {
-            id: Date.now().toString() + '_ai',
+            id: assistantMsgId,
             role: 'assistant',
             content: data.reply || 'I analyzed the book context for you.',
           },
@@ -260,16 +369,21 @@ export function ReaderAiHoverTutor({
           },
         ]);
       }
-    } catch {
+    } catch (err: any) {
+      if (err?.name === 'AbortError') {
+        return;
+      }
       setMessages((prev) => [
         ...prev,
         {
           id: Date.now().toString() + '_net_err',
           role: 'assistant',
-          content: `Here is a study hint for **${book.title} (Page ${pageNumber})**:\n\n* **Core Focus:** This section builds upon previous foundational definitions.\n* **Study Advice:** Connect the theoretical formulas to real-world applications to solidify your understanding.\n\n*(You are currently offline or in low connectivity mode. Sage AI is still available for guidance).*`,
+          content: `Here is a study hint for **${book.title} (Page ${pageNumber})**:\n\n* **Core Focus:** This section builds upon previous foundational definitions.\n* **Study Advice:** Connect the theoretical formulas to real-world applications to solidify your understanding.`,
         },
       ]);
     } finally {
+      abortControllerRef.current = null;
+      setLiveStreamingText('');
       setIsGenerating(false);
     }
   };
@@ -437,14 +551,64 @@ export function ReaderAiHoverTutor({
 
             {/* Messages Scroll Area */}
             <div className="flex-1 overflow-y-auto p-3.5 space-y-3 max-h-[340px] text-xs sm:text-[13px] leading-relaxed select-text">
-              {messages.map((msg) => (
+              {messages.map((msg, index) => (
                 <div
                   key={msg.id}
                   className={`flex flex-col ${msg.role === 'user' ? 'items-end' : 'items-start'}`}
                 >
                   {msg.role === 'user' ? (
-                    <div className="bg-gradient-to-r from-brand-600 to-indigo-600 text-white px-3.5 py-2 rounded-2xl rounded-tr-xs max-w-[88%] shadow-sm leading-relaxed">
-                      {msg.content}
+                    <div className="flex flex-col items-end max-w-[88%] group">
+                      <div className="bg-gradient-to-r from-brand-600 to-indigo-600 text-white px-3.5 py-2 rounded-2xl rounded-tr-xs shadow-sm leading-relaxed">
+                        {msg.content}
+                      </div>
+                      <div className="flex items-center gap-1 mt-1 px-1">
+                        {isInputUnanswered(index) ? (
+                          <button
+                            type="button"
+                            onClick={() => handleSubmit(msg.content)}
+                            disabled={isGenerating}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-semibold text-amber-600 dark:text-amber-400 bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 rounded-lg transition-all cursor-pointer shadow-xs active:scale-95 disabled:opacity-50"
+                            title="Retry generating response"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                            <span>Retry</span>
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleSubmit(msg.content)}
+                            disabled={isGenerating}
+                            className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+                            title="Retry prompt"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleCopy(msg.id, msg.content)}
+                          className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+                          title="Copy input text"
+                        >
+                          {copiedId === msg.id ? (
+                            <Check className="w-3 h-3 text-emerald-500" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInput(msg.content);
+                            inputRef.current?.focus();
+                          }}
+                          disabled={isGenerating}
+                          className="p-1 text-stone-400 hover:text-stone-700 dark:hover:text-stone-200 hover:bg-black/5 dark:hover:bg-white/10 rounded-lg transition-colors cursor-pointer"
+                          title="Edit input text in composer"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <div className={`p-3 rounded-2xl rounded-tl-xs max-w-[95%] space-y-2 ${innerBubbleAi}`}>
@@ -501,11 +665,22 @@ export function ReaderAiHoverTutor({
               ))}
 
               {isGenerating && (
-                <div className={`p-3 rounded-2xl rounded-tl-xs max-w-[85%] flex items-center gap-2.5 text-xs ${innerBubbleAi}`}>
-                  <div className="w-2 h-2 rounded-full bg-brand-600 animate-ping" />
-                  <span className="text-stone-500 dark:text-stone-400 italic">
-                    Sage is analyzing page {pageNumber}...
-                  </span>
+                <div className={`p-3 rounded-2xl rounded-tl-xs max-w-[85%] text-xs space-y-2 ${innerBubbleAi}`}>
+                  {liveStreamingText ? (
+                    <div className="gemini-markdown leading-relaxed select-text">
+                      <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                        {liveStreamingText}
+                      </ReactMarkdown>
+                      <span className="inline-block w-1.5 h-3 ml-1 bg-brand-500 animate-pulse rounded-full align-middle shadow-xs" />
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2.5">
+                      <div className="w-2 h-2 rounded-full bg-brand-600 animate-ping" />
+                      <span className="text-stone-500 dark:text-stone-400 italic">
+                        Sage is analyzing page {pageNumber}...
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
               <div ref={messagesEndRef} />
@@ -540,7 +715,6 @@ export function ReaderAiHoverTutor({
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   placeholder={`Ask Sage anything about p. ${pageNumber}...`}
-                  disabled={isGenerating}
                   className="w-full pl-3 pr-8 py-2 text-xs rounded-xl bg-white/80 dark:bg-slate-900/80 border border-stone-200 dark:border-slate-700 text-stone-800 dark:text-stone-100 placeholder:text-stone-400 focus:outline-none focus:ring-2 focus:ring-brand-500/30 transition-all"
                 />
 
@@ -558,14 +732,25 @@ export function ReaderAiHoverTutor({
                 )}
               </div>
 
-              <button
-                type="submit"
-                disabled={!input.trim() || isGenerating}
-                className="p-2 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-600 text-white hover:opacity-95 active:scale-95 disabled:opacity-40 transition-all shadow-sm cursor-pointer shrink-0"
-                title="Send inquiry"
-              >
-                <Send className="w-3.5 h-3.5" />
-              </button>
+              {isGenerating ? (
+                <button
+                  type="button"
+                  onClick={handleStopGeneration}
+                  className="p-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white active:scale-95 transition-all shadow-sm cursor-pointer shrink-0 animate-pulse"
+                  title="Stop generating"
+                >
+                  <Square className="w-3.5 h-3.5 fill-current" />
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={!input.trim()}
+                  className="p-2 rounded-xl bg-gradient-to-tr from-brand-600 to-indigo-600 text-white hover:opacity-95 active:scale-95 disabled:opacity-40 transition-all shadow-sm cursor-pointer shrink-0"
+                  title="Send inquiry"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </button>
+              )}
             </form>
           </motion.div>
         )}
