@@ -1,4 +1,4 @@
-import { supabase } from './supabase';
+import { supabase, getPersistedDeviceSession } from './supabase';
 import { safeStorage } from './safeStorage';
 
 export type GoalType = 'time' | 'pages';
@@ -22,8 +22,13 @@ export interface DailyReadingGoal {
   history: Record<string, DayHistoryRecord>;
 }
 
-const STORAGE_KEY = 'edu_ai_daily_reading_goal';
+const STORAGE_KEY_PREFIX = 'edu_ai_daily_reading_goal';
 export const GOAL_EVENT_NAME = 'daily-reading-goal-updated';
+
+function getGoalStorageKey(): string {
+  const userId = getPersistedDeviceSession()?.user?.id;
+  return userId ? `${STORAGE_KEY_PREFIX}_${userId}` : STORAGE_KEY_PREFIX;
+}
 
 function getTodayString(): string {
   const d = new Date();
@@ -75,9 +80,10 @@ function generateInitialHistory(todayStr: string, yesterdayStr: string): Record<
 export function getDailyGoal(): DailyReadingGoal {
   const todayStr = getTodayString();
   const yesterdayStr = getYesterdayString();
+  const storageKey = getGoalStorageKey();
 
   try {
-    const raw = safeStorage.getItem(STORAGE_KEY);
+    const raw = safeStorage.getItem(storageKey);
     if (!raw) {
       const initial: DailyReadingGoal = {
         type: 'time',
@@ -89,7 +95,7 @@ export function getDailyGoal(): DailyReadingGoal {
         lastCompletedDate: yesterdayStr,
         history: generateInitialHistory(todayStr, yesterdayStr),
       };
-      safeStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+      safeStorage.setItem(storageKey, JSON.stringify(initial));
       return initial;
     }
 
@@ -126,7 +132,7 @@ export function getDailyGoal(): DailyReadingGoal {
         type: parsed.type,
       };
 
-      safeStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+      safeStorage.setItem(storageKey, JSON.stringify(parsed));
     }
 
     return parsed;
@@ -145,8 +151,9 @@ export function getDailyGoal(): DailyReadingGoal {
 }
 
 export function saveDailyGoal(goal: DailyReadingGoal, syncCloud = true): void {
+  const storageKey = getGoalStorageKey();
   try {
-    safeStorage.setItem(STORAGE_KEY, JSON.stringify(goal));
+    safeStorage.setItem(storageKey, JSON.stringify(goal));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent(GOAL_EVENT_NAME, { detail: goal }));
     }
@@ -154,30 +161,48 @@ export function saveDailyGoal(goal: DailyReadingGoal, syncCloud = true): void {
     console.error('Failed to save daily goal:', err);
   }
 
-  // Push to Supabase asynchronously
-  if (syncCloud && supabase) {
+  // Push to Supabase + account sync asynchronously
+  if (syncCloud) {
     (async () => {
       try {
-        const { data, error } = await supabase.auth.getUser();
-        if (error) return;
-        const userId = data?.user?.id;
-        if (userId) {
-          const { error } = await supabase
-            .from('user_reading_goals')
-            .upsert({
-              user_id: userId,
-              goal_type: goal.type,
-              target: goal.target,
-              current_minutes: goal.currentMinutes,
-              current_pages: goal.currentPages,
-              streak: goal.streak,
-              last_completed_date: goal.lastCompletedDate || null,
-              history: goal.history || {},
-              updated_at: new Date().toISOString()
-            }, {
-              onConflict: 'user_id'
-            });
-          if (error) console.warn('[readingGoal] Cloud sync notice:', error.message);
+        const persisted = getPersistedDeviceSession();
+        let userId = persisted?.user?.id;
+        let token = persisted?.access_token;
+
+        if (supabase) {
+          const { data, error } = await supabase.auth.getUser();
+          if (!error && data?.user?.id) {
+            userId = data.user.id;
+          }
+          if (userId) {
+            const { error: upsertErr } = await supabase
+              .from('user_reading_goals')
+              .upsert({
+                user_id: userId,
+                goal_type: goal.type,
+                target: goal.target,
+                current_minutes: goal.currentMinutes,
+                current_pages: goal.currentPages,
+                streak: goal.streak,
+                last_completed_date: goal.lastCompletedDate || null,
+                history: goal.history || {},
+                updated_at: new Date().toISOString()
+              }, {
+                onConflict: 'user_id'
+              });
+            if (upsertErr) console.warn('[readingGoal] Cloud sync notice:', upsertErr.message);
+          }
+        }
+
+        if (token && userId) {
+          await fetch('/api/account/sync', {
+            method: 'PUT',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ dailyGoal: goal }),
+          });
         }
       } catch (err) {
         console.warn('[readingGoal] Cloud sync error:', err);

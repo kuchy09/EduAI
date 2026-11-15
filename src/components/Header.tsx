@@ -13,9 +13,8 @@ import { useOffline } from '../lib/useOffline';
 import { getRelatedSearchSuggestions } from '../lib/searchSuggestions';
 import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
-import { useUserAvatar, saveUserAvatarLocally } from '../lib/userAvatarService';
+import { useUserAvatar, saveUserAvatarLocally, uploadAndSyncUserAvatar } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
-import { supabase } from '../lib/supabase';
 import {
   extractUserAcademicProfile,
   getPersonalizedBooks,
@@ -193,7 +192,7 @@ export function Header({
     };
   }, [isProfileMenuOpen]);
 
-  const userAvatarUrl = useUserAvatar(user);
+  const userAvatarUrl = useUserAvatar(user, profile);
   const [avatarImgFailed, setAvatarImgFailed] = useState(false);
   const [isUploadingPhoto, setIsUploadingPhoto] = useState(false);
   const headerFileInputRef = useRef<HTMLInputElement>(null);
@@ -206,48 +205,11 @@ export function Header({
     const file = event.target.files?.[0];
     if (!file) return;
 
-    let previewDataUrl = '';
     try {
       setIsUploadingPhoto(true);
-
-      // 1. Instant local base64 display across whole app
-      await new Promise<void>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const res = e.target?.result as string;
-          if (res) {
-            previewDataUrl = res;
-            saveUserAvatarLocally(res, res);
-            setAvatarImgFailed(false);
-          }
-          resolve();
-        };
-        reader.onerror = () => resolve();
-        reader.readAsDataURL(file);
-      });
-
-      // 2. Upload to server disk & B2 for cloud sync
-      const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}`, {
-        method: 'POST',
-        body: file,
-        headers: { 'Content-Type': file.type },
-      });
-
-      if (uploadRes.ok) {
-        const data = await uploadRes.json();
-        if (data?.key) {
-          saveUserAvatarLocally(data.key, previewDataUrl);
-          if (supabase && user?.id) {
-            try {
-              await supabase.auth.updateUser({
-                data: { avatar_url: data.key, profile_photo_key: data.key }
-              });
-              await supabase.from('profiles').update({ avatar_url: data.key }).eq('id', user.id);
-            } catch (e) {
-              console.warn("Supabase profile photo update notice:", e);
-            }
-          }
-        }
+      const permanentUrl = await uploadAndSyncUserAvatar(file, user);
+      if (permanentUrl) {
+        setAvatarImgFailed(false);
       }
     } catch (err) {
       console.warn("Header photo upload error:", err);
@@ -1372,9 +1334,10 @@ export function Header({
                 alt="Profile" 
                 className="w-full h-full object-cover rounded-full"
                 onError={() => {
-                  const fallbackData = safeStorage.getItem('user_avatar_data_url');
+                  const scopedDataKey = user?.id ? `user_avatar_data_url_${user.id}` : 'user_avatar_data_url';
+                  const fallbackData = safeStorage.getItem(scopedDataKey);
                   if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
-                    saveUserAvatarLocally(fallbackData, fallbackData);
+                    saveUserAvatarLocally(fallbackData, fallbackData, user?.id);
                     setAvatarImgFailed(false);
                   } else {
                     setAvatarImgFailed(true);
@@ -1407,9 +1370,10 @@ export function Header({
                       alt="Profile" 
                       className="w-full h-full object-cover" 
                       onError={() => {
-                        const fallbackData = safeStorage.getItem('user_avatar_data_url');
+                        const scopedDataKey = user?.id ? `user_avatar_data_url_${user.id}` : 'user_avatar_data_url';
+                        const fallbackData = safeStorage.getItem(scopedDataKey);
                         if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
-                          saveUserAvatarLocally(fallbackData, fallbackData);
+                          saveUserAvatarLocally(fallbackData, fallbackData, user?.id);
                           setAvatarImgFailed(false);
                         } else {
                           setAvatarImgFailed(true);

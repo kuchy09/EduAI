@@ -34,7 +34,7 @@ interface DashboardProps {
 }
 
 export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAddBookToLibrary, onOpenAcademicPrefs }: DashboardProps) {
-  const avatarUrl = useUserAvatar(user);
+  const avatarUrl = useUserAvatar(user, profile);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {

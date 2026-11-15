@@ -120,13 +120,189 @@ function getServerSupabaseKeyEnv(): string {
   );
 }
 
-function getServerSupabase(): SupabaseClient | null {
+function getServerSupabase(userJwt?: string): SupabaseClient | null {
   const sbUrl = getResolvedSupabaseUrlEnv();
-  const sbKey = getServerSupabaseKeyEnv();
+  const serviceKey = [process.env.SUPABASE_SERVICE_ROLE_KEY, process.env.SUPABASE_SECRET_KEY].find(isRealKeyEnv) || "";
+  const sbKey = serviceKey || getServerSupabaseKeyEnv();
   if (!sbUrl || !sbKey) return null;
-  return createClient(sbUrl, sbKey, {
+
+  const options: any = {
     auth: { persistSession: false, autoRefreshToken: false },
+  };
+  if (!serviceKey && userJwt) {
+    options.global = {
+      headers: { Authorization: `Bearer ${userJwt}` },
+    };
+  }
+  return createClient(sbUrl, sbKey, options);
+}
+
+const USER_SYNC_DIR = path.join(UPLOADS_DIR, "user-sync");
+if (!fs.existsSync(USER_SYNC_DIR)) {
+  try {
+    fs.mkdirSync(USER_SYNC_DIR, { recursive: true });
+  } catch (_) {}
+}
+
+function getSafeUserSyncId(userId: string): string {
+  return String(userId || "").replace(/[^a-zA-Z0-9_-]/g, "");
+}
+
+async function readServerUserSync(userId: string, sb?: SupabaseClient | null): Promise<any> {
+  const safeId = getSafeUserSyncId(userId);
+  if (!safeId) return {};
+  const localPath = path.join(USER_SYNC_DIR, `${safeId}.json`);
+  const candidates: any[] = [];
+
+  try {
+    if (fs.existsSync(localPath)) {
+      const parsed = JSON.parse(fs.readFileSync(localPath, "utf-8"));
+      if (parsed && typeof parsed === "object") candidates.push(parsed);
+    }
+  } catch (_) {}
+
+  if (sb) {
+    try {
+      const { data, error } = await sb
+        .from("user_account_sync")
+        .select("*")
+        .eq("user_id", userId)
+        .maybeSingle();
+      if (!error && data) {
+        candidates.push({
+          aiChatSessions: data.ai_chat_sessions,
+          activeAiSessionId: data.active_ai_session_id,
+          readerChats: data.reader_chats,
+          peerConversations: data.peer_conversations,
+          peerMessages: data.peer_messages,
+          unlockedBooks: data.unlocked_books,
+          profileSnapshot: data.profile_snapshot,
+          updatedAt: data.updated_at,
+        });
+      }
+    } catch (_) {}
+
+    try {
+      const { data: blobData, error: storageErr } = await sb.storage
+        .from("workspace-files")
+        .download(`${userId}/account-sync.json`);
+      if (!storageErr && blobData) {
+        const text = await blobData.text();
+        const parsed = JSON.parse(text);
+        if (parsed && typeof parsed === "object") candidates.push(parsed);
+      }
+    } catch (_) {}
+  }
+
+  const s3 = getS3Client();
+  if (s3 && B2_BUCKET_NAME) {
+    try {
+      const obj = await s3.send(new GetObjectCommand({ Bucket: B2_BUCKET_NAME, Key: `user-sync/${safeId}.json` }));
+      if (obj.Body) {
+        const chunks: any[] = [];
+        for await (const chunk of obj.Body as any) chunks.push(chunk);
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+        if (parsed && typeof parsed === "object") candidates.push(parsed);
+      }
+    } catch (_) {}
+  }
+
+  if (candidates.length === 0) return {};
+  candidates.sort((a, b) => {
+    const ta = a?.updatedAt ? Date.parse(a.updatedAt) || 0 : 0;
+    const tb = b?.updatedAt ? Date.parse(b.updatedAt) || 0 : 0;
+    return tb - ta;
   });
+
+  // Merge top candidates so no field is accidentally dropped
+  const merged: any = {};
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const c = candidates[i];
+    if (!c || typeof c !== "object") continue;
+    Object.assign(merged, c);
+  }
+  return merged;
+}
+
+async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClient | null): Promise<any> {
+  const safeId = getSafeUserSyncId(userId);
+  if (!safeId) return {};
+  const existing = await readServerUserSync(userId, sb);
+  const nowIso = new Date().toISOString();
+
+  const nextState: any = {
+    ...existing,
+    ...patch,
+    profileSnapshot: {
+      ...(existing.profileSnapshot || {}),
+      ...(patch.profileSnapshot || {}),
+    },
+    readerChats: {
+      ...(existing.readerChats || {}),
+      ...(patch.readerChats || {}),
+    },
+    peerMessages: {
+      ...(existing.peerMessages || {}),
+      ...(patch.peerMessages || {}),
+    },
+    readingProgress: {
+      ...(existing.readingProgress || {}),
+      ...(patch.readingProgress || {}),
+    },
+    updatedAt: nowIso,
+  };
+
+  const localPath = path.join(USER_SYNC_DIR, `${safeId}.json`);
+  try {
+    if (!fs.existsSync(USER_SYNC_DIR)) fs.mkdirSync(USER_SYNC_DIR, { recursive: true });
+    fs.writeFileSync(localPath, JSON.stringify(nextState), "utf-8");
+  } catch (fsErr) {
+    console.warn("[AccountSync] Local disk write warning:", fsErr);
+  }
+
+  if (sb) {
+    try {
+      await sb.from("user_account_sync").upsert(
+        {
+          user_id: userId,
+          ai_chat_sessions: nextState.aiChatSessions || [],
+          active_ai_session_id: nextState.activeAiSessionId || null,
+          reader_chats: nextState.readerChats || {},
+          peer_conversations: nextState.peerConversations || [],
+          peer_messages: nextState.peerMessages || {},
+          unlocked_books: nextState.unlockedBooks || [],
+          profile_snapshot: nextState.profileSnapshot || {},
+          updated_at: nowIso,
+        },
+        { onConflict: "user_id" }
+      );
+    } catch (_) {}
+
+    try {
+      await sb.storage
+        .from("workspace-files")
+        .upload(`${userId}/account-sync.json`, Buffer.from(JSON.stringify(nextState), "utf-8"), {
+          contentType: "application/json",
+          upsert: true,
+        });
+    } catch (_) {}
+  }
+
+  const s3 = getS3Client();
+  if (s3 && B2_BUCKET_NAME) {
+    try {
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: B2_BUCKET_NAME,
+          Key: `user-sync/${safeId}.json`,
+          ContentType: "application/json",
+          Body: Buffer.from(JSON.stringify(nextState), "utf-8"),
+        })
+      );
+    } catch (_) {}
+  }
+
+  return nextState;
 }
 
 const rawEndpoint = process.env.B2_ENDPOINT || "https://s3.us-west-004.backblazeb2.com";
@@ -726,13 +902,14 @@ app.post("/api/auth/session", async (req, res) => {
 
 // Validate active Bearer JWT (and optionally refresh via x-refresh-token if expired)
 app.get("/api/auth/user", async (req, res) => {
-  const sb = getServerSupabase();
-  if (!sb) {
-    return res.status(503).json({ error: "Authentication service is not configured." });
-  }
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   const refreshToken = typeof req.headers["x-refresh-token"] === "string" ? req.headers["x-refresh-token"].trim() : "";
+
+  const sb = getServerSupabase(token);
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
 
   if (!token) {
     return res.status(401).json({ error: "Unauthorized" });
@@ -740,6 +917,7 @@ app.get("/api/auth/user", async (req, res) => {
 
   try {
     let activeUser = null;
+    let activeAccessToken = token;
     let refreshedSession: any = null;
 
     const { data: userData, error: userErr } = await sb.auth.getUser(token);
@@ -753,6 +931,7 @@ app.get("/api/auth/user", async (req, res) => {
         });
         if (!refreshErr && refreshData?.session?.user) {
           activeUser = refreshData.session.user;
+          activeAccessToken = refreshData.session.access_token;
           refreshedSession = {
             access_token: refreshData.session.access_token,
             refresh_token: refreshData.session.refresh_token,
@@ -766,14 +945,31 @@ app.get("/api/auth/user", async (req, res) => {
       return res.status(401).json({ error: "Session expired or invalid." });
     }
 
-    let profile = null;
+    const authedSb = getServerSupabase(activeAccessToken) || sb;
+    let profile: any = null;
     try {
-      const { data: profileData } = await sb
+      const { data: profileData } = await authedSb
         .from("profiles")
         .select("*")
         .eq("id", activeUser.id)
         .maybeSingle();
       profile = profileData || null;
+    } catch (_) {}
+
+    try {
+      const syncData = await readServerUserSync(activeUser.id, authedSb);
+      if (syncData?.profileSnapshot && typeof syncData.profileSnapshot === "object") {
+        profile = {
+          ...(syncData.profileSnapshot || {}),
+          ...(profile || {}),
+          avatar_url: profile?.avatar_url || syncData.profileSnapshot.avatar_url || activeUser.user_metadata?.avatar_url || null,
+          country: profile?.country || syncData.profileSnapshot.country || activeUser.user_metadata?.country || null,
+          education_level: profile?.education_level || syncData.profileSnapshot.education_level || activeUser.user_metadata?.education_level || null,
+          curriculum: profile?.curriculum || syncData.profileSnapshot.curriculum || activeUser.user_metadata?.curriculum || null,
+          field_of_study: profile?.field_of_study || syncData.profileSnapshot.field_of_study || activeUser.user_metadata?.field_of_study || null,
+          subjects: profile?.subjects || syncData.profileSnapshot.subjects || activeUser.user_metadata?.subjects || null,
+        };
+      }
     } catch (_) {}
 
     return res.json({
@@ -926,17 +1122,17 @@ app.post("/api/auth/otp-verify", async (req, res) => {
   }
 });
 
-// Save or update user's academic preferences (country, education_level, curriculum, field_of_study, subjects) — strictly verifies caller Bearer JWT
+// Save or update user's academic preferences & profile details — strictly verifies caller Bearer JWT
 app.post("/api/auth/preferences", async (req, res) => {
-  const sb = getServerSupabase();
-  if (!sb) {
-    return res.status(503).json({ error: "Authentication service is not configured." });
-  }
-
   const authHeader = req.headers.authorization || "";
   const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
   if (!token) {
     return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const sb = getServerSupabase(token);
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
   }
 
   try {
@@ -946,29 +1142,55 @@ app.post("/api/auth/preferences", async (req, res) => {
     }
 
     const userId = userData.user.id;
-    const country = typeof req.body?.country === "string" ? req.body.country.trim() : "";
-    const education_level = typeof req.body?.education_level === "string" ? req.body.education_level.trim() : "";
-    const curriculum = typeof req.body?.curriculum === "string" ? req.body.curriculum.trim() : "";
-    const field_of_study = typeof req.body?.field_of_study === "string" ? req.body.field_of_study.trim() : "";
-    const subjects = Array.isArray(req.body?.subjects)
-      ? req.body.subjects.map((s: any) => String(s).trim()).filter(Boolean).join(", ")
-      : typeof req.body?.subjects === "string"
-        ? req.body.subjects.trim()
-        : "";
-    const full_name = typeof req.body?.full_name === "string" ? req.body.full_name.trim() : "";
+    const body = req.body || {};
 
     const profilePatch: Record<string, any> = {
       id: userId,
-      country: country || null,
-      location: country || null,
-      education_level: education_level || null,
-      curriculum: curriculum || null,
-      field_of_study: field_of_study || null,
-      subjects: subjects || null,
+      email: userData.user.email || undefined,
       updated_at: new Date().toISOString(),
     };
-    if (full_name) {
-      profilePatch.full_name = full_name;
+
+    if (typeof body.country === "string") {
+      profilePatch.country = body.country.trim() || null;
+      profilePatch.location = body.country.trim() || null;
+    }
+    if (typeof body.location === "string" && body.location.trim()) {
+      profilePatch.location = body.location.trim();
+    }
+    if (typeof body.education_level === "string") {
+      profilePatch.education_level = body.education_level.trim() || null;
+    }
+    if (typeof body.curriculum === "string") {
+      profilePatch.curriculum = body.curriculum.trim() || null;
+    }
+    if (typeof body.field_of_study === "string") {
+      profilePatch.field_of_study = body.field_of_study.trim() || null;
+    }
+    if (body.subjects !== undefined) {
+      const subjects = Array.isArray(body.subjects)
+        ? body.subjects.map((s: any) => String(s).trim()).filter(Boolean).join(", ")
+        : typeof body.subjects === "string"
+          ? body.subjects.trim()
+          : "";
+      profilePatch.subjects = subjects || null;
+    }
+    if (typeof body.full_name === "string" && body.full_name.trim()) {
+      profilePatch.full_name = body.full_name.trim();
+    }
+    if (body.avatar_url !== undefined) {
+      profilePatch.avatar_url = typeof body.avatar_url === "string" ? body.avatar_url.trim() || null : null;
+    }
+    if (typeof body.bio === "string") {
+      profilePatch.bio = body.bio.trim() || null;
+    }
+    if (typeof body.institution === "string") {
+      profilePatch.institution = body.institution.trim() || null;
+    }
+    if (typeof body.title === "string") {
+      profilePatch.title = body.title.trim() || null;
+    }
+    if (typeof body.role === "string" && body.role.trim()) {
+      profilePatch.role = body.role.trim();
     }
 
     let updatedProfile = null;
@@ -985,19 +1207,20 @@ app.post("/api/auth/preferences", async (req, res) => {
       console.warn("[Auth] profiles upsert notice:", profEx);
     }
 
+    try {
+      await writeServerUserSync(userId, { profileSnapshot: updatedProfile || profilePatch }, sb);
+    } catch (_) {}
+
     // Opportunistically sync auth user_metadata if service role key is configured on server
     try {
-      const mergedMeta = {
-        ...(userData.user.user_metadata || {}),
-        country,
-        education_level,
-        curriculum,
-        field_of_study,
-        subjects,
-        ...(full_name ? { full_name } : {}),
-      };
+      const metaPatch: Record<string, any> = { ...(userData.user.user_metadata || {}) };
+      for (const k of ["country", "education_level", "curriculum", "field_of_study", "subjects", "full_name", "avatar_url", "bio", "institution", "role"]) {
+        if (profilePatch[k] !== undefined) {
+          metaPatch[k] = profilePatch[k];
+        }
+      }
       if (sb.auth?.admin?.updateUserById) {
-        await sb.auth.admin.updateUserById(userId, { user_metadata: mergedMeta });
+        await sb.auth.admin.updateUserById(userId, { user_metadata: metaPatch });
       }
     } catch (_) {}
 
@@ -1007,7 +1230,103 @@ app.post("/api/auth/preferences", async (req, res) => {
     });
   } catch (err) {
     console.error("[Auth] /api/auth/preferences error:", err);
-    return res.status(500).json({ error: "Could not save academic preferences." });
+    return res.status(500).json({ error: "Could not save profile preferences." });
+  }
+});
+
+// Unified cross-device account synchronization endpoints (JWT-verified)
+app.get("/api/account/sync", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const sb = getServerSupabase(token);
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+
+  try {
+    const { data: userData, error: userErr } = await sb.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const userId = userData.user.id;
+    const syncState = await readServerUserSync(userId, sb);
+
+    let profile: any = null;
+    try {
+      const { data: profData } = await sb.from("profiles").select("*").eq("id", userId).maybeSingle();
+      if (profData) profile = profData;
+    } catch (_) {}
+
+    if (syncState?.profileSnapshot) {
+      profile = {
+        ...(syncState.profileSnapshot || {}),
+        ...(profile || {}),
+        avatar_url: profile?.avatar_url || syncState.profileSnapshot.avatar_url || userData.user.user_metadata?.avatar_url || null,
+        country: profile?.country || syncState.profileSnapshot.country || userData.user.user_metadata?.country || null,
+        education_level: profile?.education_level || syncState.profileSnapshot.education_level || userData.user.user_metadata?.education_level || null,
+        curriculum: profile?.curriculum || syncState.profileSnapshot.curriculum || userData.user.user_metadata?.curriculum || null,
+        field_of_study: profile?.field_of_study || syncState.profileSnapshot.field_of_study || userData.user.user_metadata?.field_of_study || null,
+        subjects: profile?.subjects || syncState.profileSnapshot.subjects || userData.user.user_metadata?.subjects || null,
+      };
+    }
+
+    return res.json({
+      ok: true,
+      sync: syncState,
+      profile,
+    });
+  } catch (err) {
+    console.error("[AccountSync] GET /api/account/sync error:", err);
+    return res.status(500).json({ error: "Failed to load account sync state." });
+  }
+});
+
+app.put("/api/account/sync", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const sb = getServerSupabase(token);
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+
+  try {
+    const { data: userData, error: userErr } = await sb.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+
+    const userId = userData.user.id;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const nextState = await writeServerUserSync(userId, body, sb);
+
+    if (body.profileSnapshot && typeof body.profileSnapshot === "object") {
+      try {
+        const cleanPatch: Record<string, any> = { id: userId, updated_at: new Date().toISOString() };
+        const allowed = ["full_name", "avatar_url", "country", "location", "education_level", "curriculum", "field_of_study", "subjects", "role", "title", "institution", "bio"];
+        let hasFields = false;
+        for (const k of allowed) {
+          if (body.profileSnapshot[k] !== undefined && body.profileSnapshot[k] !== "") {
+            cleanPatch[k] = body.profileSnapshot[k];
+            hasFields = true;
+          }
+        }
+        if (hasFields) {
+          await sb.from("profiles").upsert(cleanPatch, { onConflict: "id" });
+        }
+      } catch (_) {}
+    }
+
+    return res.json({ ok: true, sync: nextState });
+  } catch (err) {
+    console.error("[AccountSync] PUT /api/account/sync error:", err);
+    return res.status(500).json({ error: "Failed to save account sync state." });
   }
 });
 

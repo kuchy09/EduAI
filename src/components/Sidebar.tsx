@@ -12,13 +12,14 @@ interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   user?: any;
+  profile?: any;
   isGuest?: boolean;
   onSignOut?: () => void;
 }
 
-export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: propUser, isGuest, onSignOut }: SidebarProps) {
+export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: propUser, profile, isGuest, onSignOut }: SidebarProps) {
   const [user, setUser] = useState<any>(propUser || null);
-  const avatarUrl = useUserAvatar(user);
+  const avatarUrl = useUserAvatar(user, profile);
   const [avatarFailed, setAvatarFailed] = useState(false);
 
   useEffect(() => {

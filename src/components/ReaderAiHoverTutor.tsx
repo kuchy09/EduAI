@@ -27,6 +27,12 @@ import {
 import { AstroidIcon } from './icons/AstroidIcon';
 import { Book } from '../types';
 import { triggerCapsuleFeedback } from '../lib/feedback';
+import { safeStorage } from '../lib/safeStorage';
+import {
+  getReaderChatStorageKey,
+  pushAccountSyncPatch,
+  ACCOUNT_SYNC_EVENT,
+} from '../lib/accountSyncService';
 
 interface Message {
   id: string;
@@ -59,17 +65,7 @@ export function ReaderAiHoverTutor({
   onOpenFullAi,
   user,
 }: ReaderAiHoverTutorProps) {
-  const [messages, setMessages] = useState<Message[]>(() => {
-    const saved = localStorage.getItem(`sage_reader_chat_${book.id}`);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) {
-        console.error('Failed to parse saved reader tutor messages', e);
-      }
-    }
-
+  const buildWelcomeMessages = (): Message[] => {
     const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'Learner';
     return [
       {
@@ -78,6 +74,19 @@ export function ReaderAiHoverTutor({
         content: `Hello ${firstName}! I'm **Sage AI**, your dedicated reading tutor for *${book.title}*.\n\nAsk me any question about page **${pageNumber}**, formulas, or complex concepts and I'll explain them right here so you never have to leave your reading!`
       }
     ];
+  };
+
+  const skipCloudPushRef = useRef(true);
+
+  const [messages, setMessages] = useState<Message[]>(() => {
+    const scopedKey = getReaderChatStorageKey(book.id, user?.id);
+    const scopedSaved = safeStorage.getJSON<Message[]>(scopedKey, []);
+    if (Array.isArray(scopedSaved) && scopedSaved.length > 0) return scopedSaved;
+
+    const legacySaved = safeStorage.getJSON<Message[]>(`sage_reader_chat_${book.id}`, []);
+    if (Array.isArray(legacySaved) && legacySaved.length > 0) return legacySaved;
+
+    return buildWelcomeMessages();
   });
 
   const [input, setInput] = useState('');
@@ -93,10 +102,44 @@ export function ReaderAiHoverTutor({
   const recognitionRef = useRef<any>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
-  // Sync messages to localStorage per book
+  // Hydrate when book, user, or cross-device sync changes
   useEffect(() => {
-    localStorage.setItem(`sage_reader_chat_${book.id}`, JSON.stringify(messages));
-  }, [messages, book.id]);
+    const scopedKey = getReaderChatStorageKey(book.id, user?.id);
+    const scopedSaved = safeStorage.getJSON<Message[]>(scopedKey, []);
+    if (Array.isArray(scopedSaved) && scopedSaved.length > 0) {
+      skipCloudPushRef.current = true;
+      setMessages(scopedSaved);
+    }
+
+    const handleSyncUpdated = (e: any) => {
+      const cloudMsgs = e?.detail?.sync?.readerChats?.[book.id];
+      if (Array.isArray(cloudMsgs) && cloudMsgs.length > 0) {
+        skipCloudPushRef.current = true;
+        setMessages((prev) => (cloudMsgs.length >= prev.length ? cloudMsgs : prev));
+      }
+    };
+
+    window.addEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+  }, [book.id, user?.id]);
+
+  // Sync messages to user-scoped storage and cloud per book
+  useEffect(() => {
+    const scopedKey = getReaderChatStorageKey(book.id, user?.id);
+    safeStorage.setJSON(scopedKey, messages);
+
+    if (skipCloudPushRef.current) {
+      skipCloudPushRef.current = false;
+      return;
+    }
+
+    const hasUserActivity = messages.some((m) => m.role === 'user');
+    if (user?.id && hasUserActivity) {
+      pushAccountSyncPatch(user.id, {
+        readerChats: { [book.id]: messages },
+      });
+    }
+  }, [messages, book.id, user?.id]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -200,8 +243,18 @@ export function ReaderAiHoverTutor({
         content: `I've refreshed our conversation! What would you like to explore on page **${pageNumber}** of *${book.title}*?`
       }
     ];
+    skipCloudPushRef.current = true;
     setMessages(freshMessages);
-    localStorage.removeItem(`sage_reader_chat_${book.id}`);
+    safeStorage.removeItem(`sage_reader_chat_${book.id}`);
+    safeStorage.removeItem(getReaderChatStorageKey(book.id, user?.id));
+    if (user?.id) {
+      pushAccountSyncPatch(
+        user.id,
+        { readerChats: { [book.id]: freshMessages } },
+        undefined,
+        { immediate: true }
+      );
+    }
   };
 
   const isInputUnanswered = (msgIndex: number): boolean => {

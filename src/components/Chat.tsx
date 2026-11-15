@@ -23,8 +23,18 @@ import {
   canUserViewNote, 
   canUserEditNote 
 } from './chat/sharedNotesService';
-import { getStoredUserAvatar } from '../lib/userAvatarService';
+import { getStoredUserAvatar, useUserAvatar } from '../lib/userAvatarService';
 import { supabase } from '../lib/supabase';
+import { safeStorage } from '../lib/safeStorage';
+import {
+  getPeerConversationsStorageKey,
+  getPeerMessagesStorageKey,
+  getPeerCurrentUserStorageKey,
+  mergePeerConversations,
+  mergePeerMessagesMap,
+  pushAccountSyncPatch,
+  ACCOUNT_SYNC_EVENT,
+} from '../lib/accountSyncService';
 import { 
   fetchSearchableUsersFromSupabase, 
   sendSupabaseFriendRequest, 
@@ -40,32 +50,91 @@ interface ChatProps {
 }
 
 export function Chat({ user, profile, onNavigate }: ChatProps) {
-  // 1. Current User State
-  const [currentUser, setCurrentUser] = useState<ChatUser>(() => {
-    try {
-      const saved = localStorage.getItem('eduai_chat_current_user');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch (e) {}
+  const liveAvatarUrl = useUserAvatar(user, profile);
+  const hasPeerMutationRef = useRef(false);
+
+  const buildChatUserFromAuth = (): ChatUser => {
     const detectedRole: UserRole = (profile?.role || user?.user_metadata?.role || 'student') as UserRole;
-    const customAvatar = getStoredUserAvatar(user);
+    const saved = safeStorage.getJSON<Partial<ChatUser> | null>(getPeerCurrentUserStorageKey(user?.id), null);
+    const parsedSubjects =
+      typeof profile?.subjects === 'string'
+        ? profile.subjects.split(',').map((s: string) => s.trim()).filter(Boolean)
+        : Array.isArray(profile?.subjects)
+          ? profile.subjects
+          : typeof user?.user_metadata?.subjects === 'string'
+            ? user.user_metadata.subjects.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : Array.isArray(user?.user_metadata?.subjects)
+              ? user.user_metadata.subjects
+              : saved?.subjects || [];
+
+    const resolvedAvatar =
+      liveAvatarUrl ||
+      getStoredUserAvatar(user, profile) ||
+      profile?.avatar_url ||
+      user?.user_metadata?.avatar_url ||
+      '';
+
     return {
       ...INITIAL_CURRENT_USER,
-      id: user?.id || INITIAL_CURRENT_USER.id,
-      name: profile?.full_name || user?.user_metadata?.full_name || INITIAL_CURRENT_USER.name,
-      email: user?.email || INITIAL_CURRENT_USER.email,
-      avatar: customAvatar || profile?.avatar_url || user?.user_metadata?.avatar_url || '',
+      ...(saved && saved.id === user?.id ? saved : {}),
+      id: user?.id || saved?.id || INITIAL_CURRENT_USER.id,
+      name:
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        user?.email?.split('@')[0] ||
+        (saved?.id === user?.id ? saved?.name : undefined) ||
+        INITIAL_CURRENT_USER.name,
+      email: user?.email || saved?.email || INITIAL_CURRENT_USER.email,
+      avatar: resolvedAvatar,
       role: detectedRole === 'teacher' ? 'teacher' : 'student',
-      title: detectedRole === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)'
+      title:
+        profile?.title ||
+        (detectedRole === 'teacher'
+          ? 'Educator & Faculty Member'
+          : profile?.education_level || user?.user_metadata?.education_level || 'Learner'),
+      institution: profile?.institution || user?.user_metadata?.institution || saved?.institution || '',
+      bio: profile?.bio || user?.user_metadata?.bio || saved?.bio || '',
+      location: profile?.location || profile?.country || user?.user_metadata?.country || saved?.location || '',
+      subjects: parsedSubjects,
     };
-  });
+  };
+
+  // 1. Current User State
+  const [currentUser, setCurrentUser] = useState<ChatUser>(buildChatUserFromAuth);
+
+  // Keep currentUser synchronized whenever user, profile, or cloud avatar updates
+  useEffect(() => {
+    setCurrentUser((prev) => {
+      const next = buildChatUserFromAuth();
+      return {
+        ...prev,
+        ...next,
+        avatar: next.avatar || prev.avatar,
+      };
+    });
+  }, [
+    user?.id,
+    user?.email,
+    user?.user_metadata?.full_name,
+    user?.user_metadata?.role,
+    user?.user_metadata?.country,
+    user?.user_metadata?.subjects,
+    profile?.full_name,
+    profile?.avatar_url,
+    profile?.role,
+    profile?.bio,
+    profile?.institution,
+    profile?.location,
+    profile?.country,
+    profile?.subjects,
+    liveAvatarUrl,
+  ]);
 
   // 2. All Users (Teachers & Students)
   const [allUsers, setAllUsers] = useState<ChatUser[]>(() => {
     let list = INITIAL_USERS;
     try {
-      const saved = localStorage.getItem('eduai_chat_users');
+      const saved = safeStorage.getItem('eduai_chat_users');
       if (saved) {
         const parsed: ChatUser[] = JSON.parse(saved);
         const parsedNames = new Set(parsed.map(u => u.name.toLowerCase()));
@@ -76,12 +145,12 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
     return list;
   });
 
-  // Initial load from Supabase directory
+  // Listen to avatar changes
   useEffect(() => {
     const handleAvatarChange = (e: any) => {
       const newAvatar = e?.detail?.avatarUrl;
-      if (newAvatar) {
-        setCurrentUser(prev => ({ ...prev, avatar: newAvatar }));
+      if (newAvatar !== undefined) {
+        setCurrentUser(prev => ({ ...prev, avatar: newAvatar || '' }));
       }
     };
     window.addEventListener('user_avatar_changed', handleAvatarChange);
@@ -90,16 +159,16 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
 
   useEffect(() => {
     const loadDirectory = async () => {
-      if (user?.id) {
+      if (user?.id && (profile || user?.user_metadata)) {
         await syncCurrentUserToSupabase(user, {
           name: currentUser.name,
           role: currentUser.role,
           title: currentUser.title,
-          institution: currentUser.institution,
-          subjects: currentUser.subjects,
-          bio: currentUser.bio,
-          avatar: currentUser.avatar,
-          location: currentUser.location
+          institution: profile?.institution || user?.user_metadata?.institution || currentUser.institution || undefined,
+          subjects: currentUser.subjects?.length ? currentUser.subjects : undefined,
+          bio: profile?.bio || user?.user_metadata?.bio || currentUser.bio || undefined,
+          avatar: liveAvatarUrl || profile?.avatar_url || user?.user_metadata?.avatar_url || currentUser.avatar || undefined,
+          location: profile?.location || profile?.country || user?.user_metadata?.country || currentUser.location || undefined,
         });
       }
       const res = await fetchSearchableUsersFromSupabase(currentUser.id);
@@ -108,36 +177,51 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
       }
     };
     loadDirectory();
-  }, [user?.id, currentUser.role]);
+  }, [user?.id, currentUser.role, liveAvatarUrl, profile?.avatar_url, profile?.full_name]);
 
-  // 3. Conversations List
+  // 3. Conversations List (scoped per user account)
   const [conversations, setConversations] = useState<Conversation[]>(() => {
-    try {
-      const saved = localStorage.getItem('eduai_chat_conversations');
-      if (saved) {
-        const parsed: Conversation[] = JSON.parse(saved);
-        const parsedIds = new Set(parsed.map(c => c.id));
-        const missing = INITIAL_CONVERSATIONS.filter(c => !parsedIds.has(c.id));
-        if (missing.length > 0) {
-          return [...INITIAL_CONVERSATIONS, ...parsed.filter(p => !INITIAL_CONVERSATIONS.some(ic => ic.id === p.id))];
-        }
-        return parsed;
-      }
-    } catch (e) {}
+    const saved = safeStorage.getJSON<Conversation[] | null>(getPeerConversationsStorageKey(user?.id), null);
+    if (Array.isArray(saved) && saved.length > 0) {
+      return mergePeerConversations(saved, INITIAL_CONVERSATIONS);
+    }
     return INITIAL_CONVERSATIONS;
   });
 
-  // 4. Messages grouped by conversation ID
+  // 4. Messages grouped by conversation ID (scoped per user account)
   const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>(() => {
-    try {
-      const saved = localStorage.getItem('eduai_chat_messages');
-      if (saved) {
-        const parsed: Record<string, ChatMessage[]> = JSON.parse(saved);
-        return { ...INITIAL_MESSAGES, ...parsed };
-      }
-    } catch (e) {}
+    const saved = safeStorage.getJSON<Record<string, ChatMessage[]> | null>(getPeerMessagesStorageKey(user?.id), null);
+    if (saved && typeof saved === 'object') {
+      return mergePeerMessagesMap(INITIAL_MESSAGES, saved);
+    }
     return INITIAL_MESSAGES;
   });
+
+  // Hydrate & merge when user changes or cross-device sync updates arrive
+  useEffect(() => {
+    const savedConvs = safeStorage.getJSON<Conversation[] | null>(getPeerConversationsStorageKey(user?.id), null);
+    if (Array.isArray(savedConvs) && savedConvs.length > 0) {
+      setConversations((prev) => mergePeerConversations(prev, savedConvs));
+    }
+    const savedMsgs = safeStorage.getJSON<Record<string, ChatMessage[]> | null>(getPeerMessagesStorageKey(user?.id), null);
+    if (savedMsgs && typeof savedMsgs === 'object') {
+      setMessagesMap((prev) => mergePeerMessagesMap(prev, savedMsgs));
+    }
+
+    const handleSyncUpdated = (e: any) => {
+      const syncData = e?.detail?.sync;
+      if (!syncData) return;
+      if (Array.isArray(syncData.peerConversations) && syncData.peerConversations.length > 0) {
+        setConversations((prev) => mergePeerConversations(prev, syncData.peerConversations));
+      }
+      if (syncData.peerMessages && typeof syncData.peerMessages === 'object') {
+        setMessagesMap((prev) => mergePeerMessagesMap(prev, syncData.peerMessages));
+      }
+    };
+
+    window.addEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+  }, [user?.id]);
 
   // Active conversation (defaults to the first colleague so their profile displays immediately on open)
   const [activeConversationId, setActiveConversationId] = useState<string>(() => {
@@ -176,22 +260,28 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
     status: 'connected'
   });
 
-  // Sync to localStorage
+  // Sync to user-scoped localStorage and push mutations to cross-device sync
   useEffect(() => {
-    localStorage.setItem('eduai_chat_current_user', JSON.stringify(currentUser));
-  }, [currentUser]);
+    safeStorage.setJSON(getPeerCurrentUserStorageKey(user?.id), currentUser);
+  }, [currentUser, user?.id]);
 
   useEffect(() => {
-    localStorage.setItem('eduai_chat_users', JSON.stringify(allUsers));
+    safeStorage.setJSON('eduai_chat_users', allUsers);
   }, [allUsers]);
 
   useEffect(() => {
-    localStorage.setItem('eduai_chat_conversations', JSON.stringify(conversations));
-  }, [conversations]);
+    safeStorage.setJSON(getPeerConversationsStorageKey(user?.id), conversations);
+    if (user?.id && hasPeerMutationRef.current) {
+      pushAccountSyncPatch(user.id, { peerConversations: conversations });
+    }
+  }, [conversations, user?.id]);
 
   useEffect(() => {
-    localStorage.setItem('eduai_chat_messages', JSON.stringify(messagesMap));
-  }, [messagesMap]);
+    safeStorage.setJSON(getPeerMessagesStorageKey(user?.id), messagesMap);
+    if (user?.id && hasPeerMutationRef.current) {
+      pushAccountSyncPatch(user.id, { peerMessages: messagesMap });
+    }
+  }, [messagesMap, user?.id]);
 
   // Realtime Supabase Broadcast setup
   useEffect(() => {
@@ -285,6 +375,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
 
   // Reset unread count when switching conversation
   const handleSelectConversation = (convId: string) => {
+    hasPeerMutationRef.current = true;
     setActiveConversationId(convId);
     setMobileView('chat');
     setConversations(prev => prev.map(c => c.id === convId ? { ...c, unreadCount: 0 } : c));
@@ -304,6 +395,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   // Send message
   const handleSendMessage = (content: string, attachment?: ChatAttachment) => {
     if (!activeConversation) return;
+    hasPeerMutationRef.current = true;
 
     const newMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -572,6 +664,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
   // React to message
   const handleReactToMessage = (messageId: string, emoji: string) => {
     if (!activeConversation) return;
+    hasPeerMutationRef.current = true;
     setMessagesMap(prev => {
       const list = prev[activeConversation.id] || [];
       const updated = list.map(m => {
@@ -636,6 +729,7 @@ export function Chat({ user, profile, onNavigate }: ChatProps) {
         updatedAt: new Date().toISOString()
       };
 
+      hasPeerMutationRef.current = true;
       setConversations(prev => [newConv, ...prev]);
       setActiveConversationId(newConv.id);
       setMobileView('chat');

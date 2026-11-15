@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   supabase,
-  clearStaleSupabaseTokens,
   ensureSupabaseRuntimeConfig,
   getSupabaseClient,
   authorizeInteractiveSession,
@@ -10,6 +9,7 @@ import {
   revokeInteractiveSession,
   consumeOAuthRedirectPending,
   hasValidOAuthRedirectPending,
+  getPersistedDeviceSession,
 } from './lib/supabase';
 import { Auth } from './components/Auth';
 import { Sidebar } from './components/Sidebar';
@@ -54,7 +54,17 @@ import {
   setupHomeRealtimeSubscriptions 
 } from './lib/userHomeDataService';
 import { AcademicPreferencesModal } from './components/AcademicPreferencesModal';
-import { extractUserAcademicProfile } from './lib/bookPersonalization';
+import { extractUserAcademicProfile, saveStoredAcademicPrefs } from './lib/bookPersonalization';
+import {
+  hydrateAccountSync,
+  pushAccountSyncPatch,
+  saveBookmarkToCloud,
+  clearAccountLocalCaches,
+  getUnlockedBooksStorageKey,
+  getBookmarksStorageKey,
+  mergeBooksLists,
+  mergeBookmarksLists,
+} from './lib/accountSyncService';
 
 export interface SystemHealth {
   status: 'checking' | 'healthy' | 'degraded' | 'offline';
@@ -73,7 +83,7 @@ const VALID_VIEWS: Set<ViewState> = new Set([
 ]);
 
 export default function App() {
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<any>(() => getPersistedDeviceSession());
   const [profile, setProfile] = useState<any>(null);
   const [profileChecked, setProfileChecked] = useState(false);
   const [isAcademicModalOpen, setIsAcademicModalOpen] = useState(false);
@@ -528,11 +538,13 @@ export default function App() {
 
       let localUploadedBooks: Book[] = [];
       try {
-        const rawLocal = safeStorage.getItem('custom_uploaded_books');
-        if (rawLocal) {
-          const parsed = JSON.parse(rawLocal);
-          if (Array.isArray(parsed)) localUploadedBooks = parsed;
-        }
+        const uid = getPersistedDeviceSession()?.user?.id;
+        const scopedRaw = uid ? safeStorage.getJSON<Book[]>(getUnlockedBooksStorageKey(uid), []) : [];
+        const rawLocal = safeStorage.getJSON<Book[]>('custom_uploaded_books', []);
+        localUploadedBooks = mergeBooksLists(
+          Array.isArray(scopedRaw) ? scopedRaw : [],
+          Array.isArray(rawLocal) ? rawLocal : []
+        );
       } catch (_) {}
 
       const candidates = [
@@ -580,6 +592,24 @@ export default function App() {
     let unsubscribe = () => {};
     let isMounted = true;
 
+    const isExplicitAuthRejection = (err: any): boolean => {
+      if (!err) return false;
+      const status = err.status || err.code;
+      const msg = String(err.message || err.error_description || '').toLowerCase();
+      return (
+        status === 401 ||
+        status === 403 ||
+        msg.includes('invalid refresh token') ||
+        msg.includes('refresh token not found') ||
+        msg.includes('refresh_token_not_found') ||
+        msg.includes('refresh_token_already_used') ||
+        msg.includes('user from sub claim') ||
+        msg.includes('invalid jwt') ||
+        msg.includes('session_not_found') ||
+        msg.includes('user not found')
+      );
+    };
+
     const initAuth = async () => {
       // Timeout fallback to ensure the app never gets stuck on the loading spinner
       const timeoutId = setTimeout(() => {
@@ -613,17 +643,6 @@ export default function App() {
         const isLegitimateOAuthRedirect =
           Boolean(urlCode || urlAccessToken) && consumeOAuthRedirectPending();
 
-        // Zero Auto-Login Protocol:
-        // Never restore sessions automatically from browser storage when opening or reloading the platform URL.
-        if (!isLegitimateOAuthRedirect) {
-          revokeInteractiveSession();
-          if (isMounted) {
-            setSession(null);
-            setProfile(null);
-            setLoading(false);
-          }
-        }
-
         const runtimeCfg = await ensureSupabaseRuntimeConfig();
         const client = runtimeCfg.client || getSupabaseClient();
 
@@ -646,7 +665,6 @@ export default function App() {
             }
 
             if (exchangedSession?.user?.id && exchangedSession?.access_token) {
-              // Verify token live against Supabase Auth server before authorizing
               const { data: verifiedUser, error: verifyErr } = await client.auth.getUser(
                 exchangedSession.access_token
               );
@@ -669,12 +687,97 @@ export default function App() {
               revokeInteractiveSession();
               if (isMounted) setSession(null);
             }
+          } else {
+            // Restore any verified credential session saved on this specific device (no auto-logout on reload/reopen)
+            let restoredSession: any = null;
+            try {
+              const { data: sessData } = await client.auth.getSession();
+              restoredSession = sessData?.session || null;
+            } catch (_) {}
+
+            if (!restoredSession) {
+              const savedDeviceSession = getPersistedDeviceSession();
+              if (savedDeviceSession?.access_token && savedDeviceSession?.refresh_token) {
+                try {
+                  const { data: setSessData } = await client.auth.setSession({
+                    access_token: savedDeviceSession.access_token,
+                    refresh_token: savedDeviceSession.refresh_token,
+                  });
+                  restoredSession = setSessData?.session || savedDeviceSession;
+                } catch (_) {
+                  restoredSession = savedDeviceSession;
+                }
+              } else if (savedDeviceSession?.user?.id && savedDeviceSession?.access_token) {
+                restoredSession = savedDeviceSession;
+              }
+            }
+
+            if (
+              restoredSession?.user?.id &&
+              restoredSession?.access_token &&
+              restoredSession.access_token !== 'demo_token' &&
+              restoredSession.access_token !== 'local_token'
+            ) {
+              authorizeInteractiveSession(restoredSession.user.id, restoredSession);
+              if (isMounted) setSession(restoredSession);
+
+              try {
+                const { data: verifiedUser, error: verifyErr } = await client.auth.getUser(
+                  restoredSession.access_token
+                );
+                if (!verifyErr && verifiedUser?.user?.id) {
+                  const updatedSession = { ...restoredSession, user: verifiedUser.user };
+                  authorizeInteractiveSession(verifiedUser.user.id, updatedSession);
+                  if (isMounted) setSession(updatedSession);
+                  try {
+                    const { data: profileData, error: profileErr } = await client
+                      .from('profiles')
+                      .select('*')
+                      .eq('id', verifiedUser.user.id)
+                      .single();
+                    if (isMounted && profileData && !profileErr) setProfile(profileData);
+                  } catch (_) {}
+                } else if (verifyErr) {
+                  // Try refreshing silently before assuming the session was revoked
+                  const { data: refreshed, error: refreshErr } = await client.auth.refreshSession();
+                  if (!refreshErr && refreshed?.session?.user?.id) {
+                    authorizeInteractiveSession(refreshed.session.user.id, refreshed.session);
+                    if (isMounted) setSession(refreshed.session);
+                    try {
+                      const { data: profileData, error: profileErr } = await client
+                        .from('profiles')
+                        .select('*')
+                        .eq('id', refreshed.session.user.id)
+                        .single();
+                      if (isMounted && profileData && !profileErr) setProfile(profileData);
+                    } catch (_) {}
+                  } else if (
+                    isExplicitAuthRejection(refreshErr) ||
+                    (refreshErr && isExplicitAuthRejection(verifyErr))
+                  ) {
+                    revokeInteractiveSession();
+                    if (isMounted) {
+                      setSession(null);
+                      setProfile(null);
+                    }
+                  }
+                }
+              } catch (_) {
+                // Keep valid device session during transient offline/network issues
+              }
+            } else {
+              // Unauthenticated visitor on this device: stay strictly on Auth screen
+              if (isMounted) {
+                setSession(null);
+                setProfile(null);
+              }
+            }
           }
 
           try {
             const { data: subData } = client.auth.onAuthStateChange(async (event, nextSession) => {
               if (!isMounted) return;
-              if (event === 'SIGNED_OUT' || !nextSession) {
+              if (event === 'SIGNED_OUT') {
                 revokeInteractiveSession();
                 setSession(null);
                 setBookmarks([]);
@@ -682,10 +785,18 @@ export default function App() {
                 setProfile(null);
                 return;
               }
-              // Block any automatic INITIAL_SESSION or unsealed background session from auto-logging in
-              if (!isInteractiveSessionAuthorized(nextSession?.user?.id)) {
+              if (!nextSession) {
                 return;
               }
+              if (
+                !nextSession.user?.id ||
+                !nextSession.access_token ||
+                nextSession.access_token === 'demo_token' ||
+                nextSession.access_token === 'local_token'
+              ) {
+                return;
+              }
+              authorizeInteractiveSession(nextSession.user.id, nextSession);
               setSession(nextSession);
               if (nextSession.user) {
                 try {
@@ -726,11 +837,58 @@ export default function App() {
             revokeInteractiveSession();
             if (isMounted) setSession(null);
           }
+        } else {
+          // Server-proxied fallback mode: restore persisted verified device session if present
+          const savedDeviceSession = getPersistedDeviceSession();
+          if (
+            savedDeviceSession?.user?.id &&
+            savedDeviceSession?.access_token &&
+            savedDeviceSession.access_token !== 'demo_token' &&
+            savedDeviceSession.access_token !== 'local_token'
+          ) {
+            authorizeInteractiveSession(savedDeviceSession.user.id, savedDeviceSession);
+            if (isMounted) setSession(savedDeviceSession);
+
+            try {
+              const checkRes = await fetch('/api/auth/user', {
+                headers: {
+                  Authorization: `Bearer ${savedDeviceSession.access_token}`,
+                  ...(savedDeviceSession.refresh_token
+                    ? { 'x-refresh-token': savedDeviceSession.refresh_token }
+                    : {}),
+                },
+              });
+              if (checkRes.ok) {
+                const checkJson = await checkRes.json().catch(() => ({}));
+                const updatedSession =
+                  checkJson?.refreshedSession || {
+                    ...savedDeviceSession,
+                    user: checkJson?.user || savedDeviceSession.user,
+                  };
+                if (updatedSession?.user?.id) {
+                  authorizeInteractiveSession(updatedSession.user.id, updatedSession);
+                  if (isMounted) {
+                    setSession(updatedSession);
+                    if (checkJson?.profile) setProfile(checkJson.profile);
+                  }
+                }
+              } else if (checkRes.status === 401 || checkRes.status === 403) {
+                revokeInteractiveSession();
+                if (isMounted) {
+                  setSession(null);
+                  setProfile(null);
+                }
+              }
+            } catch (_) {
+              // Keep valid device session during transient network errors
+            }
+          } else if (isMounted) {
+            setSession(null);
+            setProfile(null);
+          }
         }
       } catch (err: any) {
         console.warn('Auth initialization check handled:', err);
-        revokeInteractiveSession();
-        if (isMounted) setSession(null);
       } finally {
         clearTimeout(timeoutId);
         if (isMounted) {
@@ -767,30 +925,61 @@ export default function App() {
     }
   }, [session, profile, profileChecked, loading]);
 
-  // Real-time synchronization for user reading progress & goals
+  // Real-time synchronization for user reading progress, goals, chats, profile & books
   useEffect(() => {
     const userId = session?.user?.id;
     if (!userId) return;
 
     let isMounted = true;
 
+    // Seed academic preferences if profile or user metadata already has them
+    const p = profile || session?.user?.user_metadata;
+    if (p && (p.country || p.education_level || p.curriculum || p.field_of_study || p.subjects)) {
+      saveStoredAcademicPrefs(userId, {
+        country: p.country || p.location || '',
+        education_level: p.education_level || '',
+        curriculum: p.curriculum || '',
+        field_of_study: p.field_of_study || '',
+        subjects: p.subjects || '',
+      });
+    }
+
     // 1. Initial Cloud Sync on login / load
     const syncUserData = async () => {
       try {
-        const [progressMap] = await Promise.all([
+        const [progressMap, hydrated] = await Promise.all([
           syncUserReadingProgressFromSupabase(userId),
-          syncUserDailyGoalFromSupabase(userId)
+          hydrateAccountSync(session.user, session.access_token),
+          syncUserDailyGoalFromSupabase(userId),
         ]);
 
-        if (isMounted && Object.keys(progressMap).length > 0) {
-          setBooks(prev =>
-            prev.map(book => {
-              if (progressMap[book.id] !== undefined) {
-                return { ...book, readProgress: progressMap[book.id] };
-              }
-              return book;
-            })
-          );
+        if (!isMounted) return;
+
+        if (hydrated?.profile) {
+          setProfile((prev: any) => ({ ...(prev || {}), ...hydrated.profile }));
+        }
+
+        const localSavedBookmarks = safeStorage.getJSON<Bookmark[]>(getBookmarksStorageKey(userId), []);
+        const combinedBookmarks = mergeBookmarksLists(localSavedBookmarks, hydrated?.bookmarks || []);
+        if (combinedBookmarks.length > 0) {
+          setBookmarks(prev => mergeBookmarksLists(prev, combinedBookmarks));
+        }
+
+        if (
+          Object.keys(progressMap).length > 0 ||
+          (hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0)
+        ) {
+          setBooks(prev => {
+            const withUnlocked =
+              hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0
+                ? getPersistedBooks(mergeBooksLists(hydrated.unlockedBooks, prev))
+                : prev;
+            return withUnlocked.map(book =>
+              progressMap[book.id] !== undefined
+                ? { ...book, readProgress: progressMap[book.id] }
+                : book
+            );
+          });
         }
       } catch (err) {
         console.warn('[App] Realtime initial sync notice:', err);
@@ -812,7 +1001,16 @@ export default function App() {
         );
       },
       onProfileChange: (newProfile) => {
-        setProfile(newProfile);
+        setProfile((prev: any) => ({ ...(prev || {}), ...newProfile }));
+        if (newProfile) {
+          saveStoredAcademicPrefs(userId, {
+            country: newProfile.country || newProfile.location || '',
+            education_level: newProfile.education_level || '',
+            curriculum: newProfile.curriculum || '',
+            field_of_study: newProfile.field_of_study || '',
+            subjects: newProfile.subjects || '',
+          });
+        }
       },
       onBooksChange: async () => {
         await loadUnifiedCatalog();
@@ -823,18 +1021,46 @@ export default function App() {
       isMounted = false;
       cleanupSubscriptions();
     };
-  }, [session?.user?.id, loadUnifiedCatalog]);
+  }, [session?.user?.id, session?.access_token, loadUnifiedCatalog]);
 
-  const handleAddBookmark = (bookmark: Bookmark) => {
-    setBookmarks(prev => [bookmark, ...prev]);
-  };
+  const handleAddBookmark = useCallback((bookmark: Bookmark) => {
+    setBookmarks(prev => {
+      const updated = mergeBookmarksLists([bookmark], prev);
+      void saveBookmarkToCloud(session?.user?.id, bookmark, updated, session?.access_token);
+      return updated;
+    });
+  }, [session?.user?.id, session?.access_token]);
+
+  const handleAddBookToLibrary = useCallback((newBook: Book) => {
+    const userId = session?.user?.id;
+    const unlockedKey = getUnlockedBooksStorageKey(userId);
+    setBooks(prev => {
+      if (prev.some(b => b.id === newBook.id)) return prev;
+      const updated = [newBook, ...prev];
+      const existingUnlocked = safeStorage.getJSON<Book[]>(unlockedKey, []);
+      const nextUnlocked = mergeBooksLists([newBook], existingUnlocked);
+      safeStorage.setJSON(unlockedKey, nextUnlocked);
+      safeStorage.setJSON('custom_uploaded_books', nextUnlocked);
+      if (userId) {
+        pushAccountSyncPatch(
+          userId,
+          { unlockedBooks: nextUnlocked },
+          session?.access_token,
+          { immediate: true }
+        );
+      }
+      return updated;
+    });
+  }, [session?.user?.id, session?.access_token]);
 
   const handleSignOut = useCallback(async (reasonNotice?: string) => {
     const tokenToRevoke = session?.access_token;
+    const signingOutUserId = session?.user?.id;
     const activeSb = getSupabaseClient() || supabase;
 
     // Immediately revoke client interactive seal & React state so UI locks with 0ms delay
     revokeInteractiveSession();
+    clearAccountLocalCaches(signingOutUserId);
     setSession(null);
     setProfile(null);
     setBookmarks([]);
@@ -869,29 +1095,6 @@ export default function App() {
       } catch (_) {}
     }
   }, [session?.access_token]);
-
-  // 30-Minute Inactivity Auto-Lock for authenticated sessions
-  useEffect(() => {
-    if (!session?.user?.id || !session?.access_token) return;
-    const INACTIVITY_LIMIT_MS = 30 * 60 * 1000;
-    let idleTimer: ReturnType<typeof setTimeout>;
-
-    const resetIdleTimer = () => {
-      clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        handleSignOut('For your security, you were signed out after 30 minutes of inactivity.');
-      }, INACTIVITY_LIMIT_MS);
-    };
-
-    resetIdleTimer();
-    const activityEvents = ['mousedown', 'keydown', 'touchstart', 'scroll'];
-    activityEvents.forEach((evt) => window.addEventListener(evt, resetIdleTimer, { passive: true }));
-
-    return () => {
-      clearTimeout(idleTimer);
-      activityEvents.forEach((evt) => window.removeEventListener(evt, resetIdleTimer));
-    };
-  }, [session?.user?.id, session?.access_token, handleSignOut]);
 
   if (loading) {
     return (
@@ -1074,6 +1277,7 @@ export default function App() {
               isOpen={isSidebarOpen}
               onClose={() => setIsSidebarOpen(false)}
               user={session?.user}
+              profile={profile}
               isGuest={isGuest}
               onSignOut={handleSignOut}
             />
@@ -1084,14 +1288,7 @@ export default function App() {
                 onMenuClick={() => setIsSidebarOpen(true)} 
                 onBookSelect={(book) => { setActiveBook(book); }}
                 onNavigate={(view) => changeView(view)}
-                onAddBookToLibrary={(newBook) => {
-                  setBooks(prev => {
-                    if (prev.some(b => b.id === newBook.id)) return prev;
-                    const updated = [newBook, ...prev];
-                    safeStorage.setItem('custom_uploaded_books', JSON.stringify(updated.filter(b => b.id.startsWith('custom-') || b.id.startsWith('store-'))));
-                    return updated;
-                  });
-                }}
+                onAddBookToLibrary={handleAddBookToLibrary}
                 user={session?.user}
                 profile={profile}
                 books={books}
@@ -1125,12 +1322,7 @@ export default function App() {
                         profile={profile} 
                         onNavigate={(view) => changeView(view)}
                         onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
-                        onAddBookToLibrary={(newBook) => {
-                          setBooks(prev => {
-                            if (prev.some(b => b.id === newBook.id)) return prev;
-                            return [newBook, ...prev];
-                          });
-                        }}
+                        onAddBookToLibrary={handleAddBookToLibrary}
                       />
                     )}
                     {currentView === 'progress' && <Progress books={books} user={session?.user} />}
@@ -1150,12 +1342,7 @@ export default function App() {
                         profile={profile} 
                         onNavigate={(view) => changeView(view)}
                         onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
-                        onAddBookToLibrary={(newBook) => {
-                          setBooks(prev => {
-                            if (prev.some(b => b.id === newBook.id)) return prev;
-                            return [newBook, ...prev];
-                          });
-                        }}
+                        onAddBookToLibrary={handleAddBookToLibrary}
                       />
                     )}
                     {currentView === 'learning-path' && <LearningPath user={session?.user} profile={profile} />}
@@ -1202,12 +1389,7 @@ export default function App() {
                       <BookStore 
                         books={books} 
                         onBookSelect={(book) => { setActiveBook(book); }}
-                        onAddBookToLibrary={(newBook) => {
-                          setBooks(prev => {
-                            if (prev.some(b => b.id === newBook.id)) return prev;
-                            return [newBook, ...prev];
-                          });
-                        }} 
+                        onAddBookToLibrary={handleAddBookToLibrary} 
                         user={session?.user} 
                         profile={profile} 
                         onNavigate={(view) => changeView(view)}

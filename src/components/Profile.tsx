@@ -1,8 +1,9 @@
 import { Mail, MapPin, Building, Calendar, BookOpen, GraduationCap, BarChart2, LogOut, Award, Star, Clock, Camera, Loader2 } from 'lucide-react';
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
-import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl } from '../lib/userAvatarService';
+import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl, uploadAndSyncUserAvatar } from '../lib/userAvatarService';
 import { extractUserAcademicProfile, ACADEMIC_PREFS_EVENT } from '../lib/bookPersonalization';
+import { ACCOUNT_SYNC_EVENT } from '../lib/accountSyncService';
 
 export interface ProfileProps {
   user?: any;
@@ -17,14 +18,24 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
   const [profile, setProfile] = useState<any>(propProfile || null);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const avatarUrl = useUserAvatar(user);
+  const avatarUrl = useUserAvatar(user, profile);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [prefsTick, setPrefsTick] = useState(0);
 
   useEffect(() => {
     const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
+    const onAccountSync = (e: any) => {
+      if (e?.detail?.profile) {
+        setProfile((prev: any) => ({ ...(prev || {}), ...e.detail.profile }));
+      }
+      setPrefsTick((t) => t + 1);
+    };
     window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
-    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    window.addEventListener(ACCOUNT_SYNC_EVENT, onAccountSync);
+    return () => {
+      window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, onAccountSync);
+    };
   }, []);
 
   const academicProfile = React.useMemo(
@@ -67,10 +78,9 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
             const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
             if (!isMounted) return;
             if (data) {
-              setProfile(data);
+              setProfile((prev: any) => ({ ...(prev || {}), ...data }));
               if (data.avatar_url) {
-                const existingData = localStorage.getItem('user_avatar_data_url') || undefined;
-                saveUserAvatarLocally(data.avatar_url, existingData);
+                saveUserAvatarLocally(data.avatar_url, undefined, user.id);
               }
             } else {
               try {
@@ -98,71 +108,15 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
     const file = event.target.files?.[0];
     if (!file) return;
 
-    let previewDataUrl = '';
-
     try {
       setIsUploading(true);
-      
-      // 1. Read locally first for guaranteed instant 0ms preview and offline persistence
-      await new Promise<void>((resolve) => {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          const res = e.target?.result as string;
-          if (res) {
-            previewDataUrl = res;
-            saveUserAvatarLocally(res, res);
-            setProfile((prev: any) => ({ ...(prev || {}), avatar_url: res }));
-          }
-          resolve();
-        };
-        reader.onerror = () => resolve();
-        reader.readAsDataURL(file);
-      });
-
-      // 2. Upload directly to our backend which then puts it to persistent disk and B2
-      const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}`, {
-        method: 'POST',
-        body: file,
-        headers: {
-          'Content-Type': file.type,
-        },
-      });
-
-      if (!uploadRes.ok) {
-        console.warn(`Upload to server completed with status ${uploadRes.status}, local photo retained.`);
-      } else {
-        const data = await uploadRes.json();
-        const fileKey = data?.key;
-        if (fileKey) {
-          saveUserAvatarLocally(fileKey, previewDataUrl);
-          setProfile((prev: any) => ({ ...(prev || {}), avatar_url: fileKey }));
-
-          // Also update Supabase metadata if logged in
-          if (supabase && user) {
-            try {
-              await supabase.auth.updateUser({
-                data: { avatar_url: fileKey, profile_photo_key: fileKey }
-              });
-            } catch (e) {
-              console.warn("Auth updateUser error:", e);
-            }
-
-            try {
-              const { data: updatedProfile, error } = await supabase.from('profiles').update({
-                avatar_url: fileKey
-              }).eq('id', user.id).select().single();
-              if (!error && updatedProfile) {
-                setProfile(updatedProfile);
-              }
-            } catch (e) {
-              console.warn("Profiles update error:", e);
-            }
-          }
-        }
+      const permanentUrl = await uploadAndSyncUserAvatar(file, user);
+      if (permanentUrl) {
+        setAvatarFailed(false);
+        setProfile((prev: any) => ({ ...(prev || {}), avatar_url: permanentUrl }));
       }
     } catch (error) {
       console.error('Error during photo upload:', error);
-      // Even if network failed, the preview was saved locally so user doesn't lose their avatar
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';

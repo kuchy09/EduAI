@@ -48,7 +48,7 @@ export async function syncCurrentUserToSupabase(
     role?: UserRole;
     title?: string;
     institution?: string;
-    subjects?: string[];
+    subjects?: string[] | string;
     bio?: string;
     avatar?: string;
     location?: string;
@@ -56,50 +56,37 @@ export async function syncCurrentUserToSupabase(
 ): Promise<boolean> {
   if (!user?.id) return false;
 
-  const profileData = {
+  const explicitSubjects = Array.isArray(profileDetails?.subjects)
+    ? profileDetails.subjects.filter(Boolean).join(', ')
+    : typeof profileDetails?.subjects === 'string'
+      ? profileDetails.subjects.trim()
+      : '';
+
+  const explicitAvatar =
+    profileDetails?.avatar && !String(profileDetails.avatar).includes('photo-1534528741775')
+      ? profileDetails.avatar
+      : user?.user_metadata?.avatar_url;
+
+  const profileData: Record<string, any> = {
     id: user.id,
-    email: user.email || profileDetails?.name || 'student@eduai.ac.ke',
-    full_name: profileDetails?.name || user?.user_metadata?.full_name || 'Edu AI Learner',
-    username: user.email ? user.email.split('@')[0] : `user_${user.id.slice(0, 6)}`,
-    avatar_url: profileDetails?.avatar || user?.user_metadata?.avatar_url || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
-    role: profileDetails?.role || user?.user_metadata?.role || 'student',
-    title: profileDetails?.title || (profileDetails?.role === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)'),
-    institution: profileDetails?.institution || 'Nairobi Academic Senior Secondary',
-    location: profileDetails?.location || 'Nairobi, Kenya',
-    bio: profileDetails?.bio || 'Active participant on the Edu AI academic learning network.',
-    subjects: Array.isArray(profileDetails?.subjects) ? profileDetails.subjects.join(', ') : (profileDetails?.subjects || 'Physics, Mathematics, Computer Science'),
     status: 'online',
     last_seen: new Date().toISOString(),
-    updated_at: new Date().toISOString()
+    updated_at: new Date().toISOString(),
   };
 
-  // Sync to localStorage
-  try {
-    const cachedUsers: ChatUser[] = JSON.parse(safeStorage.getItem('eduai_chat_users') || '[]');
-    const existingIdx = cachedUsers.findIndex(u => u.id === user.id);
-    const convertedChatUser: ChatUser = {
-      id: user.id,
-      name: profileData.full_name,
-      email: profileData.email,
-      avatar: profileData.avatar_url,
-      role: (profileData.role as UserRole) || 'student',
-      title: profileData.title,
-      institution: profileData.institution,
-      status: 'online',
-      lastSeen: 'Active now',
-      subjects: typeof profileData.subjects === 'string' ? profileData.subjects.split(',').map(s => s.trim()) : [],
-      friendStatus: 'friends',
-      bio: profileData.bio,
-      location: profileData.location
-    };
-
-    if (existingIdx >= 0) {
-      cachedUsers[existingIdx] = convertedChatUser;
-    } else {
-      cachedUsers.push(convertedChatUser);
-    }
-    safeStorage.setItem('eduai_chat_users', JSON.stringify(cachedUsers));
-  } catch (e) {}
+  if (user.email) profileData.email = user.email;
+  const resolvedName = profileDetails?.name || user?.user_metadata?.full_name;
+  if (resolvedName && resolvedName !== 'Student Learner') profileData.full_name = resolvedName;
+  if (user.email) profileData.username = user.email.split('@')[0];
+  if (explicitAvatar) profileData.avatar_url = explicitAvatar;
+  if (profileDetails?.role || user?.user_metadata?.role) {
+    profileData.role = profileDetails?.role || user?.user_metadata?.role;
+  }
+  if (profileDetails?.title) profileData.title = profileDetails.title;
+  if (profileDetails?.institution) profileData.institution = profileDetails.institution;
+  if (profileDetails?.location) profileData.location = profileDetails.location;
+  if (profileDetails?.bio) profileData.bio = profileDetails.bio;
+  if (explicitSubjects) profileData.subjects = explicitSubjects;
 
   if (!supabase) return false;
 

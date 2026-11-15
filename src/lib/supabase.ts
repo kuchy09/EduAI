@@ -1,14 +1,36 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { safeSessionStorage } from './safeStorage';
+import { safeStorage, safeSessionStorage } from './safeStorage';
 
 export const SERVER_VERIFIED_SESSION_KEY = 'edu_sb_verified_session';
 const OAUTH_REDIRECT_PENDING_KEY = 'edu_oauth_redirect_pending_v1';
 const OAUTH_REDIRECT_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes max for full-tab OAuth callback
 
-// Strictly ephemeral in-memory session store (never persisted to localStorage or sessionStorage)
-const inMemoryAuthStore = new Map<string, string>();
 let interactiveAuthorizedUserId: string | null = null;
-let ephemeralServerSession: any = null;
+let persistedDeviceSession: any = null;
+
+function isValidCredentialSessionObj(sessionObj: any): boolean {
+  return Boolean(
+    sessionObj &&
+      sessionObj.user?.id &&
+      typeof sessionObj.access_token === 'string' &&
+      sessionObj.access_token.length > 0 &&
+      sessionObj.access_token !== 'demo_token' &&
+      sessionObj.access_token !== 'local_token'
+  );
+}
+
+// Hydrate any verified device session saved from an earlier login on this browser/device
+(function hydrateSavedDeviceSession() {
+  try {
+    const saved = safeStorage.getJSON<any>(SERVER_VERIFIED_SESSION_KEY, null);
+    if (isValidCredentialSessionObj(saved)) {
+      interactiveAuthorizedUserId = saved.user.id;
+      persistedDeviceSession = saved;
+    } else if (saved) {
+      safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
+    }
+  } catch (_) {}
+})();
 
 export function markOAuthRedirectPending(): void {
   try {
@@ -41,53 +63,82 @@ export function consumeOAuthRedirectPending(): boolean {
 
 export function authorizeInteractiveSession(userId: string, sessionObj?: any): void {
   if (!userId) return;
+  if (
+    sessionObj &&
+    (sessionObj.access_token === 'demo_token' || sessionObj.access_token === 'local_token')
+  ) {
+    return;
+  }
   interactiveAuthorizedUserId = userId;
-  if (sessionObj) {
-    ephemeralServerSession = sessionObj;
+  if (sessionObj && isValidCredentialSessionObj(sessionObj)) {
+    persistedDeviceSession = sessionObj;
+    try {
+      safeStorage.setJSON(SERVER_VERIFIED_SESSION_KEY, sessionObj);
+    } catch (_) {}
   }
 }
 
 export function isInteractiveSessionAuthorized(userId?: string | null): boolean {
+  if (!interactiveAuthorizedUserId) {
+    const saved = getPersistedDeviceSession();
+    if (saved?.user?.id) {
+      interactiveAuthorizedUserId = saved.user.id;
+    }
+  }
   if (!interactiveAuthorizedUserId) return false;
   if (userId && interactiveAuthorizedUserId !== userId) return false;
   return true;
 }
 
+export function getPersistedDeviceSession(): any {
+  if (isValidCredentialSessionObj(persistedDeviceSession)) {
+    return persistedDeviceSession;
+  }
+  try {
+    const saved = safeStorage.getJSON<any>(SERVER_VERIFIED_SESSION_KEY, null);
+    if (isValidCredentialSessionObj(saved)) {
+      persistedDeviceSession = saved;
+      interactiveAuthorizedUserId = saved.user.id;
+      return saved;
+    }
+  } catch (_) {}
+  return null;
+}
+
 export function getActiveEphemeralSession(): any {
-  return ephemeralServerSession;
+  return getPersistedDeviceSession();
 }
 
 export function revokeInteractiveSession(): void {
   interactiveAuthorizedUserId = null;
-  ephemeralServerSession = null;
-  inMemoryAuthStore.clear();
+  persistedDeviceSession = null;
   try {
+    safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
+    safeSessionStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
     safeSessionStorage.removeItem(OAUTH_REDIRECT_PENDING_KEY);
   } catch (_) {}
   clearStaleSupabaseTokens();
 }
 
-const ephemeralAuthStorage = {
+// Persistent device auth storage backed by localStorage (with safe in-memory fallback)
+const persistentAuthStorage = {
   getItem(key: string): string | null {
-    // Allow temporary PKCE code-verifier across popup/redirect OAuth exchange only
     if (key.includes('code-verifier')) {
-      return safeSessionStorage.getItem(key);
+      return safeSessionStorage.getItem(key) ?? safeStorage.getItem(key);
     }
-    return inMemoryAuthStore.get(key) ?? null;
+    return safeStorage.getItem(key);
   },
   setItem(key: string, value: string): void {
     if (key.includes('code-verifier')) {
       safeSessionStorage.setItem(key, value);
-      return;
     }
-    inMemoryAuthStore.set(key, String(value));
+    safeStorage.setItem(key, String(value));
   },
   removeItem(key: string): void {
     if (key.includes('code-verifier')) {
       safeSessionStorage.removeItem(key);
-      return;
     }
-    inMemoryAuthStore.delete(key);
+    safeStorage.removeItem(key);
   },
 };
 
@@ -145,7 +196,8 @@ let currentSupabaseApiKey =
 let serverAuthReadyFlag = false;
 
 export function clearStaleSupabaseTokens(preserveOAuthVerifier = false) {
-  inMemoryAuthStore.clear();
+  interactiveAuthorizedUserId = null;
+  persistedDeviceSession = null;
   if (typeof window === 'undefined') return;
   try {
     const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
@@ -153,17 +205,19 @@ export function clearStaleSupabaseTokens(preserveOAuthVerifier = false) {
       const keysToRemove: string[] = [];
       for (let i = 0; i < ls.length; i++) {
         const key = ls.key(i);
+        if (!key) continue;
+        if (preserveOAuthVerifier && key.includes('code-verifier')) {
+          continue;
+        }
         if (
-          key && (
-            key.startsWith('sb-') || 
-            key.startsWith('sb_') ||
-            key.includes('supabase.auth.token') || 
-            key.includes('sb_edu_ai_token') ||
-            key.includes('-auth-token') ||
-            key === SERVER_VERIFIED_SESSION_KEY ||
-            key === 'edu_ai_guest_mode' ||
-            key === 'edu_demo_user'
-          )
+          key.startsWith('sb-') || 
+          key.startsWith('sb_') ||
+          key.includes('supabase.auth.token') || 
+          key.includes('sb_edu_ai_token') ||
+          key.includes('-auth-token') ||
+          key === SERVER_VERIFIED_SESSION_KEY ||
+          key === 'edu_ai_guest_mode' ||
+          key === 'edu_demo_user'
         ) {
           keysToRemove.push(key);
         }
@@ -213,9 +267,33 @@ export function clearStaleSupabaseTokens(preserveOAuthVerifier = false) {
 }
 
 export function sanitizeStoredSupabaseSession() {
-  // Enforce zero persistent browser auto-login: purge any lingering auth tokens in localStorage/sessionStorage on boot
-  const keepVerifier = hasValidOAuthRedirectPending();
-  clearStaleSupabaseTokens(keepVerifier);
+  // Purge legacy guest/demo bypass flags and reject any fake/demo tokens while preserving legitimate device logins
+  if (typeof window === 'undefined') return;
+  try {
+    safeStorage.removeItem('edu_ai_guest_mode');
+    safeSessionStorage.removeItem('edu_ai_guest_mode');
+    safeStorage.removeItem('edu_demo_user');
+    safeSessionStorage.removeItem('edu_demo_user');
+
+    const saved = safeStorage.getJSON<any>(SERVER_VERIFIED_SESSION_KEY, null);
+    if (saved && !isValidCredentialSessionObj(saved)) {
+      safeStorage.removeItem(SERVER_VERIFIED_SESSION_KEY);
+    }
+
+    const ls = (function() { try { return window.localStorage; } catch (_) { return null; } })();
+    if (ls) {
+      for (let i = ls.length - 1; i >= 0; i--) {
+        const key = ls.key(i);
+        if (!key) continue;
+        if (key.startsWith('sb-') || key.includes('supabase.auth.token') || key.includes('-auth-token')) {
+          const rawVal = ls.getItem(key) || '';
+          if (rawVal.includes('"demo_token"') || rawVal.includes('"local_token"')) {
+            ls.removeItem(key);
+          }
+        }
+      }
+    }
+  } catch (_) {}
 }
 
 // Global interceptors for auth errors (e.g. invalid refresh tokens or unreachable auth server)
@@ -329,7 +407,7 @@ sanitizeStoredSupabaseSession();
 function buildBrowserSupabaseClient(url: string, key: string): SupabaseClient {
   return createClient(url.trim(), key.trim(), {
     auth: {
-      storage: ephemeralAuthStorage,
+      storage: persistentAuthStorage,
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: false,

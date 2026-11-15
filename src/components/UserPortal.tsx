@@ -14,8 +14,10 @@ import {
   cancelOrRemoveSupabaseFriendship, 
   syncCurrentUserToSupabase 
 } from '../lib/userDirectoryService';
-import { supabase } from '../lib/supabase';
-import { getStoredUserAvatar } from '../lib/userAvatarService';
+import { supabase, getPersistedDeviceSession } from '../lib/supabase';
+import { getStoredUserAvatar, useUserAvatar } from '../lib/userAvatarService';
+import { safeStorage } from '../lib/safeStorage';
+import { getPeerCurrentUserStorageKey, pushAccountSyncPatch } from '../lib/accountSyncService';
 
 interface UserPortalProps {
   user?: any;
@@ -25,30 +27,69 @@ interface UserPortalProps {
 }
 
 export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPortalProps) {
-  // Current user's identity
-  const [currentUser, setCurrentUser] = useState<ChatUser>(() => {
-    const saved = localStorage.getItem('eduai_chat_current_user');
-    if (saved) {
-      try { return JSON.parse(saved); } catch (e) {}
-    }
+  const liveAvatarUrl = useUserAvatar(user, profile);
+
+  const buildPortalUser = (): ChatUser => {
+    const saved = safeStorage.getJSON<Partial<ChatUser> | null>(getPeerCurrentUserStorageKey(user?.id), null);
     const detectedRole: UserRole = (profile?.role || user?.user_metadata?.role || 'student') as UserRole;
-    const customAvatar = getStoredUserAvatar(user);
+    const subjectsList =
+      typeof profile?.subjects === 'string'
+        ? profile.subjects.split(',').map((s: string) => s.trim()).filter(Boolean)
+        : Array.isArray(profile?.subjects)
+          ? profile.subjects
+          : typeof user?.user_metadata?.subjects === 'string'
+            ? user.user_metadata.subjects.split(',').map((s: string) => s.trim()).filter(Boolean)
+            : (saved?.id === user?.id && saved?.subjects) || [];
+
     return {
       id: user?.id || 'me',
-      name: profile?.full_name || user?.user_metadata?.full_name || 'Dickson Skello',
-      email: user?.email || 'dicksonskello09@gmail.com',
-      avatar: customAvatar || profile?.avatar_url || user?.user_metadata?.avatar_url || '',
+      name:
+        profile?.full_name ||
+        user?.user_metadata?.full_name ||
+        user?.email?.split('@')[0] ||
+        (saved?.id === user?.id ? saved?.name : undefined) ||
+        'Learner',
+      email: user?.email || '',
+      avatar: liveAvatarUrl || getStoredUserAvatar(user, profile) || profile?.avatar_url || user?.user_metadata?.avatar_url || '',
       role: detectedRole === 'teacher' ? 'teacher' : 'student',
-      title: detectedRole === 'teacher' ? 'Senior Educator & Faculty Lead' : 'Senior High Student (Grade 12 CBC)',
-      institution: 'Nairobi Academic Senior Secondary',
+      title:
+        profile?.title ||
+        (detectedRole === 'teacher'
+          ? 'Educator & Faculty Member'
+          : profile?.education_level || user?.user_metadata?.education_level || 'Learner'),
+      institution: profile?.institution || user?.user_metadata?.institution || (saved?.id === user?.id ? saved?.institution : '') || '',
       status: 'online',
       lastSeen: 'Active now',
-      subjects: ['Physics', 'Mathematics', 'Computer Science'],
+      subjects: subjectsList,
       friendStatus: 'friends',
-      bio: 'Passionate STEM student preparing for university engineering pathways.',
-      location: 'Nairobi, Kenya'
+      bio: profile?.bio || user?.user_metadata?.bio || (saved?.id === user?.id ? saved?.bio : '') || '',
+      location: profile?.location || profile?.country || user?.user_metadata?.country || (saved?.id === user?.id ? saved?.location : '') || '',
     };
-  });
+  };
+
+  // Current user's identity
+  const [currentUser, setCurrentUser] = useState<ChatUser>(buildPortalUser);
+
+  useEffect(() => {
+    setCurrentUser((prev) => {
+      const next = buildPortalUser();
+      return { ...prev, ...next, avatar: next.avatar || prev.avatar };
+    });
+  }, [
+    user?.id,
+    user?.email,
+    user?.user_metadata?.full_name,
+    user?.user_metadata?.role,
+    profile?.full_name,
+    profile?.avatar_url,
+    profile?.role,
+    profile?.bio,
+    profile?.institution,
+    profile?.location,
+    profile?.country,
+    profile?.subjects,
+    liveAvatarUrl,
+  ]);
 
   // State
   const [searchQuery, setSearchQuery] = useState('');
@@ -69,10 +110,24 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     role: currentUser.role,
     title: currentUser.title,
     institution: currentUser.institution,
-    location: currentUser.location || 'Nairobi, Kenya',
+    location: currentUser.location || '',
     subjects: currentUser.subjects.join(', '),
     bio: currentUser.bio
   });
+
+  useEffect(() => {
+    if (!isEditProfileOpen) {
+      setEditFormData({
+        name: currentUser.name,
+        role: currentUser.role,
+        title: currentUser.title,
+        institution: currentUser.institution,
+        location: currentUser.location || '',
+        subjects: currentUser.subjects.join(', '),
+        bio: currentUser.bio,
+      });
+    }
+  }, [currentUser, isEditProfileOpen]);
 
   // Send request note modal
   const [requestTargetUser, setRequestTargetUser] = useState<ChatUser | null>(null);
@@ -82,8 +137,8 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
   useEffect(() => {
     const handleAvatarChange = (e: any) => {
       const newAvatar = e?.detail?.avatarUrl;
-      if (newAvatar) {
-        setCurrentUser(prev => ({ ...prev, avatar: newAvatar }));
+      if (newAvatar !== undefined) {
+        setCurrentUser(prev => ({ ...prev, avatar: newAvatar || '' }));
       }
     };
     window.addEventListener('user_avatar_changed', handleAvatarChange);
@@ -94,17 +149,17 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
   useEffect(() => {
     const initPortal = async () => {
       setIsLoading(true);
-      // 1. Sync current user to Supabase profiles
-      if (user?.id) {
+      // 1. Sync current user to Supabase profiles without mock overwrites
+      if (user?.id && (profile || user?.user_metadata)) {
         await syncCurrentUserToSupabase(user, {
           name: currentUser.name,
           role: currentUser.role,
           title: currentUser.title,
-          institution: currentUser.institution,
-          subjects: currentUser.subjects,
-          bio: currentUser.bio,
-          avatar: currentUser.avatar,
-          location: currentUser.location
+          institution: profile?.institution || user?.user_metadata?.institution || currentUser.institution || undefined,
+          subjects: currentUser.subjects.length ? currentUser.subjects : undefined,
+          bio: profile?.bio || user?.user_metadata?.bio || currentUser.bio || undefined,
+          avatar: liveAvatarUrl || profile?.avatar_url || user?.user_metadata?.avatar_url || currentUser.avatar || undefined,
+          location: profile?.location || profile?.country || user?.user_metadata?.country || currentUser.location || undefined,
         });
       }
 
@@ -114,7 +169,7 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     };
 
     initPortal();
-  }, [user?.id, currentUser.role]);
+  }, [user?.id, currentUser.role, liveAvatarUrl, profile?.avatar_url, profile?.full_name]);
 
   // Realtime subscription for Supabase friend updates
   useEffect(() => {
@@ -245,7 +300,7 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     };
 
     setCurrentUser(updatedUser);
-    localStorage.setItem('eduai_chat_current_user', JSON.stringify(updatedUser));
+    safeStorage.setJSON(getPeerCurrentUserStorageKey(user?.id), updatedUser);
 
     if (user?.id) {
       await syncCurrentUserToSupabase(user, {
@@ -255,12 +310,53 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
         institution: updatedUser.institution,
         subjects: updatedUser.subjects,
         bio: updatedUser.bio,
+        avatar: updatedUser.avatar,
         location: updatedUser.location
       });
+
+      const token = getPersistedDeviceSession()?.access_token || '';
+      if (token) {
+        try {
+          await fetch('/api/auth/preferences', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({
+              full_name: updatedUser.name,
+              role: updatedUser.role,
+              title: updatedUser.title,
+              institution: updatedUser.institution,
+              subjects: updatedUser.subjects.join(', '),
+              bio: updatedUser.bio,
+              location: updatedUser.location,
+            }),
+          });
+        } catch (_) {}
+      }
+
+      pushAccountSyncPatch(
+        user.id,
+        {
+          profileSnapshot: {
+            full_name: updatedUser.name,
+            role: updatedUser.role,
+            title: updatedUser.title,
+            institution: updatedUser.institution,
+            subjects: updatedUser.subjects.join(', '),
+            bio: updatedUser.bio,
+            location: updatedUser.location,
+            avatar_url: updatedUser.avatar,
+          },
+        },
+        token,
+        { immediate: true }
+      );
     }
 
     setIsEditProfileOpen(false);
-    showToast('Your Supabase search profile has been updated and is now discoverable!', 'success');
+    showToast('Your profile has been synced across all devices!', 'success');
   };
 
   return (

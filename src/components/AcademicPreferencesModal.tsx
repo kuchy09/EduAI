@@ -12,6 +12,7 @@ import {
   saveStoredAcademicPrefs,
 } from '../lib/bookPersonalization';
 import { getSupabaseClient, getActiveEphemeralSession } from '../lib/supabase';
+import { pushAccountSyncPatch } from '../lib/accountSyncService';
 
 interface AcademicPreferencesModalProps {
   isOpen: boolean;
@@ -205,6 +206,13 @@ export function AcademicPreferencesModal({
         field_of_study: payload.field_of_study || null,
         subjects: payload.subjects,
       };
+
+      pushAccountSyncPatch(
+        user?.id,
+        { profileSnapshot: mergedProfile },
+        bearerToken,
+        { immediate: true }
+      );
 
       onSaved(mergedProfile, payload);
       onClose?.();

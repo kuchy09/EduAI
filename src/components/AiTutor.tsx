@@ -12,6 +12,13 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { safeStorage } from '../lib/safeStorage';
+import {
+  getAiChatsStorageKey,
+  getAiLastActiveStorageKey,
+  mergeAiChatSessions,
+  pushAccountSyncPatch,
+  ACCOUNT_SYNC_EVENT,
+} from '../lib/accountSyncService';
 
 interface Message {
   id: string;
@@ -426,51 +433,98 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
   const fieldOfStudy = user?.user_metadata?.field_of_study || 'Education';
   const subjects = user?.user_metadata?.subjects || 'core concepts';
 
-  // Load chat sessions from localStorage or default to single greeting session
-  const [sessions, setSessions] = useState<ChatSession[]>(() => {
-    const saved = localStorage.getItem(`sage_ai_chats_${user?.id || 'guest'}`);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
-        }
-      } catch (e) {
-        console.error("Error parsing saved sage AI chats:", e);
-      }
-    }
-
-    // Default welcoming session
-    return [
+  const buildDefaultSession = (): ChatSession => ({
+    id: 'default_session',
+    title: 'Introduction with Sage',
+    createdAt: new Date().toLocaleDateString(),
+    messages: [
       {
-        id: 'default_session',
-        title: 'Introduction with Sage',
-        createdAt: new Date().toLocaleDateString(),
-        messages: [
-          {
-            id: '1',
-            role: 'assistant',
-            content: `Hello ${firstName}! I'm Sage AI. I'm ready to help you explore ${fieldOfStudy}. I notice you're interested in ${subjects}. ${learningActive ? 'I am also tuning my advice to fit your personal study patterns.' : ''} Do you have any questions about your current study material?`,
-          }
-        ]
+        id: '1',
+        role: 'assistant',
+        content: `Hello ${firstName}! I'm Sage AI. I'm ready to help you explore ${fieldOfStudy}. I notice you're interested in ${subjects}. ${learningActive ? 'I am also tuning my advice to fit your personal study patterns.' : ''} Do you have any questions about your current study material?`,
       }
-    ];
+    ]
+  });
+
+  const skipCloudPushRef = useRef(true);
+
+  // Load chat sessions from user-scoped localStorage or default to single greeting session
+  const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    const parsed = safeStorage.getJSON<ChatSession[]>(getAiChatsStorageKey(user?.id), []);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    return [buildDefaultSession()];
   });
 
   // Track the ID of the active conversation thread
   const [activeSessionId, setActiveSessionId] = useState<string>(() => {
-    const savedLastActive = localStorage.getItem(`sage_ai_last_active_${user?.id || 'guest'}`);
-    return savedLastActive || (sessions[0]?.id || 'default_session');
+    const savedLastActive = safeStorage.getItem(getAiLastActiveStorageKey(user?.id));
+    return savedLastActive || 'default_session';
   });
 
-  // Sync sessions list to localStorage whenever updated
+  // Reload sessions when user changes or cross-device sync hydrates new chat history
   useEffect(() => {
-    localStorage.setItem(`sage_ai_chats_${user?.id || 'guest'}`, JSON.stringify(sessions));
+    const chatsKey = getAiChatsStorageKey(user?.id);
+    const activeKey = getAiLastActiveStorageKey(user?.id);
+
+    const loadFromScopedStorage = () => {
+      const saved = safeStorage.getJSON<ChatSession[]>(chatsKey, []);
+      if (Array.isArray(saved) && saved.length > 0) {
+        skipCloudPushRef.current = true;
+        setSessions(prev => mergeAiChatSessions(prev, saved));
+      }
+      const savedActive = safeStorage.getItem(activeKey);
+      if (savedActive) {
+        setActiveSessionId(savedActive);
+      }
+    };
+
+    loadFromScopedStorage();
+
+    const handleSyncUpdated = (e: any) => {
+      const cloudSessions = e?.detail?.sync?.aiChatSessions;
+      if (Array.isArray(cloudSessions) && cloudSessions.length > 0) {
+        skipCloudPushRef.current = true;
+        setSessions(prev => {
+          const merged = mergeAiChatSessions(prev, cloudSessions);
+          const nextActive = e?.detail?.sync?.activeAiSessionId;
+          if (nextActive && merged.some((s: any) => s.id === nextActive)) {
+            setActiveSessionId(nextActive);
+          }
+          return merged;
+        });
+      }
+    };
+
+    window.addEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+  }, [user?.id]);
+
+  // Sync sessions list to localStorage & cross-device cloud whenever updated by user
+  useEffect(() => {
+    safeStorage.setJSON(getAiChatsStorageKey(user?.id), sessions);
+
+    if (skipCloudPushRef.current) {
+      skipCloudPushRef.current = false;
+      return;
+    }
+
+    const hasMeaningfulHistory = sessions.some(
+      (s) => s.id !== 'default_session' || (Array.isArray(s.messages) && s.messages.length > 1)
+    ) || sessions.length > 1;
+
+    if (user?.id && hasMeaningfulHistory) {
+      pushAccountSyncPatch(user.id, {
+        aiChatSessions: sessions,
+        activeAiSessionId: activeSessionId,
+      });
+    }
   }, [sessions, user?.id]);
 
   // Sync last active ID to localStorage
   useEffect(() => {
-    localStorage.setItem(`sage_ai_last_active_${user?.id || 'guest'}`, activeSessionId);
+    safeStorage.setItem(getAiLastActiveStorageKey(user?.id), activeSessionId);
   }, [activeSessionId, user?.id]);
 
   // Support prefill prompts from platform search or contextual deep dives
