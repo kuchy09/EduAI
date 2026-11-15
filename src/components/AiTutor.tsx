@@ -15,8 +15,13 @@ import { safeStorage } from '../lib/safeStorage';
 import {
   getAiChatsStorageKey,
   getAiLastActiveStorageKey,
+  getAiDeletedStorageKey,
   mergeAiChatSessions,
+  mergeDeletedAiSessionsMap,
+  computeAiSyncDigest,
   pushAccountSyncPatch,
+  flushPendingAccountSync,
+  hydrateAccountSync,
   ACCOUNT_SYNC_EVENT,
 } from '../lib/accountSyncService';
 
@@ -30,17 +35,19 @@ interface ChatSession {
   id: string;
   title: string;
   createdAt: string;
+  updatedAt?: string;
   messages: Message[];
 }
 
 interface AiTutorProps {
   user: any;
+  profile?: any;
   isSidebarOpen?: boolean;
   onToggleSidebar?: () => void;
   onSidebarStateChange?: (open: boolean) => void;
 }
 
-export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateChange }: AiTutorProps) {
+export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSidebarStateChange }: AiTutorProps) {
   const [input, setInput] = useState('');
   const [provider, setProvider] = useState<'gemini' | 'anthropic'>('gemini');
   const [speedMode, setSpeedMode] = useState<'fast' | 'deep'>('fast');
@@ -345,11 +352,13 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     setVoiceChatStatus('thinking');
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userPrompt };
 
+    const nowIso = new Date().toISOString();
     setSessions(prev => prev.map(s => {
       if (s.id === activeSession.id) {
         return {
           ...s,
           title: s.title === 'Introduction with Sage' || s.title === 'New Conversation' ? userPrompt.slice(0, 25) : s.title,
+          updatedAt: nowIso,
           messages: [...s.messages, userMessage]
         };
       }
@@ -357,7 +366,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     }));
 
     try {
-      const allowDataCollection = JSON.parse(localStorage.getItem('privacy_data') ?? 'true');
+      const allowDataCollection = JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -376,10 +385,12 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         const replyText = data.reply || "I'm listening and ready to help. What would you like to explore next?";
         setVoiceLastAiReply(replyText);
 
+        const replyIso = new Date().toISOString();
         setSessions(prev => prev.map(s => {
           if (s.id === activeSession.id) {
             return {
               ...s,
+              updatedAt: replyIso,
               messages: [...s.messages, { id: Date.now().toString() + 'ai', role: 'assistant', content: replyText }]
             };
           }
@@ -429,9 +440,15 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     setVoiceLiveTranscript('');
   };
 
-  const firstName = user?.user_metadata?.full_name?.split(' ')[0] || 'Learner';
-  const fieldOfStudy = user?.user_metadata?.field_of_study || 'Education';
-  const subjects = user?.user_metadata?.subjects || 'core concepts';
+  const firstName =
+    (profile?.full_name || user?.user_metadata?.full_name || user?.email?.split('@')[0] || 'Learner').split(' ')[0];
+  const fieldOfStudy = profile?.field_of_study || user?.user_metadata?.field_of_study || 'Education';
+  const subjects =
+    (Array.isArray(profile?.subjects) ? profile.subjects.join(', ') : profile?.subjects) ||
+    (Array.isArray(user?.user_metadata?.subjects)
+      ? user.user_metadata.subjects.join(', ')
+      : user?.user_metadata?.subjects) ||
+    'core concepts';
 
   const buildDefaultSession = (): ChatSession => ({
     id: 'default_session',
@@ -446,13 +463,17 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     ]
   });
 
-  const skipCloudPushRef = useRef(true);
+  const [deletedSessions, setDeletedSessions] = useState<Record<string, string>>(() =>
+    safeStorage.getJSON<Record<string, string>>(getAiDeletedStorageKey(user?.id), {})
+  );
 
   // Load chat sessions from user-scoped localStorage or default to single greeting session
   const [sessions, setSessions] = useState<ChatSession[]>(() => {
+    const del = safeStorage.getJSON<Record<string, string>>(getAiDeletedStorageKey(user?.id), {});
     const parsed = safeStorage.getJSON<ChatSession[]>(getAiChatsStorageKey(user?.id), []);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
+      const merged = mergeAiChatSessions(parsed, [], del);
+      if (merged.length > 0) return merged;
     }
     return [buildDefaultSession()];
   });
@@ -463,76 +484,162 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     return savedLastActive || 'default_session';
   });
 
-  // Reload sessions when user changes or cross-device sync hydrates new chat history
+  const lastSyncedDigestRef = useRef<string>('');
+  const lastRemotePullAtRef = useRef<number>(0);
+
+  // Hydrate latest Sage AI conversations on mount, user change, sync event, and window focus/visibility
   useEffect(() => {
     const chatsKey = getAiChatsStorageKey(user?.id);
     const activeKey = getAiLastActiveStorageKey(user?.id);
+    const delKey = getAiDeletedStorageKey(user?.id);
 
-    const loadFromScopedStorage = () => {
-      const saved = safeStorage.getJSON<ChatSession[]>(chatsKey, []);
-      if (Array.isArray(saved) && saved.length > 0) {
-        skipCloudPushRef.current = true;
-        setSessions(prev => mergeAiChatSessions(prev, saved));
-      }
-      const savedActive = safeStorage.getItem(activeKey);
-      if (savedActive) {
-        setActiveSessionId(savedActive);
-      }
-    };
+    const savedDeleted = safeStorage.getJSON<Record<string, string>>(delKey, {});
+    const savedSessions = safeStorage.getJSON<ChatSession[]>(chatsKey, []);
+    const savedActive = safeStorage.getItem(activeKey);
 
-    loadFromScopedStorage();
+    if (Object.keys(savedDeleted).length > 0) {
+      setDeletedSessions(savedDeleted);
+    }
+    if (Array.isArray(savedSessions) && savedSessions.length > 0) {
+      setSessions(prev => {
+        const merged = mergeAiChatSessions(prev, savedSessions, savedDeleted);
+        return merged.length > 0 ? merged : [buildDefaultSession()];
+      });
+    }
+    if (savedActive) {
+      setActiveSessionId(savedActive);
+    }
 
     const handleSyncUpdated = (e: any) => {
-      const cloudSessions = e?.detail?.sync?.aiChatSessions;
-      if (Array.isArray(cloudSessions) && cloudSessions.length > 0) {
-        skipCloudPushRef.current = true;
-        setSessions(prev => {
-          const merged = mergeAiChatSessions(prev, cloudSessions);
-          const nextActive = e?.detail?.sync?.activeAiSessionId;
-          if (nextActive && merged.some((s: any) => s.id === nextActive)) {
-            setActiveSessionId(nextActive);
+      if (e?.detail?.userId && user?.id && e.detail.userId !== user.id) return;
+      const syncData = e?.detail?.sync;
+      if (!syncData) return;
+
+      const cloudDeleted = syncData.deletedAiSessions || {};
+      const cloudSessions = Array.isArray(syncData.aiChatSessions) ? syncData.aiChatSessions : [];
+      const cloudActive = syncData.activeAiSessionId;
+
+      const localDeleted = safeStorage.getJSON<Record<string, string>>(delKey, {});
+      const nextDeleted = mergeDeletedAiSessionsMap(localDeleted, cloudDeleted);
+
+      setDeletedSessions(nextDeleted);
+      setSessions(prev => {
+        const merged = mergeAiChatSessions(prev, cloudSessions, nextDeleted);
+        const finalSessions = merged.length > 0 ? merged : [buildDefaultSession()];
+        const resolvedActive =
+          (cloudActive && finalSessions.some((s: any) => s.id === cloudActive) && cloudActive) ||
+          (finalSessions.some((s: any) => s.id === savedActive) && savedActive) ||
+          finalSessions[0]?.id ||
+          'default_session';
+
+        lastSyncedDigestRef.current = computeAiSyncDigest(
+          finalSessions,
+          nextDeleted,
+          resolvedActive
+        );
+        return finalSessions;
+      });
+
+      if (cloudActive || cloudSessions.length > 0 || savedSessions.length > 0) {
+        setActiveSessionId(prevActive => {
+          const currentLocal = safeStorage.getJSON<ChatSession[]>(chatsKey, []);
+          const currentMerged = mergeAiChatSessions(currentLocal, cloudSessions, nextDeleted);
+          const prevSession = currentMerged.find((s: any) => s.id === prevActive);
+          const prevIsDefaultBlank =
+            !prevSession || (prevSession.id === 'default_session' && (prevSession.messages?.length || 0) <= 1);
+          if (cloudActive && currentMerged.some((s: any) => s.id === cloudActive) && prevIsDefaultBlank) {
+            return cloudActive;
           }
-          return merged;
+          if (!prevSession && currentMerged[0]?.id) {
+            return currentMerged[0].id;
+          }
+          return prevActive;
         });
       }
     };
 
     window.addEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
-    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+
+    const pullRemoteLatest = (force = false) => {
+      if (!user?.id) return;
+      const now = Date.now();
+      if (!force && now - lastRemotePullAtRef.current < 5000) return;
+      lastRemotePullAtRef.current = now;
+      void hydrateAccountSync(user);
+    };
+
+    pullRemoteLatest(true);
+
+    const handleFocus = () => pullRemoteLatest(false);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        pullRemoteLatest(false);
+      } else if (user?.id) {
+        void flushPendingAccountSync(user.id);
+      }
+    };
+    const handlePageHide = () => {
+      if (user?.id) {
+        void flushPendingAccountSync(user.id);
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('pagehide', handlePageHide);
+
+    return () => {
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+      window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('pagehide', handlePageHide);
+      if (user?.id) {
+        void flushPendingAccountSync(user.id);
+      }
+    };
   }, [user?.id]);
 
-  // Sync sessions list to localStorage & cross-device cloud whenever updated by user
+  // Sync sessions, deletions & active thread to localStorage & cross-device cloud whenever updated
   useEffect(() => {
     safeStorage.setJSON(getAiChatsStorageKey(user?.id), sessions);
+    safeStorage.setJSON(getAiDeletedStorageKey(user?.id), deletedSessions);
+    safeStorage.setItem(getAiLastActiveStorageKey(user?.id), activeSessionId);
 
-    if (skipCloudPushRef.current) {
-      skipCloudPushRef.current = false;
+    if (!user?.id) return;
+
+    const currentDigest = computeAiSyncDigest(sessions, deletedSessions, activeSessionId);
+    if (currentDigest === lastSyncedDigestRef.current) {
       return;
     }
 
-    const hasMeaningfulHistory = sessions.some(
-      (s) => s.id !== 'default_session' || (Array.isArray(s.messages) && s.messages.length > 1)
-    ) || sessions.length > 1;
+    const hasMeaningfulHistory =
+      sessions.some(
+        (s) => s.id !== 'default_session' || (Array.isArray(s.messages) && s.messages.length > 1)
+      ) ||
+      sessions.length > 1 ||
+      Object.keys(deletedSessions).length > 0;
 
-    if (user?.id && hasMeaningfulHistory) {
-      pushAccountSyncPatch(user.id, {
-        aiChatSessions: sessions,
-        activeAiSessionId: activeSessionId,
-      });
+    if (hasMeaningfulHistory) {
+      lastSyncedDigestRef.current = currentDigest;
+      pushAccountSyncPatch(
+        user.id,
+        {
+          aiChatSessions: sessions,
+          activeAiSessionId: activeSessionId,
+          deletedAiSessions: deletedSessions,
+        },
+        undefined,
+        { immediate: !isGenerating }
+      );
     }
-  }, [sessions, user?.id]);
-
-  // Sync last active ID to localStorage
-  useEffect(() => {
-    safeStorage.setItem(getAiLastActiveStorageKey(user?.id), activeSessionId);
-  }, [activeSessionId, user?.id]);
+  }, [sessions, activeSessionId, deletedSessions, user?.id, isGenerating]);
 
   // Support prefill prompts from platform search or contextual deep dives
   useEffect(() => {
-    const prefill = localStorage.getItem('ai_tutor_prefill');
+    const prefill = safeStorage.getItem('ai_tutor_prefill');
     if (prefill) {
       setInput(prefill);
-      localStorage.removeItem('ai_tutor_prefill');
+      safeStorage.removeItem('ai_tutor_prefill');
     }
   }, []);
 
@@ -542,10 +649,12 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
   // Create a brand new session thread
   const handleStartNewChat = () => {
     const newId = Date.now().toString();
+    const nowIso = new Date().toISOString();
     const newSessionState: ChatSession = {
       id: newId,
       title: 'New Conversation',
       createdAt: new Date().toLocaleDateString(),
+      updatedAt: nowIso,
       messages: [
         {
           id: '1',
@@ -559,37 +668,38 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     setIsMobileSidebarOpen(false);
   };
 
-  // Delete a previous message thread
+  // Delete a previous message thread (and record tombstone so other devices remove it too)
   const handleDeleteChat = (sessionIdToDelete: string, e: React.MouseEvent) => {
     e.stopPropagation(); // prevent select row propagation
-    
-    setSessions(prev => {
-      const filtered = prev.filter(s => s.id !== sessionIdToDelete);
-      
-      // If list is completely empty, insert a blank default slate
-      if (filtered.length === 0) {
-        const fallbackId = Date.now().toString();
-        return [
-          {
-            id: fallbackId,
-            title: 'Introduction with Sage',
-            createdAt: new Date().toLocaleDateString(),
-            messages: [
-              {
-                id: '1',
-                role: 'assistant',
-                content: `Hello ${firstName}! I'm Sage AI. Ready to explore study sessions!`,
-              }
-            ]
-          }
-        ];
-      }
-      return filtered;
-    });
 
-    if (activeSessionId === sessionIdToDelete) {
-      const remaining = sessions.filter(s => s.id !== sessionIdToDelete);
-      if (remaining.length > 0) {
+    const deletedAtIso = new Date().toISOString();
+    setDeletedSessions(prev => ({
+      ...prev,
+      [sessionIdToDelete]: deletedAtIso,
+    }));
+
+    const remaining = sessions.filter(s => s.id !== sessionIdToDelete);
+    if (remaining.length === 0) {
+      const fallbackId = Date.now().toString();
+      setSessions([
+        {
+          id: fallbackId,
+          title: 'Introduction with Sage',
+          createdAt: new Date().toLocaleDateString(),
+          updatedAt: deletedAtIso,
+          messages: [
+            {
+              id: '1',
+              role: 'assistant',
+              content: `Hello ${firstName}! I'm Sage AI. Ready to explore study sessions!`,
+            }
+          ]
+        }
+      ]);
+      setActiveSessionId(fallbackId);
+    } else {
+      setSessions(remaining);
+      if (activeSessionId === sessionIdToDelete) {
         setActiveSessionId(remaining[0].id);
       }
     }
@@ -671,10 +781,12 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
   const handleRetryPrompt = (promptText: string, msgIndex: number) => {
     if (isGenerating || !promptText.trim() || !activeSession) return;
     const baseMessages = messages.slice(0, msgIndex + 1);
+    const nowIso = new Date().toISOString();
     setSessions(prev => prev.map(s => {
       if (s.id === activeSession.id) {
         return {
           ...s,
+          updatedAt: nowIso,
           messages: baseMessages
         };
       }
@@ -697,11 +809,13 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     const updatedBase = messages.slice(0, msgIndex + 1).map((m) =>
       m.id === msgId ? { ...m, content: trimmed } : m
     );
+    const nowIso = new Date().toISOString();
 
     setSessions(prev => prev.map(s => {
       if (s.id === activeSession.id) {
         return {
           ...s,
+          updatedAt: nowIso,
           messages: updatedBase
         };
       }
@@ -721,10 +835,12 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     }
     if (liveStreamingText.trim() && activeSession) {
       const textToSave = liveStreamingText.trim();
+      const nowIso = new Date().toISOString();
       setSessions(prev => prev.map(s => {
         if (s.id === activeSession.id) {
           return {
             ...s,
+            updatedAt: nowIso,
             messages: [
               ...s.messages,
               {
@@ -776,6 +892,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     setIsGenerating(true);
 
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: promptToSend };
+    const startIso = new Date().toISOString();
     
     if (!options?.skipAppendUserMessage) {
       // Add user message to active session list and rename session from default if needed
@@ -788,6 +905,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
           return {
             ...s,
             title: updatedTitle,
+            updatedAt: startIso,
             messages: [...s.messages, userMessage]
           };
         }
@@ -799,7 +917,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
     const historyToSend = (options?.historyMessages ?? messages).slice(-8).map(m => ({ role: m.role, content: m.content }));
 
     try {
-      const allowDataCollection = JSON.parse(localStorage.getItem('privacy_data') ?? 'true');
+      const allowDataCollection = JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
       
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -819,6 +937,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
       });
 
       const contentType = response.headers.get('content-type') || '';
+      const replyIso = new Date().toISOString();
       if (response.ok && contentType.includes('text/event-stream') && response.body) {
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
@@ -876,6 +995,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
           if (s.id === activeSession.id) {
             return {
               ...s,
+              updatedAt: new Date().toISOString(),
               messages: [
                 ...s.messages,
                 accumulated.trim()
@@ -900,6 +1020,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
           if (s.id === activeSession.id) {
             return {
               ...s,
+              updatedAt: replyIso,
               messages: [
                 ...s.messages,
                 { 
@@ -918,6 +1039,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
           if (s.id === activeSession.id) {
             return {
               ...s,
+              updatedAt: replyIso,
               messages: [
                 ...s.messages,
                 { 
@@ -939,6 +1061,7 @@ export function AiTutor({ user, isSidebarOpen, onToggleSidebar, onSidebarStateCh
         if (s.id === activeSession.id) {
           return {
             ...s,
+            updatedAt: new Date().toISOString(),
             messages: [
               ...s.messages,
               { 

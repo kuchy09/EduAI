@@ -9,6 +9,7 @@ export const ACCOUNT_SYNC_EVENT = 'edu-account-sync-updated';
 export interface AccountSyncPayload {
   aiChatSessions?: any[];
   activeAiSessionId?: string;
+  deletedAiSessions?: Record<string, string>;
   readerChats?: Record<string, any[]>;
   peerConversations?: any[];
   peerMessages?: Record<string, any[]>;
@@ -22,6 +23,8 @@ export interface AccountSyncPayload {
 
 const pendingPatches = new Map<string, AccountSyncPayload>();
 const patchTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const inFlightFlushes = new Map<string, Promise<void>>();
+const inFlightHydrates = new Map<string, Promise<any>>();
 
 async function resolveBearerToken(explicitToken?: string): Promise<string> {
   if (explicitToken && explicitToken !== 'demo_token' && explicitToken !== 'local_token') {
@@ -44,6 +47,10 @@ export function getAiChatsStorageKey(userId?: string): string {
 
 export function getAiLastActiveStorageKey(userId?: string): string {
   return `sage_ai_last_active_${userId || 'guest'}`;
+}
+
+export function getAiDeletedStorageKey(userId?: string): string {
+  return `sage_ai_deleted_${userId || 'guest'}`;
 }
 
 export function getReaderChatStorageKey(bookId: string, userId?: string): string {
@@ -78,15 +85,91 @@ function isDefaultGreetingSession(session: any): boolean {
   return false;
 }
 
-export function mergeAiChatSessions(localList: any[], cloudList: any[]): any[] {
+function parseMessageSortOrder(msgId: any, fallbackIdx: number): number {
+  if (typeof msgId === 'string' || typeof msgId === 'number') {
+    const str = String(msgId);
+    if (str === '1' || str === 'welcome') return 0;
+    const match = str.match(/^(\d{10,})/);
+    if (match) {
+      const ts = Number(match[1]);
+      if (Number.isFinite(ts)) {
+        return ts * 10 + (str.endsWith('ai') || str.endsWith('err') || str.endsWith('err2') ? 1 : 0);
+      }
+    }
+  }
+  return 10_000_000_000_000 + fallbackIdx;
+}
+
+export function mergeChatMessagesArray(msgsA: any[], msgsB: any[]): any[] {
+  const combined = [...(Array.isArray(msgsA) ? msgsA : []), ...(Array.isArray(msgsB) ? msgsB : [])];
+  const byKey = new Map<string, { msg: any; order: number }>();
+
+  combined.forEach((m, idx) => {
+    if (!m || typeof m !== 'object') return;
+    const idStr = m.id ? String(m.id) : '';
+    const isStarter = idStr === '1' || idStr === 'welcome';
+    const key = isStarter
+      ? '__starter_greeting__'
+      : idStr || `${m.role || 'msg'}::${String(m.content || '').slice(0, 120)}::${idx}`;
+    const order = parseMessageSortOrder(m.id, idx);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { msg: m, order });
+    } else {
+      const prevLen = String(existing.msg?.content || '').length;
+      const nextLen = String(m?.content || '').length;
+      byKey.set(key, {
+        msg: nextLen >= prevLen ? { ...existing.msg, ...m } : existing.msg,
+        order: Math.min(existing.order, order),
+      });
+    }
+  });
+
+  return Array.from(byKey.values())
+    .sort((a, b) => a.order - b.order)
+    .map((entry) => entry.msg);
+}
+
+export function mergeDeletedAiSessionsMap(
+  mapA?: Record<string, string>,
+  mapB?: Record<string, string>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const src of [mapA, mapB]) {
+    if (!src || typeof src !== 'object') continue;
+    for (const [id, iso] of Object.entries(src)) {
+      if (!id || typeof iso !== 'string') continue;
+      const prevTs = result[id] ? Date.parse(result[id]) || 0 : 0;
+      const nextTs = Date.parse(iso) || 0;
+      if (!result[id] || nextTs >= prevTs) {
+        result[id] = iso;
+      }
+    }
+  }
+  return result;
+}
+
+export function mergeAiChatSessions(
+  localList: any[],
+  cloudList: any[],
+  deletedMap?: Record<string, string>
+): any[] {
   const safeLocal = Array.isArray(localList) ? localList : [];
   const safeCloud = Array.isArray(cloudList) ? cloudList : [];
 
-  const nonDefaultLocal = safeLocal.filter((s) => s?.id && !isDefaultGreetingSession(s));
-  const nonDefaultCloud = safeCloud.filter((s) => s?.id && !isDefaultGreetingSession(s));
+  const isDeleted = (s: any) => {
+    if (!s?.id || !deletedMap || !deletedMap[s.id]) return false;
+    const delTs = Date.parse(deletedMap[s.id]) || 0;
+    const sessTs = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    return sessTs <= delTs;
+  };
+
+  const nonDefaultLocal = safeLocal.filter((s) => s?.id && !isDefaultGreetingSession(s) && !isDeleted(s));
+  const nonDefaultCloud = safeCloud.filter((s) => s?.id && !isDefaultGreetingSession(s) && !isDeleted(s));
 
   if (nonDefaultLocal.length === 0 && nonDefaultCloud.length === 0) {
-    return safeCloud.length > 0 ? safeCloud : safeLocal;
+    const candidates = [...safeCloud, ...safeLocal].filter((s) => s?.id && !isDeleted(s));
+    return candidates.length > 0 ? [candidates[0]] : [];
   }
 
   const byId = new Map<string, any>();
@@ -94,24 +177,77 @@ export function mergeAiChatSessions(localList: any[], cloudList: any[]): any[] {
     if (!s?.id) continue;
     const prev = byId.get(s.id);
     if (!prev) {
-      byId.set(s.id, s);
+      byId.set(s.id, {
+        ...s,
+        messages: mergeChatMessagesArray([], s.messages || []),
+      });
       continue;
     }
-    const prevMsgs = Array.isArray(prev.messages) ? prev.messages : [];
-    const nextMsgs = Array.isArray(s.messages) ? s.messages : [];
-    // Keep whichever thread has more messages (or merge unique messages by id)
-    if (nextMsgs.length > prevMsgs.length) {
-      byId.set(s.id, s);
-    } else if (nextMsgs.length === prevMsgs.length && nextMsgs.length > 0) {
-      const msgMap = new Map<string, any>();
-      [...prevMsgs, ...nextMsgs].forEach((m: any) => {
-        if (m?.id) msgMap.set(m.id, m);
-      });
-      byId.set(s.id, { ...prev, ...s, messages: Array.from(msgMap.values()) });
-    }
+
+    const mergedMessages = mergeChatMessagesArray(prev.messages || [], s.messages || []);
+    const prevUpdated = prev.updatedAt ? Date.parse(prev.updatedAt) || 0 : 0;
+    const nextUpdated = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    const isGenericTitle = (t?: string) => !t || t === 'Introduction with Sage' || t === 'New Conversation';
+    const chosenTitle =
+      !isGenericTitle(s.title) && (isGenericTitle(prev.title) || nextUpdated >= prevUpdated)
+        ? s.title
+        : !isGenericTitle(prev.title)
+          ? prev.title
+          : s.title || prev.title;
+
+    const maxUpdatedIso =
+      nextUpdated >= prevUpdated ? s.updatedAt || prev.updatedAt : prev.updatedAt || s.updatedAt;
+
+    byId.set(s.id, {
+      ...prev,
+      ...s,
+      title: chosenTitle,
+      createdAt: prev.createdAt || s.createdAt,
+      updatedAt: maxUpdatedIso,
+      messages: mergedMessages,
+    });
   }
 
-  return Array.from(byId.values());
+  const getActivityMs = (s: any): number => {
+    const upd = s?.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    if (upd > 0) return upd;
+    const msgs = Array.isArray(s?.messages) ? s.messages : [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = String(msgs[i]?.id || '').match(/^(\d{10,})/);
+      if (m) return Number(m[1]);
+    }
+    const idMatch = String(s?.id || '').match(/^(\d{10,})/);
+    return idMatch ? Number(idMatch[1]) : 0;
+  };
+
+  return Array.from(byId.values()).sort((a, b) => getActivityMs(b) - getActivityMs(a));
+}
+
+export function mergeReaderChatsMap(
+  localMap: Record<string, any[]> = {},
+  cloudMap: Record<string, any[]> = {}
+): Record<string, any[]> {
+  const result: Record<string, any[]> = {};
+  const allBooks = new Set([...Object.keys(localMap || {}), ...Object.keys(cloudMap || {})]);
+  for (const bookId of allBooks) {
+    const merged = mergeChatMessagesArray(localMap?.[bookId] || [], cloudMap?.[bookId] || []);
+    if (merged.length > 0) result[bookId] = merged;
+  }
+  return result;
+}
+
+export function computeAiSyncDigest(
+  sessions?: any[],
+  deletedMap?: Record<string, string>,
+  activeSessionId?: string
+): string {
+  const safeSessions = (Array.isArray(sessions) ? sessions : []).map((s) => ({
+    id: s?.id || '',
+    title: s?.title || '',
+    msgs: (Array.isArray(s?.messages) ? s.messages : []).map((m: any) => `${m?.id || ''}:${String(m?.content || '').length}`),
+  }));
+  const delKeys = Object.entries(deletedMap || {}).sort(([a], [b]) => a.localeCompare(b));
+  return JSON.stringify({ s: safeSessions, d: delKeys, a: activeSessionId || '' });
 }
 
 export function mergePeerConversations(localConvs: any[], cloudConvs: any[]): any[] {
@@ -187,45 +323,416 @@ export function mergeBooksLists(localBooks: Book[], cloudBooks: Book[]): Book[] 
   return Array.from(map.values());
 }
 
+function mergeSyncPayloads(candidates: AccountSyncPayload[]): AccountSyncPayload {
+  const valid = candidates.filter((c) => c && typeof c === 'object');
+  if (valid.length === 0) return {};
+
+  const ordered = [...valid].sort((a, b) => {
+    const ta = a.updatedAt ? Date.parse(a.updatedAt) || 0 : 0;
+    const tb = b.updatedAt ? Date.parse(b.updatedAt) || 0 : 0;
+    return ta - tb;
+  });
+
+  let deletedAiSessions: Record<string, string> = {};
+  for (const c of ordered) {
+    deletedAiSessions = mergeDeletedAiSessionsMap(deletedAiSessions, c.deletedAiSessions);
+  }
+
+  const acc: AccountSyncPayload = {
+    deletedAiSessions,
+    aiChatSessions: [],
+    readerChats: {},
+    peerConversations: [],
+    peerMessages: {},
+    unlockedBooks: [],
+    bookmarks: [],
+    profileSnapshot: {},
+    readingProgress: {},
+  };
+
+  for (const c of ordered) {
+    if (Array.isArray(c.aiChatSessions)) {
+      acc.aiChatSessions = mergeAiChatSessions(acc.aiChatSessions || [], c.aiChatSessions, deletedAiSessions);
+    }
+    if (c.activeAiSessionId) acc.activeAiSessionId = c.activeAiSessionId;
+    if (c.readerChats && typeof c.readerChats === 'object') {
+      acc.readerChats = mergeReaderChatsMap(acc.readerChats, c.readerChats);
+    }
+    if (Array.isArray(c.peerConversations)) {
+      acc.peerConversations = mergePeerConversations(acc.peerConversations || [], c.peerConversations);
+    }
+    if (c.peerMessages && typeof c.peerMessages === 'object') {
+      acc.peerMessages = mergePeerMessagesMap(acc.peerMessages || {}, c.peerMessages);
+    }
+    if (Array.isArray(c.unlockedBooks)) {
+      acc.unlockedBooks = mergeBooksLists(acc.unlockedBooks || [], c.unlockedBooks);
+    }
+    if (Array.isArray(c.bookmarks)) {
+      acc.bookmarks = mergeBookmarksLists(acc.bookmarks || [], c.bookmarks);
+    }
+    if (c.profileSnapshot && typeof c.profileSnapshot === 'object') {
+      acc.profileSnapshot = { ...(acc.profileSnapshot || {}), ...c.profileSnapshot };
+    }
+    if (c.readingProgress && typeof c.readingProgress === 'object') {
+      acc.readingProgress = { ...(acc.readingProgress || {}), ...c.readingProgress };
+    }
+    if (c.dailyGoal) acc.dailyGoal = c.dailyGoal;
+    if (c.updatedAt) acc.updatedAt = c.updatedAt;
+  }
+
+  return acc;
+}
+
+function combinePendingPatches(a: AccountSyncPayload, b: AccountSyncPayload): AccountSyncPayload {
+  const deletedAiSessions = mergeDeletedAiSessionsMap(a.deletedAiSessions, b.deletedAiSessions);
+  return {
+    ...a,
+    ...b,
+    deletedAiSessions,
+    ...(a.aiChatSessions || b.aiChatSessions
+      ? {
+          aiChatSessions: mergeAiChatSessions(
+            a.aiChatSessions || [],
+            b.aiChatSessions || [],
+            deletedAiSessions
+          ),
+        }
+      : {}),
+    ...(a.profileSnapshot || b.profileSnapshot
+      ? {
+          profileSnapshot: {
+            ...(a.profileSnapshot || {}),
+            ...(b.profileSnapshot || {}),
+          },
+        }
+      : {}),
+    ...(a.readerChats || b.readerChats
+      ? {
+          readerChats: mergeReaderChatsMap(a.readerChats || {}, b.readerChats || {}),
+        }
+      : {}),
+    ...(a.peerConversations || b.peerConversations
+      ? {
+          peerConversations: mergePeerConversations(a.peerConversations || [], b.peerConversations || []),
+        }
+      : {}),
+    ...(a.peerMessages || b.peerMessages
+      ? {
+          peerMessages: mergePeerMessagesMap(a.peerMessages || {}, b.peerMessages || {}),
+        }
+      : {}),
+    ...(a.unlockedBooks || b.unlockedBooks
+      ? {
+          unlockedBooks: mergeBooksLists(a.unlockedBooks || [], b.unlockedBooks || []),
+        }
+      : {}),
+    ...(a.bookmarks || b.bookmarks
+      ? {
+          bookmarks: mergeBookmarksLists(a.bookmarks || [], b.bookmarks || []),
+        }
+      : {}),
+  };
+}
+
+function collectLocalReaderChats(userId: string): Record<string, any[]> {
+  const collected: Record<string, any[]> = {};
+  if (typeof window === 'undefined') return collected;
+  try {
+    const prefix = `sage_reader_chat_${userId}_`;
+    const ls = window.localStorage;
+    for (let i = 0; i < ls.length; i++) {
+      const key = ls.key(i);
+      if (key && key.startsWith(prefix)) {
+        const bookId = key.slice(prefix.length);
+        const msgs = safeStorage.getJSON<any[]>(key, []);
+        if (Array.isArray(msgs) && msgs.some((m) => m?.role === 'user')) {
+          collected[bookId] = msgs;
+        }
+      }
+    }
+  } catch (_) {}
+  return collected;
+}
+
+function claimLegacyAiChatsForUser(userId: string): any[] {
+  if (!userId || userId === 'guest') return [];
+  try {
+    const ownerKey = 'sage_ai_legacy_owner';
+    const currentOwner = safeStorage.getItem(ownerKey);
+    if (currentOwner && currentOwner !== userId) {
+      return [];
+    }
+    const legacy = safeStorage.getJSON<any[]>('sage_ai_chats', []);
+    const legacyGuest = safeStorage.getJSON<any[]>('sage_ai_chats_guest', []);
+    const combined = mergeAiChatSessions(
+      Array.isArray(legacy) ? legacy : [],
+      Array.isArray(legacyGuest) ? legacyGuest : []
+    );
+    const hasMeaningful = combined.some(
+      (s) => s?.id !== 'default_session' || (Array.isArray(s?.messages) && s.messages.length > 1)
+    );
+    if (hasMeaningful) {
+      safeStorage.setItem(ownerKey, userId);
+      safeStorage.removeItem('sage_ai_chats');
+      safeStorage.removeItem('sage_ai_chats_guest');
+      return combined;
+    }
+  } catch (_) {}
+  return [];
+}
+
+async function fetchDirectSupabaseSyncCandidates(
+  userId: string
+): Promise<{ candidates: AccountSyncPayload[]; profile: any | null; bookmarks: Bookmark[] }> {
+  const client = getSupabaseClient();
+  const candidates: AccountSyncPayload[] = [];
+  let profile: any = null;
+  let bookmarks: Bookmark[] = [];
+  if (!client) return { candidates, profile, bookmarks };
+
+  const tasks = [
+    // Profile
+    (async () => {
+      try {
+        const { data } = await client.from('profiles').select('*').eq('id', userId).maybeSingle();
+        if (data) profile = data;
+      } catch (_) {}
+    })(),
+    // Bookmarks
+    (async () => {
+      try {
+        const { data } = await client
+          .from('bookmarks')
+          .select('*')
+          .eq('user_id', userId)
+          .order('created_at', { ascending: false });
+        if (Array.isArray(data) && data.length > 0) {
+          bookmarks = data.map((row: any) => ({
+            id: row.id || `${row.book_id}-${row.page_number || 1}`,
+            bookId: row.book_id,
+            bookTitle: row.title || row.book_title || 'Saved Textbook',
+            chapter: row.notes || 'Chapter 1: The Foundations',
+            textSnippet: row.notes || 'Bookmarked study passage',
+            timestamp: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
+          }));
+        }
+      } catch (_) {}
+    })(),
+    // user_account_sync table
+    (async () => {
+      try {
+        const { data, error } = await client
+          .from('user_account_sync')
+          .select('*')
+          .eq('user_id', userId)
+          .maybeSingle();
+        if (!error && data) {
+          candidates.push({
+            aiChatSessions: data.ai_chat_sessions,
+            activeAiSessionId: data.active_ai_session_id,
+            readerChats: data.reader_chats,
+            peerConversations: data.peer_conversations,
+            peerMessages: data.peer_messages,
+            unlockedBooks: data.unlocked_books,
+            profileSnapshot: data.profile_snapshot,
+            updatedAt: data.updated_at,
+          });
+        }
+      } catch (_) {}
+    })(),
+    // workspace-files storage bucket (works even without user_account_sync migration & across Dev/Shared containers)
+    (async () => {
+      try {
+        const { data: blobData, error } = await client.storage
+          .from('workspace-files')
+          .download(`${userId}/account-sync.json`);
+        if (!error && blobData) {
+          const text = await blobData.text();
+          const parsed = JSON.parse(text);
+          if (parsed && typeof parsed === 'object') {
+            candidates.push(parsed);
+          }
+        }
+      } catch (_) {}
+    })(),
+    // learning_paths hidden sync snapshot fallback (pre-existing table in 20261026 migration)
+    (async () => {
+      try {
+        const { data, error } = await client
+          .from('learning_paths')
+          .select('steps, updated_at')
+          .eq('user_id', userId)
+          .eq('title', '__edu_account_sync__')
+          .maybeSingle();
+        if (!error && data?.steps && typeof data.steps === 'object' && !Array.isArray(data.steps)) {
+          candidates.push({
+            ...data.steps,
+            updatedAt: (data.steps as any).updatedAt || data.updated_at,
+          });
+        }
+      } catch (_) {}
+    })(),
+  ];
+
+  await Promise.all(tasks);
+  return { candidates, profile, bookmarks };
+}
+
 async function flushAccountSyncPatch(userId: string, explicitToken?: string): Promise<void> {
+  const prevFlush = inFlightFlushes.get(userId);
+  if (prevFlush) {
+    try {
+      await prevFlush;
+    } catch (_) {}
+  }
+
   const patch = pendingPatches.get(userId);
   if (!patch) return;
   pendingPatches.delete(userId);
 
-  const token = await resolveBearerToken(explicitToken);
-  if (token) {
-    try {
-      await fetch('/api/account/sync', {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(patch),
-      });
-    } catch (err) {
-      console.warn('[accountSyncService] Server sync push notice:', err);
+  const run = (async () => {
+    const nowIso = new Date().toISOString();
+    let mergedSnapshot: AccountSyncPayload = { ...patch, updatedAt: nowIso };
+    const token = await resolveBearerToken(explicitToken);
+
+    if (token) {
+      try {
+        const res = await fetch('/api/account/sync', {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify(patch),
+        });
+        if (res.ok) {
+          const json = await res.json().catch(() => null);
+          if (json?.sync && typeof json.sync === 'object') {
+            mergedSnapshot = mergeSyncPayloads([json.sync, patch]);
+            mergedSnapshot.updatedAt = json.sync.updatedAt || nowIso;
+          }
+        }
+      } catch (err) {
+        console.warn('[accountSyncService] Server sync push notice:', err);
+      }
+    }
+
+    const client = getSupabaseClient();
+    if (client) {
+      try {
+        // Read existing remote cloud snapshot if we didn't get one from server, so client upload never clobbers
+        const { candidates: existingRemote } = await fetchDirectSupabaseSyncCandidates(userId);
+        if (existingRemote.length > 0) {
+          mergedSnapshot = mergeSyncPayloads([...existingRemote, mergedSnapshot]);
+        }
+        mergedSnapshot.updatedAt = nowIso;
+
+        const writeTasks: Promise<any>[] = [];
+
+        // 1. Upload full sync JSON to Supabase Storage workspace-files bucket (persists deletedAiSessions & full state across containers)
+        if (typeof Blob !== 'undefined') {
+          const blob = new Blob([JSON.stringify(mergedSnapshot)], { type: 'application/json' });
+          writeTasks.push(
+            client.storage
+              .from('workspace-files')
+              .upload(`${userId}/account-sync.json`, blob, {
+                contentType: 'application/json',
+                upsert: true,
+              })
+              .then(({ error }) => {
+                if (error) {
+                  console.warn('[accountSyncService] workspace-files upload notice:', error.message);
+                }
+              })
+          );
+        }
+
+        // 2. Upsert into user_account_sync table
+        const rowPatch: Record<string, any> = {
+          user_id: userId,
+          updated_at: nowIso,
+        };
+        if (mergedSnapshot.aiChatSessions !== undefined) rowPatch.ai_chat_sessions = mergedSnapshot.aiChatSessions;
+        if (mergedSnapshot.activeAiSessionId !== undefined) rowPatch.active_ai_session_id = mergedSnapshot.activeAiSessionId;
+        if (mergedSnapshot.readerChats !== undefined) rowPatch.reader_chats = mergedSnapshot.readerChats;
+        if (mergedSnapshot.peerConversations !== undefined) rowPatch.peer_conversations = mergedSnapshot.peerConversations;
+        if (mergedSnapshot.peerMessages !== undefined) rowPatch.peer_messages = mergedSnapshot.peerMessages;
+        if (mergedSnapshot.unlockedBooks !== undefined) rowPatch.unlocked_books = mergedSnapshot.unlockedBooks;
+        if (mergedSnapshot.profileSnapshot !== undefined) rowPatch.profile_snapshot = mergedSnapshot.profileSnapshot;
+
+        writeTasks.push(
+          Promise.resolve(
+            client
+              .from('user_account_sync')
+              .upsert(rowPatch, { onConflict: 'user_id' })
+          ).then(({ error }) => {
+            if (error && !String(error.message || '').includes('schema cache') && !String(error.message || '').includes('does not exist')) {
+              console.warn('[accountSyncService] user_account_sync upsert notice:', error.message);
+            }
+          })
+        );
+
+        // 3. Fallback mirror in learning_paths hidden row (works on 20261026 schema even if 20261115 migration isn't applied)
+        writeTasks.push(
+          (async () => {
+            try {
+              const { data: existingLp } = await client
+                .from('learning_paths')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('title', '__edu_account_sync__')
+                .maybeSingle();
+              if (existingLp?.id) {
+                await client
+                  .from('learning_paths')
+                  .update({ steps: mergedSnapshot, updated_at: nowIso })
+                  .eq('id', existingLp.id);
+              } else {
+                await client.from('learning_paths').insert({
+                  user_id: userId,
+                  title: '__edu_account_sync__',
+                  plan_mode: 'roadmap',
+                  steps: mergedSnapshot,
+                  is_active: false,
+                  updated_at: nowIso,
+                });
+              }
+            } catch (_) {}
+          })()
+        );
+
+        await Promise.allSettled(writeTasks);
+      } catch (err) {
+        console.warn('[accountSyncService] Supabase client sync notice:', err);
+      }
+    }
+  })();
+
+  inFlightFlushes.set(userId, run);
+  try {
+    await run;
+  } finally {
+    if (inFlightFlushes.get(userId) === run) {
+      inFlightFlushes.delete(userId);
+    }
+    // If more patches accumulated during flush, send them immediately
+    if (pendingPatches.has(userId)) {
+      void flushAccountSyncPatch(userId, explicitToken);
     }
   }
+}
 
-  const client = getSupabaseClient();
-  if (client) {
-    try {
-      const rowPatch: Record<string, any> = {
-        user_id: userId,
-        updated_at: new Date().toISOString(),
-      };
-      if (patch.aiChatSessions !== undefined) rowPatch.ai_chat_sessions = patch.aiChatSessions;
-      if (patch.activeAiSessionId !== undefined) rowPatch.active_ai_session_id = patch.activeAiSessionId;
-      if (patch.readerChats !== undefined) rowPatch.reader_chats = patch.readerChats;
-      if (patch.peerConversations !== undefined) rowPatch.peer_conversations = patch.peerConversations;
-      if (patch.peerMessages !== undefined) rowPatch.peer_messages = patch.peerMessages;
-      if (patch.unlockedBooks !== undefined) rowPatch.unlocked_books = patch.unlockedBooks;
-      if (patch.profileSnapshot !== undefined) rowPatch.profile_snapshot = patch.profileSnapshot;
-
-      await client.from('user_account_sync').upsert(rowPatch, { onConflict: 'user_id' });
-    } catch (_) {}
+export async function flushPendingAccountSync(
+  userId?: string,
+  explicitToken?: string
+): Promise<void> {
+  if (!userId || userId === 'guest') return;
+  const timer = patchTimers.get(userId);
+  if (timer) {
+    clearTimeout(timer);
+    patchTimers.delete(userId);
   }
+  await flushAccountSyncPatch(userId, explicitToken);
 }
 
 export function pushAccountSyncPatch(
@@ -236,32 +743,8 @@ export function pushAccountSyncPatch(
 ): void {
   if (!userId || userId === 'guest') return;
 
-  const existing = pendingPatches.get(userId) || {};
-  const mergedPatch: AccountSyncPayload = {
-    ...existing,
-    ...patch,
-    ...(existing.profileSnapshot || patch.profileSnapshot
-      ? {
-          profileSnapshot: {
-            ...(existing.profileSnapshot || {}),
-            ...(patch.profileSnapshot || {}),
-          },
-        }
-      : {}),
-    ...(existing.readerChats || patch.readerChats
-      ? {
-          readerChats: {
-            ...(existing.readerChats || {}),
-            ...(patch.readerChats || {}),
-          },
-        }
-      : {}),
-    ...(existing.peerMessages || patch.peerMessages
-      ? {
-          peerMessages: mergePeerMessagesMap(existing.peerMessages || {}, patch.peerMessages || {}),
-        }
-      : {}),
-  };
+  const existing = pendingPatches.get(userId);
+  const mergedPatch = existing ? combinePendingPatches(existing, patch) : patch;
   pendingPatches.set(userId, mergedPatch);
 
   const prevTimer = patchTimers.get(userId);
@@ -276,7 +759,7 @@ export function pushAccountSyncPatch(
     const timer = setTimeout(() => {
       patchTimers.delete(userId);
       void flushAccountSyncPatch(userId, explicitToken);
-    }, 500);
+    }, 350);
     patchTimers.set(userId, timer);
   }
 }
@@ -295,194 +778,241 @@ export async function hydrateAccountSync(
     return { sync: {}, profile: null, bookmarks: [], unlockedBooks: [] };
   }
 
-  const token = await resolveBearerToken(explicitToken);
-  const client = getSupabaseClient();
-  let serverSync: AccountSyncPayload = {};
-  let serverProfile: any = null;
-
-  // 1. Fetch unified server sync snapshot
-  if (token) {
-    try {
-      const res = await fetch('/api/account/sync', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Cache-Control': 'no-cache',
-        },
-      });
-      if (res.ok) {
-        const json = await res.json().catch(() => ({}));
-        if (json?.sync && typeof json.sync === 'object') serverSync = json.sync;
-        if (json?.profile && typeof json.profile === 'object') serverProfile = json.profile;
-      }
-    } catch (_) {}
+  const existingHydrate = inFlightHydrates.get(userId);
+  if (existingHydrate) {
+    return existingHydrate;
   }
 
-  // 2. Also query Supabase directly for bookmarks, profile, and user_account_sync
-  let cloudBookmarks: Bookmark[] = Array.isArray(serverSync.bookmarks) ? serverSync.bookmarks : [];
-  if (client) {
-    try {
-      const { data: profData } = await client
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .maybeSingle();
-      if (profData) {
-        serverProfile = {
-          ...(serverProfile || {}),
-          ...profData,
-          avatar_url: profData.avatar_url || serverProfile?.avatar_url || user?.user_metadata?.avatar_url || null,
-          country: profData.country || serverProfile?.country || user?.user_metadata?.country || null,
-          education_level: profData.education_level || serverProfile?.education_level || user?.user_metadata?.education_level || null,
-          curriculum: profData.curriculum || serverProfile?.curriculum || user?.user_metadata?.curriculum || null,
-          field_of_study: profData.field_of_study || serverProfile?.field_of_study || user?.user_metadata?.field_of_study || null,
-          subjects: profData.subjects || serverProfile?.subjects || user?.user_metadata?.subjects || null,
-        };
-      }
-    } catch (_) {}
+  const promise = (async () => {
+    const token = await resolveBearerToken(explicitToken);
+    const cloudCandidates: AccountSyncPayload[] = [];
+    let serverProfile: any = null;
+    let directBookmarks: Bookmark[] = [];
 
-    try {
-      const { data: bmRows } = await client
-        .from('bookmarks')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-      if (Array.isArray(bmRows) && bmRows.length > 0) {
-        const mapped: Bookmark[] = bmRows.map((row: any) => ({
-          id: row.id || `${row.book_id}-${row.page_number || 1}`,
-          bookId: row.book_id,
-          bookTitle: row.title || row.book_title || 'Saved Textbook',
-          chapter: row.notes || 'Chapter 1: The Foundations',
-          textSnippet: row.notes || 'Bookmarked study passage',
-          timestamp: row.created_at ? Date.parse(row.created_at) || Date.now() : Date.now(),
-        }));
-        cloudBookmarks = mergeBookmarksLists(cloudBookmarks, mapped);
-      }
-    } catch (_) {}
-
-    try {
-      const { data: tableSync } = await client
-        .from('user_account_sync')
-        .select('*')
-        .eq('user_id', userId)
-        .maybeSingle();
-      if (tableSync) {
-        const tableUpdated = tableSync.updated_at ? Date.parse(tableSync.updated_at) || 0 : 0;
-        const serverUpdated = serverSync.updatedAt ? Date.parse(serverSync.updatedAt) || 0 : 0;
-        if (tableUpdated >= serverUpdated) {
-          serverSync = {
-            ...serverSync,
-            aiChatSessions: mergeAiChatSessions(serverSync.aiChatSessions || [], tableSync.ai_chat_sessions || []),
-            activeAiSessionId: tableSync.active_ai_session_id || serverSync.activeAiSessionId,
-            readerChats: { ...(serverSync.readerChats || {}), ...(tableSync.reader_chats || {}) },
-            peerConversations: mergePeerConversations(serverSync.peerConversations || [], tableSync.peer_conversations || []),
-            peerMessages: mergePeerMessagesMap(serverSync.peerMessages || {}, tableSync.peer_messages || {}),
-            unlockedBooks: mergeBooksLists(serverSync.unlockedBooks || [], tableSync.unlocked_books || []),
+    // 1. Fetch server sync & direct Supabase sources in parallel
+    await Promise.all([
+      (async () => {
+        if (!token) return;
+        try {
+          const res = await fetch('/api/account/sync', {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              'Cache-Control': 'no-cache',
+            },
+          });
+          if (res.ok) {
+            const json = await res.json().catch(() => ({}));
+            if (json?.sync && typeof json.sync === 'object') cloudCandidates.push(json.sync);
+            if (json?.profile && typeof json.profile === 'object') serverProfile = json.profile;
+          }
+        } catch (_) {}
+      })(),
+      (async () => {
+        const direct = await fetchDirectSupabaseSyncCandidates(userId);
+        if (direct.candidates.length > 0) cloudCandidates.push(...direct.candidates);
+        if (direct.bookmarks.length > 0) directBookmarks = direct.bookmarks;
+        if (direct.profile) {
+          serverProfile = {
+            ...(serverProfile || {}),
+            ...direct.profile,
+            avatar_url:
+              direct.profile.avatar_url || serverProfile?.avatar_url || user?.user_metadata?.avatar_url || null,
+            country: direct.profile.country || serverProfile?.country || user?.user_metadata?.country || null,
+            education_level:
+              direct.profile.education_level ||
+              serverProfile?.education_level ||
+              user?.user_metadata?.education_level ||
+              null,
+            curriculum:
+              direct.profile.curriculum || serverProfile?.curriculum || user?.user_metadata?.curriculum || null,
+            field_of_study:
+              direct.profile.field_of_study ||
+              serverProfile?.field_of_study ||
+              user?.user_metadata?.field_of_study ||
+              null,
+            subjects: direct.profile.subjects || serverProfile?.subjects || user?.user_metadata?.subjects || null,
           };
         }
-      }
-    } catch (_) {}
-  }
+      })(),
+    ]);
 
-  // 3. Hydrate and merge Sage AI chat sessions in user-scoped localStorage
-  const localAiChats = safeStorage.getJSON<any[]>(getAiChatsStorageKey(userId), []);
-  const mergedAiChats = mergeAiChatSessions(localAiChats, serverSync.aiChatSessions || []);
-  if (mergedAiChats.length > 0) {
-    safeStorage.setJSON(getAiChatsStorageKey(userId), mergedAiChats);
-  }
-  if (serverSync.activeAiSessionId) {
-    const exists = mergedAiChats.some((s: any) => s?.id === serverSync.activeAiSessionId);
-    if (exists) {
-      safeStorage.setItem(getAiLastActiveStorageKey(userId), serverSync.activeAiSessionId);
-    }
-  }
-
-  // 4. Hydrate Reader AI Hover Tutor chats per book
-  if (serverSync.readerChats && typeof serverSync.readerChats === 'object') {
-    for (const [bookId, cloudMsgs] of Object.entries(serverSync.readerChats)) {
-      if (!Array.isArray(cloudMsgs) || cloudMsgs.length === 0) continue;
-      const scopedKey = getReaderChatStorageKey(bookId, userId);
-      const localMsgs = safeStorage.getJSON<any[]>(scopedKey, []);
-      if (cloudMsgs.length >= localMsgs.length) {
-        safeStorage.setJSON(scopedKey, cloudMsgs);
-      }
-    }
-  }
-
-  // 5. Hydrate Peer Chat conversations & messages
-  const localPeerConvs = safeStorage.getJSON<any[]>(getPeerConversationsStorageKey(userId), []);
-  const mergedPeerConvs = mergePeerConversations(localPeerConvs, serverSync.peerConversations || []);
-  if (mergedPeerConvs.length > 0) {
-    safeStorage.setJSON(getPeerConversationsStorageKey(userId), mergedPeerConvs);
-  }
-
-  const localPeerMsgs = safeStorage.getJSON<Record<string, any[]>>(getPeerMessagesStorageKey(userId), {});
-  const mergedPeerMsgs = mergePeerMessagesMap(localPeerMsgs, serverSync.peerMessages || {});
-  if (Object.keys(mergedPeerMsgs).length > 0) {
-    safeStorage.setJSON(getPeerMessagesStorageKey(userId), mergedPeerMsgs);
-  }
-
-  // 6. Hydrate Unlocked / Custom Books
-  const localUnlocked = safeStorage.getJSON<Book[]>(getUnlockedBooksStorageKey(userId), []);
-  const mergedUnlocked = mergeBooksLists(localUnlocked, serverSync.unlockedBooks || []);
-  if (mergedUnlocked.length > 0) {
-    safeStorage.setJSON(getUnlockedBooksStorageKey(userId), mergedUnlocked);
-  }
-
-  // 7. Hydrate Bookmarks
-  const localBookmarks = safeStorage.getJSON<Bookmark[]>(getBookmarksStorageKey(userId), []);
-  const mergedBookmarks = mergeBookmarksLists(localBookmarks, cloudBookmarks);
-  if (mergedBookmarks.length > 0) {
-    safeStorage.setJSON(getBookmarksStorageKey(userId), mergedBookmarks);
-  }
-
-  // 8. Hydrate Daily Goal if cloud has newer/higher streak data
-  if (serverSync.dailyGoal) {
-    saveDailyGoal(serverSync.dailyGoal, false);
-  }
-
-  // 9. Hydrate Academic Preferences so shelves (Home, Library, BookStore, Audiobooks) match across devices
-  const resolvedCountry = serverProfile?.country || serverProfile?.location || user?.user_metadata?.country || '';
-  const resolvedLevel = serverProfile?.education_level || user?.user_metadata?.education_level || '';
-  const resolvedCurr = serverProfile?.curriculum || user?.user_metadata?.curriculum || '';
-  const resolvedField = serverProfile?.field_of_study || user?.user_metadata?.field_of_study || '';
-  const resolvedSubjects = serverProfile?.subjects || user?.user_metadata?.subjects || '';
-
-  if (resolvedLevel || resolvedCountry || resolvedSubjects || resolvedCurr || resolvedField) {
-    saveStoredAcademicPrefs(userId, {
-      country: resolvedCountry,
-      education_level: resolvedLevel,
-      curriculum: resolvedCurr,
-      field_of_study: resolvedField,
-      subjects: resolvedSubjects,
-    });
-  }
-
-  // 10. Notify mounted components to refresh from synced state
-  const mergedSync: AccountSyncPayload = {
-    ...serverSync,
-    aiChatSessions: mergedAiChats,
-    activeAiSessionId: serverSync.activeAiSessionId || safeStorage.getItem(getAiLastActiveStorageKey(userId)) || undefined,
-    peerConversations: mergedPeerConvs,
-    peerMessages: mergedPeerMsgs,
-    unlockedBooks: mergedUnlocked,
-    bookmarks: mergedBookmarks,
-    profileSnapshot: serverProfile || serverSync.profileSnapshot,
-  };
-
-  if (typeof window !== 'undefined') {
-    window.dispatchEvent(
-      new CustomEvent(ACCOUNT_SYNC_EVENT, {
-        detail: { userId, sync: mergedSync, profile: serverProfile },
-      })
+    const cloudSync = mergeSyncPayloads(cloudCandidates);
+    const cloudBookmarks = mergeBookmarksLists(
+      Array.isArray(cloudSync.bookmarks) ? cloudSync.bookmarks : [],
+      directBookmarks
     );
-  }
 
-  return {
-    sync: mergedSync,
-    profile: serverProfile,
-    bookmarks: mergedBookmarks,
-    unlockedBooks: mergedUnlocked,
-  };
+    // 2. Claim any legacy unscoped Sage AI chats owned by this user on initial login, then merge deleted map & sessions
+    const legacyAiChats = claimLegacyAiChatsForUser(userId);
+    const localDeletedAi = safeStorage.getJSON<Record<string, string>>(getAiDeletedStorageKey(userId), {});
+    const mergedDeletedAi = mergeDeletedAiSessionsMap(localDeletedAi, cloudSync.deletedAiSessions);
+    if (Object.keys(mergedDeletedAi).length > 0) {
+      safeStorage.setJSON(getAiDeletedStorageKey(userId), mergedDeletedAi);
+    }
+
+    const localAiChats = mergeAiChatSessions(
+      safeStorage.getJSON<any[]>(getAiChatsStorageKey(userId), []),
+      legacyAiChats,
+      mergedDeletedAi
+    );
+    const mergedAiChats = mergeAiChatSessions(localAiChats, cloudSync.aiChatSessions || [], mergedDeletedAi);
+    if (mergedAiChats.length > 0 || Object.keys(mergedDeletedAi).length > 0) {
+      safeStorage.setJSON(getAiChatsStorageKey(userId), mergedAiChats);
+    }
+
+    const localActiveAi = safeStorage.getItem(getAiLastActiveStorageKey(userId));
+    let resolvedActiveAi = cloudSync.activeAiSessionId || localActiveAi || undefined;
+    if (resolvedActiveAi && !mergedAiChats.some((s: any) => s?.id === resolvedActiveAi)) {
+      resolvedActiveAi = mergedAiChats[0]?.id;
+    }
+    if (resolvedActiveAi) {
+      safeStorage.setItem(getAiLastActiveStorageKey(userId), resolvedActiveAi);
+    }
+
+    // 3. Merge Reader AI Hover Tutor chats per book (both cloud -> local and local -> cloud)
+    const localReaderChats = collectLocalReaderChats(userId);
+    const mergedReaderChats = mergeReaderChatsMap(localReaderChats, cloudSync.readerChats || {});
+    for (const [bookId, msgs] of Object.entries(mergedReaderChats)) {
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        safeStorage.setJSON(getReaderChatStorageKey(bookId, userId), msgs);
+      }
+    }
+
+    // 4. Hydrate Peer Chat conversations & messages
+    const localPeerConvs = safeStorage.getJSON<any[]>(getPeerConversationsStorageKey(userId), []);
+    const mergedPeerConvs = mergePeerConversations(localPeerConvs, cloudSync.peerConversations || []);
+    if (mergedPeerConvs.length > 0) {
+      safeStorage.setJSON(getPeerConversationsStorageKey(userId), mergedPeerConvs);
+    }
+
+    const localPeerMsgs = safeStorage.getJSON<Record<string, any[]>>(getPeerMessagesStorageKey(userId), {});
+    const mergedPeerMsgs = mergePeerMessagesMap(localPeerMsgs, cloudSync.peerMessages || {});
+    if (Object.keys(mergedPeerMsgs).length > 0) {
+      safeStorage.setJSON(getPeerMessagesStorageKey(userId), mergedPeerMsgs);
+    }
+
+    // 5. Hydrate Unlocked / Custom Books
+    const localUnlocked = safeStorage.getJSON<Book[]>(getUnlockedBooksStorageKey(userId), []);
+    const mergedUnlocked = mergeBooksLists(localUnlocked, cloudSync.unlockedBooks || []);
+    if (mergedUnlocked.length > 0) {
+      safeStorage.setJSON(getUnlockedBooksStorageKey(userId), mergedUnlocked);
+    }
+
+    // 6. Hydrate Bookmarks
+    const localBookmarks = safeStorage.getJSON<Bookmark[]>(getBookmarksStorageKey(userId), []);
+    const mergedBookmarks = mergeBookmarksLists(localBookmarks, cloudBookmarks);
+    if (mergedBookmarks.length > 0) {
+      safeStorage.setJSON(getBookmarksStorageKey(userId), mergedBookmarks);
+    }
+
+    // 7. Hydrate Daily Goal if cloud has data
+    if (cloudSync.dailyGoal) {
+      saveDailyGoal(cloudSync.dailyGoal, false);
+    }
+
+    // 8. Hydrate Academic Preferences
+    const resolvedCountry =
+      serverProfile?.country || serverProfile?.location || user?.user_metadata?.country || '';
+    const resolvedLevel = serverProfile?.education_level || user?.user_metadata?.education_level || '';
+    const resolvedCurr = serverProfile?.curriculum || user?.user_metadata?.curriculum || '';
+    const resolvedField = serverProfile?.field_of_study || user?.user_metadata?.field_of_study || '';
+    const resolvedSubjects = serverProfile?.subjects || user?.user_metadata?.subjects || '';
+
+    if (resolvedLevel || resolvedCountry || resolvedSubjects || resolvedCurr || resolvedField) {
+      saveStoredAcademicPrefs(userId, {
+        country: resolvedCountry,
+        education_level: resolvedLevel,
+        curriculum: resolvedCurr,
+        field_of_study: resolvedField,
+        subjects: resolvedSubjects,
+      });
+    }
+
+    const mergedSync: AccountSyncPayload = {
+      ...cloudSync,
+      deletedAiSessions: mergedDeletedAi,
+      aiChatSessions: mergedAiChats,
+      activeAiSessionId: resolvedActiveAi,
+      readerChats: mergedReaderChats,
+      peerConversations: mergedPeerConvs,
+      peerMessages: mergedPeerMsgs,
+      unlockedBooks: mergedUnlocked,
+      bookmarks: mergedBookmarks,
+      profileSnapshot: serverProfile || cloudSync.profileSnapshot,
+    };
+
+    // 9. Backfill to cloud if local device had Sage AI chats, reader chats, peer chats, books, or bookmarks missing from cloud
+    const cloudAiDigest = computeAiSyncDigest(
+      cloudSync.aiChatSessions,
+      cloudSync.deletedAiSessions,
+      cloudSync.activeAiSessionId
+    );
+    const mergedAiDigest = computeAiSyncDigest(mergedAiChats, mergedDeletedAi, resolvedActiveAi);
+    const hasMeaningfulAi =
+      mergedAiChats.some((s) => s?.id !== 'default_session' || (Array.isArray(s?.messages) && s.messages.length > 1)) ||
+      Object.keys(mergedDeletedAi).length > 0;
+    const aiNeedsBackfill = hasMeaningfulAi && cloudAiDigest !== mergedAiDigest;
+    const readerNeedsBackfill =
+      Object.keys(mergedReaderChats).length > Object.keys(cloudSync.readerChats || {}).length ||
+      Object.entries(mergedReaderChats).some(
+        ([bid, msgs]) => msgs.length > ((cloudSync.readerChats?.[bid] || []).length)
+      );
+    const peerNeedsBackfill =
+      mergedPeerConvs.length > (cloudSync.peerConversations || []).length ||
+      Object.keys(mergedPeerMsgs).some(
+        (cid) => (mergedPeerMsgs[cid] || []).length > ((cloudSync.peerMessages?.[cid] || []).length)
+      );
+    const booksNeedBackfill = mergedUnlocked.length > (cloudSync.unlockedBooks || []).length;
+    const bookmarksNeedBackfill = mergedBookmarks.length > cloudBookmarks.length;
+
+    if (aiNeedsBackfill || readerNeedsBackfill || peerNeedsBackfill || booksNeedBackfill || bookmarksNeedBackfill) {
+      pushAccountSyncPatch(
+        userId,
+        {
+          ...(aiNeedsBackfill
+            ? {
+                aiChatSessions: mergedAiChats,
+                activeAiSessionId: resolvedActiveAi,
+                deletedAiSessions: mergedDeletedAi,
+              }
+            : {}),
+          ...(readerNeedsBackfill ? { readerChats: mergedReaderChats } : {}),
+          ...(peerNeedsBackfill
+            ? { peerConversations: mergedPeerConvs, peerMessages: mergedPeerMsgs }
+            : {}),
+          ...(booksNeedBackfill ? { unlockedBooks: mergedUnlocked } : {}),
+          ...(bookmarksNeedBackfill ? { bookmarks: mergedBookmarks } : {}),
+        },
+        explicitToken,
+        { immediate: true }
+      );
+    }
+
+    // 10. Notify mounted components to refresh from synced state
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(
+        new CustomEvent(ACCOUNT_SYNC_EVENT, {
+          detail: { userId, sync: mergedSync, profile: serverProfile },
+        })
+      );
+    }
+
+    return {
+      sync: mergedSync,
+      profile: serverProfile,
+      bookmarks: mergedBookmarks,
+      unlockedBooks: mergedUnlocked,
+    };
+  })();
+
+  inFlightHydrates.set(userId, promise);
+  try {
+    return await promise;
+  } finally {
+    if (inFlightHydrates.get(userId) === promise) {
+      inFlightHydrates.delete(userId);
+    }
+  }
 }
 
 export async function saveBookmarkToCloud(
@@ -524,6 +1054,11 @@ export function clearAccountLocalCaches(userId?: string): void {
       'eduai_chat_conversations',
       'eduai_chat_messages',
       'edu_ai_daily_reading_goal',
+      'sage_ai_chats',
+      'sage_ai_chats_guest',
+      'sage_ai_last_active',
+      'sage_ai_last_active_guest',
+      'sage_ai_deleted_guest',
     ];
     sharedKeys.forEach((k) => safeStorage.removeItem(k));
 

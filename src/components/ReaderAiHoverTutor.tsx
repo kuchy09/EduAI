@@ -30,7 +30,10 @@ import { triggerCapsuleFeedback } from '../lib/feedback';
 import { safeStorage } from '../lib/safeStorage';
 import {
   getReaderChatStorageKey,
+  mergeChatMessagesArray,
   pushAccountSyncPatch,
+  flushPendingAccountSync,
+  hydrateAccountSync,
   ACCOUNT_SYNC_EVENT,
 } from '../lib/accountSyncService';
 
@@ -112,16 +115,26 @@ export function ReaderAiHoverTutor({
     }
 
     const handleSyncUpdated = (e: any) => {
+      if (e?.detail?.userId && user?.id && e.detail.userId !== user.id) return;
       const cloudMsgs = e?.detail?.sync?.readerChats?.[book.id];
       if (Array.isArray(cloudMsgs) && cloudMsgs.length > 0) {
         skipCloudPushRef.current = true;
-        setMessages((prev) => (cloudMsgs.length >= prev.length ? cloudMsgs : prev));
+        setMessages((prev) => mergeChatMessagesArray(prev, cloudMsgs));
       }
     };
 
     window.addEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
-    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
-  }, [book.id, user?.id]);
+    if (user?.id && isOpen) {
+      void hydrateAccountSync(user);
+    }
+
+    return () => {
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+      if (user?.id) {
+        void flushPendingAccountSync(user.id);
+      }
+    };
+  }, [book.id, user?.id, isOpen]);
 
   // Sync messages to user-scoped storage and cloud per book
   useEffect(() => {
@@ -135,11 +148,14 @@ export function ReaderAiHoverTutor({
 
     const hasUserActivity = messages.some((m) => m.role === 'user');
     if (user?.id && hasUserActivity) {
-      pushAccountSyncPatch(user.id, {
-        readerChats: { [book.id]: messages },
-      });
+      pushAccountSyncPatch(
+        user.id,
+        { readerChats: { [book.id]: messages } },
+        undefined,
+        { immediate: !isGenerating }
+      );
     }
-  }, [messages, book.id, user?.id]);
+  }, [messages, book.id, user?.id, isGenerating]);
 
   // Scroll to bottom when messages change
   useEffect(() => {

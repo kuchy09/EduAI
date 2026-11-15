@@ -148,6 +148,278 @@ function getSafeUserSyncId(userId: string): string {
   return String(userId || "").replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
+function isTrivialDefaultAiSession(session: any): boolean {
+  return Boolean(
+    session &&
+      typeof session === "object" &&
+      session.id === "default_session" &&
+      Array.isArray(session.messages) &&
+      session.messages.length <= 1
+  );
+}
+
+function parseSyncMessageOrder(msgId: any, fallbackIdx: number): number {
+  if (typeof msgId === "string" || typeof msgId === "number") {
+    const str = String(msgId);
+    if (str === "1" || str === "welcome") return 0;
+    const match = str.match(/^(\d{10,})/);
+    if (match) {
+      const ts = Number(match[1]);
+      if (Number.isFinite(ts)) {
+        // Put assistant replies at the same millisecond slightly after user prompts
+        return ts * 10 + (str.endsWith("ai") || str.endsWith("err") || str.endsWith("err2") ? 1 : 0);
+      }
+    }
+  }
+  return 10_000_000_000_000 + fallbackIdx;
+}
+
+function mergeSyncMessagesArray(msgsA: any[], msgsB: any[]): any[] {
+  const combined = [...(Array.isArray(msgsA) ? msgsA : []), ...(Array.isArray(msgsB) ? msgsB : [])];
+  const byKey = new Map<string, { msg: any; order: number }>();
+
+  combined.forEach((m, idx) => {
+    if (!m || typeof m !== "object") return;
+    const idStr = m.id ? String(m.id) : "";
+    const isStarter = idStr === "1" || idStr === "welcome";
+    const key = isStarter ? "__starter_greeting__" : idStr || `${m.role || "msg"}::${String(m.content || "").slice(0, 120)}::${idx}`;
+    const order = parseSyncMessageOrder(m.id, idx);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { msg: m, order });
+    } else {
+      const prevLen = String(existing.msg?.content || "").length;
+      const nextLen = String(m?.content || "").length;
+      byKey.set(key, {
+        msg: nextLen >= prevLen ? { ...existing.msg, ...m } : existing.msg,
+        order: Math.min(existing.order, order),
+      });
+    }
+  });
+
+  return Array.from(byKey.values())
+    .sort((a, b) => a.order - b.order)
+    .map((entry) => entry.msg);
+}
+
+function mergeDeletedAiSessionsMap(
+  mapA?: Record<string, string>,
+  mapB?: Record<string, string>
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const src of [mapA, mapB]) {
+    if (!src || typeof src !== "object") continue;
+    for (const [id, iso] of Object.entries(src)) {
+      if (!id || typeof iso !== "string") continue;
+      const prevTs = result[id] ? Date.parse(result[id]) || 0 : 0;
+      const nextTs = Date.parse(iso) || 0;
+      if (!result[id] || nextTs >= prevTs) {
+        result[id] = iso;
+      }
+    }
+  }
+  return result;
+}
+
+function serverMergeAiChatSessions(
+  listA: any[],
+  listB: any[],
+  deletedMap?: Record<string, string>
+): any[] {
+  const safeA = Array.isArray(listA) ? listA : [];
+  const safeB = Array.isArray(listB) ? listB : [];
+
+  const isDeleted = (s: any) => {
+    if (!s?.id || !deletedMap || !deletedMap[s.id]) return false;
+    const delTs = Date.parse(deletedMap[s.id]) || 0;
+    const sessTs = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    return sessTs <= delTs;
+  };
+
+  const nonDefaultA = safeA.filter((s) => s?.id && !isTrivialDefaultAiSession(s) && !isDeleted(s));
+  const nonDefaultB = safeB.filter((s) => s?.id && !isTrivialDefaultAiSession(s) && !isDeleted(s));
+
+  if (nonDefaultA.length === 0 && nonDefaultB.length === 0) {
+    const fallback = [...safeA, ...safeB].filter((s) => s?.id && !isDeleted(s));
+    return fallback.length > 0 ? [fallback[0]] : [];
+  }
+
+  const byId = new Map<string, any>();
+  for (const s of [...nonDefaultA, ...nonDefaultB]) {
+    if (!s?.id) continue;
+    const prev = byId.get(s.id);
+    if (!prev) {
+      byId.set(s.id, {
+        ...s,
+        messages: mergeSyncMessagesArray([], s.messages || []),
+      });
+      continue;
+    }
+
+    const mergedMessages = mergeSyncMessagesArray(prev.messages || [], s.messages || []);
+    const prevUpdated = prev.updatedAt ? Date.parse(prev.updatedAt) || 0 : 0;
+    const nextUpdated = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    const isGenericTitle = (t?: string) => !t || t === "Introduction with Sage" || t === "New Conversation";
+    const chosenTitle =
+      !isGenericTitle(s.title) && (isGenericTitle(prev.title) || nextUpdated >= prevUpdated)
+        ? s.title
+        : !isGenericTitle(prev.title)
+          ? prev.title
+          : s.title || prev.title;
+
+    const maxUpdatedIso =
+      nextUpdated >= prevUpdated ? s.updatedAt || prev.updatedAt : prev.updatedAt || s.updatedAt;
+
+    byId.set(s.id, {
+      ...prev,
+      ...s,
+      title: chosenTitle,
+      createdAt: prev.createdAt || s.createdAt,
+      updatedAt: maxUpdatedIso,
+      messages: mergedMessages,
+    });
+  }
+
+  const getActivityMs = (s: any): number => {
+    const upd = s?.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    if (upd > 0) return upd;
+    const msgs = Array.isArray(s?.messages) ? s.messages : [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = String(msgs[i]?.id || "").match(/^(\d{10,})/);
+      if (m) return Number(m[1]);
+    }
+    const idMatch = String(s?.id || "").match(/^(\d{10,})/);
+    return idMatch ? Number(idMatch[1]) : 0;
+  };
+
+  return Array.from(byId.values()).sort((a, b) => getActivityMs(b) - getActivityMs(a));
+}
+
+function serverMergeReaderChats(
+  mapA: Record<string, any[]> = {},
+  mapB: Record<string, any[]> = {}
+): Record<string, any[]> {
+  const result: Record<string, any[]> = {};
+  const allBooks = new Set([...Object.keys(mapA || {}), ...Object.keys(mapB || {})]);
+  for (const bookId of allBooks) {
+    const merged = mergeSyncMessagesArray(mapA?.[bookId] || [], mapB?.[bookId] || []);
+    if (merged.length > 0) result[bookId] = merged;
+  }
+  return result;
+}
+
+function serverMergeById(listA: any[] = [], listB: any[] = [], keyFn?: (item: any) => string): any[] {
+  const map = new Map<string, any>();
+  for (const item of [...(Array.isArray(listA) ? listA : []), ...(Array.isArray(listB) ? listB : [])]) {
+    if (!item || typeof item !== "object") continue;
+    const k = keyFn ? keyFn(item) : String(item.id || "");
+    if (!k) continue;
+    const prev = map.get(k);
+    if (!prev) {
+      map.set(k, item);
+    } else {
+      const prevTs = prev.updatedAt ? Date.parse(prev.updatedAt) || 0 : prev.timestamp || 0;
+      const nextTs = item.updatedAt ? Date.parse(item.updatedAt) || 0 : item.timestamp || 0;
+      map.set(k, nextTs >= prevTs ? { ...prev, ...item } : { ...item, ...prev });
+    }
+  }
+  return Array.from(map.values());
+}
+
+function serverMergePeerMessages(
+  mapA: Record<string, any[]> = {},
+  mapB: Record<string, any[]> = {}
+): Record<string, any[]> {
+  const result: Record<string, any[]> = {};
+  const ids = new Set([...Object.keys(mapA || {}), ...Object.keys(mapB || {})]);
+  for (const convId of ids) {
+    const merged = serverMergeById(mapA?.[convId] || [], mapB?.[convId] || []);
+    merged.sort((a, b) => {
+      const ta = a.createdAt ? Date.parse(a.createdAt) || 0 : 0;
+      const tb = b.createdAt ? Date.parse(b.createdAt) || 0 : 0;
+      return ta - tb;
+    });
+    result[convId] = merged;
+  }
+  return result;
+}
+
+function mergeSyncSnapshots(snapshots: any[]): any {
+  const valid = snapshots.filter((c) => c && typeof c === "object");
+  if (valid.length === 0) return {};
+
+  // Sort oldest -> newest so newer scalar values win while collection fields union cleanly
+  const ordered = [...valid].sort((a, b) => {
+    const ta = a?.updatedAt ? Date.parse(a.updatedAt) || 0 : 0;
+    const tb = b?.updatedAt ? Date.parse(b.updatedAt) || 0 : 0;
+    return ta - tb;
+  });
+
+  let deletedAiSessions: Record<string, string> = {};
+  for (const snap of ordered) {
+    deletedAiSessions = mergeDeletedAiSessionsMap(deletedAiSessions, snap.deletedAiSessions);
+  }
+
+  const acc: any = {
+    deletedAiSessions,
+    aiChatSessions: [],
+    readerChats: {},
+    peerConversations: [],
+    peerMessages: {},
+    unlockedBooks: [],
+    bookmarks: [],
+    profileSnapshot: {},
+    readingProgress: {},
+  };
+
+  for (const snap of ordered) {
+    if (Array.isArray(snap.aiChatSessions)) {
+      acc.aiChatSessions = serverMergeAiChatSessions(acc.aiChatSessions, snap.aiChatSessions, deletedAiSessions);
+    }
+    if (snap.activeAiSessionId) {
+      acc.activeAiSessionId = snap.activeAiSessionId;
+    }
+    if (snap.readerChats && typeof snap.readerChats === "object") {
+      acc.readerChats = serverMergeReaderChats(acc.readerChats, snap.readerChats);
+    }
+    if (Array.isArray(snap.peerConversations)) {
+      acc.peerConversations = serverMergeById(acc.peerConversations, snap.peerConversations);
+    }
+    if (snap.peerMessages && typeof snap.peerMessages === "object") {
+      acc.peerMessages = serverMergePeerMessages(acc.peerMessages, snap.peerMessages);
+    }
+    if (Array.isArray(snap.unlockedBooks)) {
+      acc.unlockedBooks = serverMergeById(acc.unlockedBooks, snap.unlockedBooks);
+    }
+    if (Array.isArray(snap.bookmarks)) {
+      acc.bookmarks = serverMergeById(
+        acc.bookmarks,
+        snap.bookmarks,
+        (bm) => (bm?.bookId ? `${bm.bookId}::${bm.chapter || ""}` : "")
+      );
+    }
+    if (snap.profileSnapshot && typeof snap.profileSnapshot === "object") {
+      acc.profileSnapshot = { ...acc.profileSnapshot, ...snap.profileSnapshot };
+    }
+    if (snap.readingProgress && typeof snap.readingProgress === "object") {
+      for (const [bookId, pct] of Object.entries(snap.readingProgress)) {
+        const val = Number(pct);
+        if (Number.isFinite(val)) {
+          acc.readingProgress[bookId] = Math.max(Number(acc.readingProgress[bookId] || 0), val);
+        }
+      }
+    }
+    if (snap.dailyGoal && typeof snap.dailyGoal === "object") {
+      acc.dailyGoal = snap.dailyGoal;
+    }
+    if (snap.updatedAt) {
+      acc.updatedAt = snap.updatedAt;
+    }
+  }
+
+  return acc;
+}
+
 async function readServerUserSync(userId: string, sb?: SupabaseClient | null): Promise<any> {
   const safeId = getSafeUserSyncId(userId);
   if (!safeId) return {};
@@ -192,6 +464,18 @@ async function readServerUserSync(userId: string, sb?: SupabaseClient | null): P
         if (parsed && typeof parsed === "object") candidates.push(parsed);
       }
     } catch (_) {}
+
+    try {
+      const { data: lpData, error: lpErr } = await sb
+        .from("learning_paths")
+        .select("steps, updated_at")
+        .eq("user_id", userId)
+        .eq("title", "__edu_account_sync__")
+        .maybeSingle();
+      if (!lpErr && lpData?.steps && typeof lpData.steps === "object" && !Array.isArray(lpData.steps)) {
+        candidates.push({ ...lpData.steps, updatedAt: lpData.steps.updatedAt || lpData.updated_at });
+      }
+    } catch (_) {}
   }
 
   const s3 = getS3Client();
@@ -207,21 +491,7 @@ async function readServerUserSync(userId: string, sb?: SupabaseClient | null): P
     } catch (_) {}
   }
 
-  if (candidates.length === 0) return {};
-  candidates.sort((a, b) => {
-    const ta = a?.updatedAt ? Date.parse(a.updatedAt) || 0 : 0;
-    const tb = b?.updatedAt ? Date.parse(b.updatedAt) || 0 : 0;
-    return tb - ta;
-  });
-
-  // Merge top candidates so no field is accidentally dropped
-  const merged: any = {};
-  for (let i = candidates.length - 1; i >= 0; i--) {
-    const c = candidates[i];
-    if (!c || typeof c !== "object") continue;
-    Object.assign(merged, c);
-  }
-  return merged;
+  return mergeSyncSnapshots(candidates);
 }
 
 async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClient | null): Promise<any> {
@@ -230,27 +500,14 @@ async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClie
   const existing = await readServerUserSync(userId, sb);
   const nowIso = new Date().toISOString();
 
-  const nextState: any = {
-    ...existing,
-    ...patch,
-    profileSnapshot: {
-      ...(existing.profileSnapshot || {}),
-      ...(patch.profileSnapshot || {}),
+  const nextState = mergeSyncSnapshots([
+    existing,
+    {
+      ...patch,
+      updatedAt: nowIso,
     },
-    readerChats: {
-      ...(existing.readerChats || {}),
-      ...(patch.readerChats || {}),
-    },
-    peerMessages: {
-      ...(existing.peerMessages || {}),
-      ...(patch.peerMessages || {}),
-    },
-    readingProgress: {
-      ...(existing.readingProgress || {}),
-      ...(patch.readingProgress || {}),
-    },
-    updatedAt: nowIso,
-  };
+  ]);
+  nextState.updatedAt = nowIso;
 
   const localPath = path.join(USER_SYNC_DIR, `${safeId}.json`);
   try {
@@ -262,7 +519,7 @@ async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClie
 
   if (sb) {
     try {
-      await sb.from("user_account_sync").upsert(
+      const { error: tblErr } = await sb.from("user_account_sync").upsert(
         {
           user_id: userId,
           ai_chat_sessions: nextState.aiChatSessions || [],
@@ -276,15 +533,45 @@ async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClie
         },
         { onConflict: "user_id" }
       );
+      if (tblErr && !String(tblErr.message || "").includes("schema cache")) {
+        console.warn("[AccountSync] user_account_sync upsert notice:", tblErr.message);
+      }
     } catch (_) {}
 
     try {
-      await sb.storage
+      const { error: stErr } = await sb.storage
         .from("workspace-files")
         .upload(`${userId}/account-sync.json`, Buffer.from(JSON.stringify(nextState), "utf-8"), {
           contentType: "application/json",
           upsert: true,
         });
+      if (stErr) {
+        console.warn("[AccountSync] workspace-files upload notice:", stErr.message);
+      }
+    } catch (_) {}
+
+    try {
+      const { data: existingLp } = await sb
+        .from("learning_paths")
+        .select("id")
+        .eq("user_id", userId)
+        .eq("title", "__edu_account_sync__")
+        .maybeSingle();
+      if (existingLp?.id) {
+        await sb
+          .from("learning_paths")
+          .update({ steps: nextState, updated_at: nowIso })
+          .eq("id", existingLp.id);
+      } else {
+        await sb.from("learning_paths").insert({
+          user_id: userId,
+          title: "__edu_account_sync__",
+          plan_mode: "roadmap",
+          steps: nextState,
+          is_active: false,
+          updated_at: nowIso,
+        });
+      }
     } catch (_) {}
   }
 

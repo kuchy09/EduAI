@@ -988,6 +988,22 @@ export default function App() {
 
     syncUserData();
 
+    // Re-hydrate on tab focus or returning from background (throttled >= 8s) so PC and Phone stay in live sync
+    let lastRefreshAt = Date.now();
+    const refreshOnResume = () => {
+      const now = Date.now();
+      if (now - lastRefreshAt < 8000) return;
+      lastRefreshAt = now;
+      void syncUserData();
+    };
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshOnResume();
+      }
+    };
+    window.addEventListener('focus', refreshOnResume);
+    document.addEventListener('visibilitychange', handleVisibility);
+
     // 2. Realtime WebSocket subscriptions via Supabase Channels
     const cleanupSubscriptions = setupHomeRealtimeSubscriptions(userId, {
       onProgressChange: (bookId, progress) => {
@@ -1019,6 +1035,8 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      window.removeEventListener('focus', refreshOnResume);
+      document.removeEventListener('visibilitychange', handleVisibility);
       cleanupSubscriptions();
     };
   }, [session?.user?.id, session?.access_token, loadUnifiedCatalog]);
@@ -1348,7 +1366,8 @@ export default function App() {
                     {currentView === 'learning-path' && <LearningPath user={session?.user} profile={profile} />}
                     {currentView === 'ai-tutor' && (
                       <AiTutor 
-                        user={session?.user} 
+                        user={session?.user}
+                        profile={profile}
                         isSidebarOpen={isSageSidebarOpen}
                         onToggleSidebar={() => setIsSageSidebarOpen(prev => !prev)}
                         onSidebarStateChange={(open) => setIsSageSidebarOpen(open)}
