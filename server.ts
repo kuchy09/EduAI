@@ -148,6 +148,99 @@ function getSafeUserSyncId(userId: string): string {
   return String(userId || "").replace(/[^a-zA-Z0-9_-]/g, "");
 }
 
+const SYNC_WORKSPACE_FILE_NAME = "__edu_account_sync__.json";
+const SYNC_WORKSPACE_FILE_TYPE = "application/vnd.eduai.sync+json";
+
+function computeServerSyncDigest(snap: any): string {
+  if (!snap || typeof snap !== "object") return "{}";
+  const safeSessions = (Array.isArray(snap.aiChatSessions) ? snap.aiChatSessions : []).map((s: any) => ({
+    id: s?.id || "",
+    title: s?.title || "",
+    msgs: (Array.isArray(s?.messages) ? s.messages : []).map(
+      (m: any) => `${m?.id || ""}:${String(m?.content || "").length}`
+    ),
+  }));
+  const delKeys = Object.entries(snap.deletedAiSessions || {}).sort(([a], [b]) => a.localeCompare(b));
+  const readerKeys = Object.keys(snap.readerChats || {})
+    .sort()
+    .map((k) => [k, Array.isArray(snap.readerChats[k]) ? snap.readerChats[k].length : 0]);
+  const peerConvs = (Array.isArray(snap.peerConversations) ? snap.peerConversations : [])
+    .map((c: any) => c?.id || "")
+    .sort();
+  const peerMsgCounts = Object.keys(snap.peerMessages || {})
+    .sort()
+    .map((k) => [k, Array.isArray(snap.peerMessages[k]) ? snap.peerMessages[k].length : 0]);
+  const bookIds = (Array.isArray(snap.unlockedBooks) ? snap.unlockedBooks : [])
+    .map((b: any) => b?.id || "")
+    .sort();
+  const bmKeys = (Array.isArray(snap.bookmarks) ? snap.bookmarks : [])
+    .map((bm: any) => `${bm?.bookId || ""}::${bm?.chapter || ""}`)
+    .sort();
+  const profKeys = Object.keys(snap.profileSnapshot || {})
+    .filter((k) => k !== "updated_at")
+    .sort()
+    .map((k) => [k, snap.profileSnapshot[k]]);
+  return JSON.stringify({
+    s: safeSessions,
+    d: delKeys,
+    a: snap.activeAiSessionId || "",
+    r: readerKeys,
+    pc: peerConvs,
+    pm: peerMsgCounts,
+    bk: bookIds,
+    bm: bmKeys,
+    pr: profKeys,
+    dg: snap.dailyGoal || null,
+  });
+}
+
+function hasMeaningfulSyncState(snap: any): boolean {
+  if (!snap || typeof snap !== "object") return false;
+  const aiMeaningful =
+    Array.isArray(snap.aiChatSessions) && snap.aiChatSessions.some((s: any) => !isTrivialDefaultAiSession(s));
+  const hasDeleted = snap.deletedAiSessions && Object.keys(snap.deletedAiSessions).length > 0;
+  const hasReader = snap.readerChats && Object.keys(snap.readerChats).length > 0;
+  const hasPeer =
+    (Array.isArray(snap.peerConversations) && snap.peerConversations.length > 0) ||
+    (snap.peerMessages && Object.keys(snap.peerMessages).length > 0);
+  const hasBooks = Array.isArray(snap.unlockedBooks) && snap.unlockedBooks.length > 0;
+  const hasBookmarks = Array.isArray(snap.bookmarks) && snap.bookmarks.length > 0;
+  const hasProfile = snap.profileSnapshot && Object.keys(snap.profileSnapshot).length > 0;
+  const hasGoal = Boolean(snap.dailyGoal);
+  return Boolean(
+    aiMeaningful || hasDeleted || hasReader || hasPeer || hasBooks || hasBookmarks || hasProfile || hasGoal
+  );
+}
+
+async function mirrorStateToWorkspaceFiles(
+  userId: string,
+  nextState: any,
+  sb: SupabaseClient
+): Promise<void> {
+  try {
+    const { data: existingRows, error: selErr } = await sb
+      .from("workspace_files")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("type", SYNC_WORKSPACE_FILE_TYPE);
+    if (selErr) return;
+
+    const oldIds = Array.isArray(existingRows) ? existingRows.map((r: any) => r?.id).filter(Boolean) : [];
+    const serialized = JSON.stringify(nextState);
+    const { error: insErr } = await sb.from("workspace_files").insert({
+      user_id: userId,
+      name: SYNC_WORKSPACE_FILE_NAME,
+      type: SYNC_WORKSPACE_FILE_TYPE,
+      size: Buffer.byteLength(serialized, "utf8"),
+      s3_key: serialized,
+    });
+
+    if (!insErr && oldIds.length > 0) {
+      await sb.from("workspace_files").delete().eq("user_id", userId).in("id", oldIds);
+    }
+  } catch (_) {}
+}
+
 function isTrivialDefaultAiSession(session: any): boolean {
   return Boolean(
     session &&
@@ -420,11 +513,16 @@ function mergeSyncSnapshots(snapshots: any[]): any {
   return acc;
 }
 
-async function readServerUserSync(userId: string, sb?: SupabaseClient | null): Promise<any> {
+async function readServerUserSyncWithMeta(
+  userId: string,
+  sb?: SupabaseClient | null
+): Promise<{ state: any; wfRowCount: number; wfDigest: string; mergedDigest: string }> {
   const safeId = getSafeUserSyncId(userId);
-  if (!safeId) return {};
+  if (!safeId) return { state: {}, wfRowCount: 0, wfDigest: "{}", mergedDigest: "{}" };
   const localPath = path.join(USER_SYNC_DIR, `${safeId}.json`);
   const candidates: any[] = [];
+  const wfCandidates: any[] = [];
+  let wfRowCount = 0;
 
   try {
     if (fs.existsSync(localPath)) {
@@ -434,6 +532,32 @@ async function readServerUserSync(userId: string, sb?: SupabaseClient | null): P
   } catch (_) {}
 
   if (sb) {
+    // 1. Live Postgres 'workspace_files' table (available in both AI Studio & Vercel)
+    try {
+      const { data: wfRows, error: wfErr } = await sb
+        .from("workspace_files")
+        .select("id, s3_key, created_at")
+        .eq("user_id", userId)
+        .eq("type", SYNC_WORKSPACE_FILE_TYPE)
+        .order("created_at", { ascending: false })
+        .limit(5);
+      if (!wfErr && Array.isArray(wfRows)) {
+        wfRowCount = wfRows.length;
+        for (const row of wfRows) {
+          if (!row?.s3_key || typeof row.s3_key !== "string") continue;
+          try {
+            const parsed = JSON.parse(row.s3_key);
+            if (parsed && typeof parsed === "object") {
+              const snap = { ...parsed, updatedAt: parsed.updatedAt || row.created_at };
+              candidates.push(snap);
+              wfCandidates.push(snap);
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    // 2. Optional user_account_sync table
     try {
       const { data, error } = await sb
         .from("user_account_sync")
@@ -454,6 +578,7 @@ async function readServerUserSync(userId: string, sb?: SupabaseClient | null): P
       }
     } catch (_) {}
 
+    // 3. Optional Supabase Storage bucket
     try {
       const { data: blobData, error: storageErr } = await sb.storage
         .from("workspace-files")
@@ -465,6 +590,7 @@ async function readServerUserSync(userId: string, sb?: SupabaseClient | null): P
       }
     } catch (_) {}
 
+    // 4. Optional learning_paths fallback table
     try {
       const { data: lpData, error: lpErr } = await sb
         .from("learning_paths")
@@ -491,7 +617,19 @@ async function readServerUserSync(userId: string, sb?: SupabaseClient | null): P
     } catch (_) {}
   }
 
-  return mergeSyncSnapshots(candidates);
+  const state = mergeSyncSnapshots(candidates);
+  const wfState = wfCandidates.length > 0 ? mergeSyncSnapshots(wfCandidates) : {};
+  return {
+    state,
+    wfRowCount,
+    wfDigest: computeServerSyncDigest(wfState),
+    mergedDigest: computeServerSyncDigest(state),
+  };
+}
+
+async function readServerUserSync(userId: string, sb?: SupabaseClient | null): Promise<any> {
+  const { state } = await readServerUserSyncWithMeta(userId, sb);
+  return state;
 }
 
 async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClient | null): Promise<any> {
@@ -518,6 +656,10 @@ async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClie
   }
 
   if (sb) {
+    // 1. Primary live Postgres persistence via workspace_files table (insert-then-delete old rows)
+    await mirrorStateToWorkspaceFiles(userId, nextState, sb);
+
+    // 2. Optional user_account_sync table
     try {
       const { error: tblErr } = await sb.from("user_account_sync").upsert(
         {
@@ -533,44 +675,49 @@ async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClie
         },
         { onConflict: "user_id" }
       );
-      if (tblErr && !String(tblErr.message || "").includes("schema cache")) {
+      if (
+        tblErr &&
+        !String(tblErr.message || "").includes("schema cache") &&
+        !String(tblErr.message || "").includes("does not exist")
+      ) {
         console.warn("[AccountSync] user_account_sync upsert notice:", tblErr.message);
       }
     } catch (_) {}
 
+    // 3. Optional Supabase Storage bucket
     try {
-      const { error: stErr } = await sb.storage
+      await sb.storage
         .from("workspace-files")
         .upload(`${userId}/account-sync.json`, Buffer.from(JSON.stringify(nextState), "utf-8"), {
           contentType: "application/json",
           upsert: true,
         });
-      if (stErr) {
-        console.warn("[AccountSync] workspace-files upload notice:", stErr.message);
-      }
     } catch (_) {}
 
+    // 4. Optional learning_paths fallback
     try {
-      const { data: existingLp } = await sb
+      const { data: existingLp, error: lpSelErr } = await sb
         .from("learning_paths")
         .select("id")
         .eq("user_id", userId)
         .eq("title", "__edu_account_sync__")
         .maybeSingle();
-      if (existingLp?.id) {
-        await sb
-          .from("learning_paths")
-          .update({ steps: nextState, updated_at: nowIso })
-          .eq("id", existingLp.id);
-      } else {
-        await sb.from("learning_paths").insert({
-          user_id: userId,
-          title: "__edu_account_sync__",
-          plan_mode: "roadmap",
-          steps: nextState,
-          is_active: false,
-          updated_at: nowIso,
-        });
+      if (!lpSelErr) {
+        if (existingLp?.id) {
+          await sb
+            .from("learning_paths")
+            .update({ steps: nextState, updated_at: nowIso })
+            .eq("id", existingLp.id);
+        } else {
+          await sb.from("learning_paths").insert({
+            user_id: userId,
+            title: "__edu_account_sync__",
+            plan_mode: "roadmap",
+            steps: nextState,
+            is_active: false,
+            updated_at: nowIso,
+          });
+        }
       }
     } catch (_) {}
   }
@@ -1540,7 +1687,16 @@ app.get("/api/account/sync", async (req, res) => {
     }
 
     const userId = userData.user.id;
-    const syncState = await readServerUserSync(userId, sb);
+    const {
+      state: syncState,
+      wfRowCount,
+      wfDigest,
+      mergedDigest,
+    } = await readServerUserSyncWithMeta(userId, sb);
+
+    if (hasMeaningfulSyncState(syncState) && (wfRowCount === 0 || wfRowCount > 1 || wfDigest !== mergedDigest)) {
+      await mirrorStateToWorkspaceFiles(userId, syncState, sb);
+    }
 
     let profile: any = null;
     try {

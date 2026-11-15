@@ -5,6 +5,8 @@ import { saveDailyGoal, DailyReadingGoal } from './readingGoal';
 import { Book, Bookmark } from '../types';
 
 export const ACCOUNT_SYNC_EVENT = 'edu-account-sync-updated';
+export const SYNC_WORKSPACE_FILE_NAME = '__edu_account_sync__.json';
+export const SYNC_WORKSPACE_FILE_TYPE = 'application/vnd.eduai.sync+json';
 
 export interface AccountSyncPayload {
   aiChatSessions?: any[];
@@ -518,6 +520,32 @@ async function fetchDirectSupabaseSyncCandidates(
         }
       } catch (_) {}
     })(),
+    // workspace_files Postgres table (shared across AI Studio & Vercel)
+    (async () => {
+      try {
+        const { data: wfRows, error } = await client
+          .from('workspace_files')
+          .select('id, s3_key, created_at')
+          .eq('user_id', userId)
+          .eq('type', SYNC_WORKSPACE_FILE_TYPE)
+          .order('created_at', { ascending: false })
+          .limit(5);
+        if (!error && Array.isArray(wfRows)) {
+          for (const row of wfRows) {
+            if (!row?.s3_key || typeof row.s3_key !== 'string') continue;
+            try {
+              const parsed = JSON.parse(row.s3_key);
+              if (parsed && typeof parsed === 'object') {
+                candidates.push({
+                  ...parsed,
+                  updatedAt: parsed.updatedAt || row.created_at,
+                });
+              }
+            } catch (_) {}
+          }
+        }
+      } catch (_) {}
+    })(),
     // user_account_sync table
     (async () => {
       try {
@@ -540,7 +568,7 @@ async function fetchDirectSupabaseSyncCandidates(
         }
       } catch (_) {}
     })(),
-    // workspace-files storage bucket (works even without user_account_sync migration & across Dev/Shared containers)
+    // workspace-files storage bucket
     (async () => {
       try {
         const { data: blobData, error } = await client.storage
@@ -555,7 +583,7 @@ async function fetchDirectSupabaseSyncCandidates(
         }
       } catch (_) {}
     })(),
-    // learning_paths hidden sync snapshot fallback (pre-existing table in 20261026 migration)
+    // learning_paths hidden sync snapshot fallback
     (async () => {
       try {
         const { data, error } = await client
@@ -629,7 +657,44 @@ async function flushAccountSyncPatch(userId: string, explicitToken?: string): Pr
 
         const writeTasks: Promise<any>[] = [];
 
-        // 1. Upload full sync JSON to Supabase Storage workspace-files bucket (persists deletedAiSessions & full state across containers)
+        // 0. Persist full sync snapshot into live 'workspace_files' Postgres table (insert-then-delete old rows)
+        writeTasks.push(
+          (async () => {
+            try {
+              const { data: existingRows, error: selErr } = await client
+                .from('workspace_files')
+                .select('id')
+                .eq('user_id', userId)
+                .eq('type', SYNC_WORKSPACE_FILE_TYPE);
+              if (selErr) return;
+
+              const oldIds = Array.isArray(existingRows)
+                ? existingRows.map((r: any) => r?.id).filter(Boolean)
+                : [];
+
+              const serialized = JSON.stringify(mergedSnapshot);
+              const byteSize = typeof Blob !== 'undefined' ? new Blob([serialized]).size : serialized.length;
+
+              const { error: insErr } = await client.from('workspace_files').insert({
+                user_id: userId,
+                name: SYNC_WORKSPACE_FILE_NAME,
+                type: SYNC_WORKSPACE_FILE_TYPE,
+                size: byteSize,
+                s3_key: serialized,
+              });
+
+              if (!insErr && oldIds.length > 0) {
+                await client
+                  .from('workspace_files')
+                  .delete()
+                  .eq('user_id', userId)
+                  .in('id', oldIds);
+              }
+            } catch (_) {}
+          })()
+        );
+
+        // 1. Optional Supabase Storage workspace-files bucket
         if (typeof Blob !== 'undefined') {
           const blob = new Blob([JSON.stringify(mergedSnapshot)], { type: 'application/json' });
           writeTasks.push(
@@ -639,11 +704,7 @@ async function flushAccountSyncPatch(userId: string, explicitToken?: string): Pr
                 contentType: 'application/json',
                 upsert: true,
               })
-              .then(({ error }) => {
-                if (error) {
-                  console.warn('[accountSyncService] workspace-files upload notice:', error.message);
-                }
-              })
+              .then(() => undefined)
           );
         }
 
@@ -1059,6 +1120,8 @@ export function clearAccountLocalCaches(userId?: string): void {
       'sage_ai_last_active',
       'sage_ai_last_active_guest',
       'sage_ai_deleted_guest',
+      'workspace_files_local',
+      'workspace_folders_local',
     ];
     sharedKeys.forEach((k) => safeStorage.removeItem(k));
 

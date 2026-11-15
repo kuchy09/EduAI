@@ -250,13 +250,17 @@ export async function uploadAndSyncUserAvatar(
     }
   } catch (_) {}
 
-  if (!permanentUrl && serverKey) {
-    permanentUrl = `/api/download?key=${encodeURIComponent(serverKey)}&inline=true`;
-  }
-
-  // 3. Final fallback: compact compressed thumbnail so even offline/ephemeral setups sync cleanly
+  // 3. When Supabase 'avatars' bucket isn't available, prefer a portable compressed JPEG data URL
+  // so avatars render identically across AI Studio containers, Vercel, Chrome, and mobile devices.
   if (!permanentUrl) {
-    permanentUrl = (await compressImageToDataUrl(file, 256)) || previewDataUrl || null;
+    const compactDataUrl = await compressImageToDataUrl(file, 256);
+    if (compactDataUrl) {
+      permanentUrl = compactDataUrl;
+    } else if (serverKey) {
+      permanentUrl = `/api/download?key=${encodeURIComponent(serverKey)}&inline=true`;
+    } else {
+      permanentUrl = previewDataUrl || null;
+    }
   }
 
   if (permanentUrl && userId) {

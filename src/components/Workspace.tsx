@@ -54,14 +54,26 @@ export function Workspace() {
     fetchData();
   }, []);
 
+  const isInternalSyncFile = (f: any) =>
+    !f || f.type === 'application/vnd.eduai.sync+json' || f.name === '__edu_account_sync__.json';
+
   const fetchData = async () => {
     try {
       setLoading(true);
       const localFiles = localStorage.getItem('workspace_files_local');
       const localFolders = localStorage.getItem('workspace_folders_local');
+      const parseVisibleFiles = (raw: string | null) => {
+        if (!raw) return [];
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed.filter((f) => !isInternalSyncFile(f)) : [];
+        } catch {
+          return [];
+        }
+      };
 
       if (!supabase) {
-        if (localFiles) setFiles(JSON.parse(localFiles));
+        if (localFiles) setFiles(parseVisibleFiles(localFiles));
         if (localFolders) setFolders(JSON.parse(localFolders));
         return;
       }
@@ -71,29 +83,35 @@ export function Workspace() {
         if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
           clearStaleSupabaseTokens();
         }
-        if (localFiles) setFiles(JSON.parse(localFiles));
+        if (localFiles) setFiles(parseVisibleFiles(localFiles));
         if (localFolders) setFolders(JSON.parse(localFolders));
         return;
       }
       const user = res?.data?.user;
       if (!user) {
-        if (localFiles) setFiles(JSON.parse(localFiles));
+        if (localFiles) setFiles(parseVisibleFiles(localFiles));
         if (localFolders) setFolders(JSON.parse(localFolders));
         return;
       }
 
       const [filesData, foldersData] = await Promise.all([
-        supabase.from('workspace_files').select('*').eq('user_id', user.id).order('created_at', { ascending: false }),
+        supabase
+          .from('workspace_files')
+          .select('*')
+          .eq('user_id', user.id)
+          .neq('type', 'application/vnd.eduai.sync+json')
+          .order('created_at', { ascending: false }),
         supabase.from('workspace_folders').select('*').eq('user_id', user.id).order('created_at', { ascending: false })
       ]);
 
       if (filesData.error) {
         if (localFiles) {
-          setFiles(JSON.parse(localFiles));
+          setFiles(parseVisibleFiles(localFiles));
         }
       } else if (filesData.data) {
-        setFiles(filesData.data);
-        localStorage.setItem('workspace_files_local', JSON.stringify(filesData.data));
+        const visibleFiles = filesData.data.filter((f: any) => !isInternalSyncFile(f));
+        setFiles(visibleFiles);
+        localStorage.setItem('workspace_files_local', JSON.stringify(visibleFiles));
       }
 
       if (foldersData.error) {
@@ -107,7 +125,12 @@ export function Workspace() {
     } catch (err) {
       console.warn('Workspace fetch notice:', err);
       const localFiles = localStorage.getItem('workspace_files_local');
-      if (localFiles) setFiles(JSON.parse(localFiles));
+      if (localFiles) {
+        try {
+          const parsed = JSON.parse(localFiles);
+          if (Array.isArray(parsed)) setFiles(parsed.filter((f) => !isInternalSyncFile(f)));
+        } catch (_) {}
+      }
     } finally {
       setLoading(false);
     }
