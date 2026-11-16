@@ -18,12 +18,13 @@ import {
   COLLEGE_SUBJECTS_MAP,
   saveStoredAcademicPrefs,
 } from '../lib/bookPersonalization';
-import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2, ShieldAlert, Eye, EyeOff, X, ShieldCheck, FileText, Scale } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 type AuthMode = 'email' | 'phone';
 type AuthState = 'sign_in' | 'sign_up' | 'verify_otp';
 type OAuthProviderType = 'google' | 'apple' | 'github';
+type LegalDocumentType = 'privacy' | 'terms' | 'policies';
 
 interface AuthProps {
   onLoginSuccess?: (session: any, profile?: any) => void;
@@ -43,6 +44,9 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
   // Form states
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [acceptedPolicies, setAcceptedPolicies] = useState(false);
+  const [activeLegalDoc, setActiveLegalDoc] = useState<LegalDocumentType | null>(null);
   const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
 
@@ -87,6 +91,17 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
       mounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!activeLegalDoc) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveLegalDoc(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [activeLegalDoc]);
 
   useEffect(() => {
     const handleOAuthMessage = async (event: MessageEvent) => {
@@ -320,6 +335,10 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           return setError('Password must be at least 6 characters long');
         }
 
+        if (!acceptedPolicies) {
+          return setError('Please review and accept the Privacy Policy, Terms of Service, and Platform Policies to create your account.');
+        }
+
         const subjectsJoined = subjects.join(', ');
         const metadata = {
           full_name: fullName.trim(),
@@ -533,7 +552,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
             <div className="grid grid-cols-2 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl mt-5">
               <button
                 type="button"
-                onClick={() => { setState('sign_in'); setError(null); setInfoMessage(null); }}
+                onClick={() => { setState('sign_in'); setShowPassword(false); setError(null); setInfoMessage(null); }}
                 className={`py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
                   state === 'sign_in'
                     ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
@@ -544,7 +563,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
               </button>
               <button
                 type="button"
-                onClick={() => { setMode('email'); setState('sign_up'); setError(null); setInfoMessage(null); }}
+                onClick={() => { setMode('email'); setState('sign_up'); setShowPassword(false); setError(null); setInfoMessage(null); }}
                 className={`py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
                   state === 'sign_up'
                     ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
@@ -819,19 +838,75 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Password</label>
+                    <label htmlFor="auth-password-input" className="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Password</label>
                     <div className="relative">
-                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400" />
+                      <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-400 pointer-events-none" />
                       <input
-                        type="password"
+                        id="auth-password-input"
+                        type={showPassword ? 'text' : 'password'}
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
-                        className="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
-                        placeholder="••••••••"
+                        autoComplete={state === 'sign_up' ? 'new-password' : 'current-password'}
+                        className="w-full pl-10 pr-11 py-2.5 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-xl focus:outline-none focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 transition-all font-medium text-slate-900 dark:text-white placeholder:text-slate-400"
+                        placeholder={showPassword ? 'Enter your password' : '••••••••'}
                         required
                       />
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword((prev) => !prev)}
+                        aria-label={showPassword ? 'Hide password' : 'Show password'}
+                        aria-pressed={showPassword}
+                        title={showPassword ? 'Hide password' : 'Show password'}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 flex items-center justify-center rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500/40 transition-colors cursor-pointer"
+                      >
+                        {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
                     </div>
                   </div>
+                  {state === 'sign_up' && (
+                    <div className="pt-1">
+                      <label className="flex items-start gap-2.5 text-xs text-slate-600 dark:text-slate-300 leading-relaxed cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={acceptedPolicies}
+                          onChange={(e) => {
+                            setAcceptedPolicies(e.target.checked);
+                            if (e.target.checked && error?.includes('Privacy Policy')) {
+                              setError(null);
+                            }
+                          }}
+                          className="mt-0.5 w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-brand-600 focus:ring-brand-500/30 shrink-0 cursor-pointer"
+                        />
+                        <span>
+                          I have read and agree to Edu AI&apos;s{' '}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); setActiveLegalDoc('privacy'); }}
+                            className="text-brand-600 dark:text-brand-400 hover:underline font-semibold cursor-pointer"
+                          >
+                            Privacy Policy
+                          </button>
+                          ,{' '}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); setActiveLegalDoc('terms'); }}
+                            className="text-brand-600 dark:text-brand-400 hover:underline font-semibold cursor-pointer"
+                          >
+                            Terms of Service
+                          </button>
+                          , and{' '}
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); setActiveLegalDoc('policies'); }}
+                            className="text-brand-600 dark:text-brand-400 hover:underline font-semibold cursor-pointer"
+                          >
+                            Platform Policies
+                          </button>
+                          .
+                        </span>
+                      </label>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <>
@@ -893,6 +968,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
                   type="button"
                   onClick={() => {
                     setState(state === 'sign_in' ? 'sign_up' : 'sign_in');
+                    setShowPassword(false);
                     setError(null);
                     setInfoMessage(null);
                   }}
@@ -916,6 +992,36 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
             </div>
           )}
 
+          {/* Privacy, Terms & Platform Policies footer links */}
+          <div className="mt-6 pt-5 border-t border-slate-100 dark:border-white/10 text-center">
+            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
+              By signing in or creating an account, you agree to our{' '}
+              <button
+                type="button"
+                onClick={() => setActiveLegalDoc('privacy')}
+                className="text-slate-700 dark:text-slate-200 hover:text-brand-600 dark:hover:text-brand-400 underline underline-offset-2 font-medium transition-colors cursor-pointer"
+              >
+                Privacy Policy
+              </button>
+              <span aria-hidden="true"> · </span>
+              <button
+                type="button"
+                onClick={() => setActiveLegalDoc('terms')}
+                className="text-slate-700 dark:text-slate-200 hover:text-brand-600 dark:hover:text-brand-400 underline underline-offset-2 font-medium transition-colors cursor-pointer"
+              >
+                Terms of Service
+              </button>
+              <span aria-hidden="true"> · </span>
+              <button
+                type="button"
+                onClick={() => setActiveLegalDoc('policies')}
+                className="text-slate-700 dark:text-slate-200 hover:text-brand-600 dark:hover:text-brand-400 underline underline-offset-2 font-medium transition-colors cursor-pointer"
+              >
+                Platform &amp; AI Policies
+              </button>
+            </p>
+          </div>
+
           {!supabase && !authReady && (
             <div className="mt-8 p-4 bg-amber-50 dark:bg-amber-950/40 rounded-xl border border-amber-200 dark:border-amber-800/60">
               <h4 className="text-amber-800 dark:text-amber-300 font-semibold text-sm mb-1">Supabase Configuration Needed</h4>
@@ -926,6 +1032,193 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           )}
         </div>
       </motion.div>
+
+      {/* Privacy, Terms & Policies Reader Modal */}
+      <AnimatePresence>
+        {activeLegalDoc && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.16 }}
+            onClick={() => setActiveLegalDoc(null)}
+            className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="auth-legal-modal-title"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.97, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97, y: 8 }}
+              transition={{ duration: 0.16 }}
+              onClick={(e) => e.stopPropagation()}
+              className="w-full max-w-2xl max-h-[85vh] bg-white dark:bg-[#1A1A1A] border border-slate-200 dark:border-white/10 rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+            >
+              <div className="px-6 py-4 border-b border-slate-100 dark:border-white/10 flex items-center justify-between gap-4">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-9 h-9 rounded-xl bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 flex items-center justify-center shrink-0">
+                    {activeLegalDoc === 'privacy' && <ShieldCheck className="w-5 h-5" />}
+                    {activeLegalDoc === 'terms' && <FileText className="w-5 h-5" />}
+                    {activeLegalDoc === 'policies' && <Scale className="w-5 h-5" />}
+                  </div>
+                  <div className="min-w-0">
+                    <h3 id="auth-legal-modal-title" className="text-base font-display font-bold text-slate-900 dark:text-white truncate">
+                      {activeLegalDoc === 'privacy'
+                        ? 'Privacy Policy'
+                        : activeLegalDoc === 'terms'
+                        ? 'Terms of Service'
+                        : 'Platform & AI Policies'}
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Edu AI · Last updated November 2026
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveLegalDoc(null)}
+                  aria-label="Close document"
+                  className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-white/10 transition-colors cursor-pointer shrink-0"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Document switcher tabs */}
+              <div className="px-6 pt-3 pb-2 border-b border-slate-100 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] flex items-center gap-1.5 overflow-x-auto">
+                <button
+                  type="button"
+                  onClick={() => setActiveLegalDoc('privacy')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    activeLegalDoc === 'privacy'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/80 dark:border-white/10'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Privacy Policy
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveLegalDoc('terms')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    activeLegalDoc === 'terms'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/80 dark:border-white/10'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Terms of Service
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveLegalDoc('policies')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
+                    activeLegalDoc === 'policies'
+                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm border border-slate-200/80 dark:border-white/10'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                  }`}
+                >
+                  Platform &amp; AI Policies
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto space-y-5 text-sm text-slate-600 dark:text-slate-300 leading-relaxed">
+                {activeLegalDoc === 'privacy' && (
+                  <>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">1. Information We Collect</h4>
+                      <p>
+                        We collect account credentials (email address, phone number, or federated sign-in identifier), your academic preferences (name, role, country, education level, curriculum, and selected subjects), and study activity created within Edu AI (Sage AI conversations, textbook bookmarks, reading progress, workspace notes, and peer study messages).
+                      </p>
+                    </section>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">2. How We Use Your Data</h4>
+                      <p>
+                        Your data is used strictly to deliver personalized curriculum study material, preserve your Sage AI tutoring history, synchronize your profile, library, and progress across signed-in devices, and safeguard account integrity. We never sell student personal information to third-party advertisers.
+                      </p>
+                    </section>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">3. Security, Retention &amp; Controls</h4>
+                      <p>
+                        Sessions are authenticated with verified tokens and scoped per account so another user on the same device cannot access your private history. Signed-in sessions persist on your trusted device until you explicitly sign out, and you can adjust profile visibility or request account updates in Settings at any time.
+                      </p>
+                    </section>
+                  </>
+                )}
+
+                {activeLegalDoc === 'terms' && (
+                  <>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">1. Account Eligibility &amp; Responsibility</h4>
+                      <p>
+                        By creating an Edu AI account or signing in, you agree to provide accurate registration details and maintain the confidentiality of your password and verification codes. Learners under the applicable age of digital consent should use Edu AI with parent, guardian, or educator supervision.
+                      </p>
+                    </section>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">2. Content Ownership &amp; License</h4>
+                      <p>
+                        You retain full rights to your personal notes, uploaded workspace documents, and original study entries. Edu AI software, interactive study tools, and curated platform resources remain protected by intellectual property laws and are licensed solely for personal or classroom educational use.
+                      </p>
+                    </section>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">3. Educational Guidance Disclaimer</h4>
+                      <p>
+                        Edu AI and Sage AI provide tutoring explanations, summaries, and study practice to support your curriculum goals. Always verify critical exam specifications and graded coursework requirements with official syllabi and your instructors.
+                      </p>
+                    </section>
+                  </>
+                )}
+
+                {activeLegalDoc === 'policies' && (
+                  <>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">1. Academic Integrity &amp; AI Tutoring Policy</h4>
+                      <p>
+                        Sage AI is built to teach step-by-step understanding, worked examples, and conceptual clarity—not to facilitate cheating or unauthorized exam assistance. Users must honor their school or university honor codes when completing assessments.
+                      </p>
+                    </section>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">2. Community &amp; Peer Chat Conduct</h4>
+                      <p>
+                        Peer study rooms and community forums must remain respectful, constructive, and safe for learners of all ages. Harassment, hate speech, impersonation, spam, or uploading infringing or harmful materials is prohibited.
+                      </p>
+                    </section>
+                    <section className="space-y-1.5">
+                      <h4 className="font-semibold text-slate-900 dark:text-white">3. Security &amp; Fair Use Policy</h4>
+                      <p>
+                        Do not probe system endpoints, bypass authentication checks, scrape library content in bulk, or automate high-volume requests. Accounts violating platform safety or abuse policies may be restricted or suspended.
+                      </p>
+                    </section>
+                  </>
+                )}
+              </div>
+
+              <div className="px-6 py-4 border-t border-slate-100 dark:border-white/10 bg-slate-50/70 dark:bg-white/[0.02] flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={() => setActiveLegalDoc(null)}
+                  className="px-4 py-2 text-xs font-semibold rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  Close
+                </button>
+                {state === 'sign_up' && !acceptedPolicies && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAcceptedPolicies(true);
+                      if (error?.includes('Privacy Policy')) setError(null);
+                      setActiveLegalDoc(null);
+                    }}
+                    className="px-4 py-2 text-xs font-semibold rounded-xl bg-brand-600 hover:bg-brand-700 text-white transition-colors cursor-pointer"
+                  >
+                    Accept &amp; Continue
+                  </button>
+                )}
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
