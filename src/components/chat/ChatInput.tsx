@@ -13,6 +13,7 @@ interface ChatInputProps {
   disabledReason?: string;
   onSendFriendRequest?: () => void;
   onOpenSharedNotes?: () => void;
+  onTyping?: (isTyping: boolean) => void;
 }
 
 export const ChatInput: React.FC<ChatInputProps> = ({
@@ -20,7 +21,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   disabled = false,
   disabledReason,
   onSendFriendRequest,
-  onOpenSharedNotes
+  onOpenSharedNotes,
+  onTyping
 }) => {
   const [text, setText] = useState('');
   const [showAttachMenu, setShowAttachMenu] = useState(false);
@@ -39,6 +41,8 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const typingIdleTimerRef = useRef<any>(null);
+  const isTypingActiveRef = useRef(false);
 
   // Check Web Speech API support
   const isSpeechRecognitionSupported = typeof window !== 'undefined' && 
@@ -48,6 +52,11 @@ export const ChatInput: React.FC<ChatInputProps> = ({
   useEffect(() => {
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
+      if (typingIdleTimerRef.current) clearTimeout(typingIdleTimerRef.current);
+      if (isTypingActiveRef.current) {
+        onTyping?.(false);
+        isTypingActiveRef.current = false;
+      }
       if (recognitionRef.current) {
         try {
           recognitionRef.current.abort();
@@ -217,11 +226,39 @@ export const ChatInput: React.FC<ChatInputProps> = ({
     if (e) e.preventDefault();
     if ((!text.trim() && !activeAttachment) || disabled) return;
 
+    if (typingIdleTimerRef.current) clearTimeout(typingIdleTimerRef.current);
+    if (isTypingActiveRef.current) {
+      isTypingActiveRef.current = false;
+      onTyping?.(false);
+    }
+
     onSendMessage(text.trim(), activeAttachment || undefined);
     setText('');
     setActiveAttachment(null);
     setShowEmojiPicker(false);
     setShowAttachMenu(false);
+  };
+
+  const handleTextChange = (value: string) => {
+    setText(value);
+    if (!onTyping || disabled) return;
+    if (value.trim().length > 0) {
+      if (!isTypingActiveRef.current) {
+        isTypingActiveRef.current = true;
+        onTyping(true);
+      }
+      if (typingIdleTimerRef.current) clearTimeout(typingIdleTimerRef.current);
+      typingIdleTimerRef.current = setTimeout(() => {
+        if (isTypingActiveRef.current) {
+          isTypingActiveRef.current = false;
+          onTyping(false);
+        }
+      }, 2400);
+    } else if (isTypingActiveRef.current) {
+      isTypingActiveRef.current = false;
+      if (typingIdleTimerRef.current) clearTimeout(typingIdleTimerRef.current);
+      onTyping(false);
+    }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -505,7 +542,7 @@ export const ChatInput: React.FC<ChatInputProps> = ({
             <input
               type="text"
               value={text}
-              onChange={(e) => setText(e.target.value)}
+              onChange={(e) => handleTextChange(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="Message..."
               className="w-full px-3 sm:px-4 py-2 sm:py-2.5 bg-slate-100 dark:bg-slate-800 border border-transparent focus:border-indigo-500/50 focus:bg-white dark:focus:bg-slate-800/90 rounded-2xl text-xs sm:text-sm text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none transition-all shadow-inner"

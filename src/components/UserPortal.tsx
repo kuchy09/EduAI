@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { 
-  Search, Users, GraduationCap, BookOpen, School, 
-  UserPlus, UserCheck, Clock, Check, X, 
-  Sparkles, Filter, ShieldCheck, MapPin, Mail, 
-  MessageSquare, RefreshCw, Database, CheckCircle2,
-  AlertCircle, Edit3, Send, ChevronRight, UserMinus
+  Search, Users, BookOpen, School, 
+  UserPlus, Clock, Check, X, 
+  MapPin, MessageSquare, RefreshCw, CheckCircle2,
+  Edit3, Send, Database
 } from 'lucide-react';
-import { ChatUser, FriendStatus, UserRole } from './chat/types';
+import { ChatUser, UserRole } from './chat/types';
+import { AvatarBadge } from './chat/AvatarBadge';
 import { 
   fetchSearchableUsersFromSupabase, 
   sendSupabaseFriendRequest, 
@@ -14,7 +14,8 @@ import {
   cancelOrRemoveSupabaseFriendship, 
   syncCurrentUserToSupabase 
 } from '../lib/userDirectoryService';
-import { supabase, getPersistedDeviceSession } from '../lib/supabase';
+import { socialWsClient, SocialWsEvent } from '../lib/socialChatClient';
+import { getPersistedDeviceSession } from '../lib/supabase';
 import { getStoredUserAvatar, useUserAvatar } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
 import { getPeerCurrentUserStorageKey, pushAccountSyncPatch } from '../lib/accountSyncService';
@@ -171,28 +172,20 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     initPortal();
   }, [user?.id, currentUser.role, liveAvatarUrl, profile?.avatar_url, profile?.full_name]);
 
-  // Realtime subscription for Supabase friend updates
+  // Realtime subscription for WebSocket friend & presence updates
   useEffect(() => {
-    if (!supabase) return;
-    try {
-      const channel = supabase.channel('eduai-friendships-portal-channel', {
-        config: { broadcast: { ack: false, self: false } }
-      });
-
-      channel.on('broadcast', { event: 'friend_request_sent' }, () => {
+    socialWsClient.start();
+    const unsub = socialWsClient.subscribe((ev: SocialWsEvent) => {
+      if (ev.type === 'presence:update' || ev.type === 'auth:ok') {
+        const onlineSet = new Set(ev.onlineUserIds || []);
+        setUsersList(prev => prev.map(u => ({ ...u, status: onlineSet.has(u.id) ? 'online' : 'offline' })));
+      } else if (ev.type === 'friend:request' || ev.type === 'friend:responded' || ev.type === 'friend:removed') {
         reloadUsers();
-      });
-
-      channel.on('broadcast', { event: 'friend_request_responded' }, () => {
-        reloadUsers();
-      });
-
-      channel.subscribe();
-
-      return () => {
-        if (supabase) supabase.removeChannel(channel);
-      };
-    } catch (e) {}
+      }
+    });
+    return () => {
+      unsub();
+    };
   }, []);
 
   const reloadUsers = async () => {
@@ -259,22 +252,32 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     if (!requestTargetUser) return;
     const res = await sendSupabaseFriendRequest(requestTargetUser.id, currentUser.id, customRequestNote);
     if (res.success) {
-      showToast(`Friend request sent to ${requestTargetUser.name}!`, 'success');
-      setUsersList(prev => prev.map(u => u.id === requestTargetUser.id ? { ...u, friendStatus: 'pending_sent' } : u));
+      const nextStatus = res.status === 'accepted' ? 'friends' : 'pending_sent';
+      showToast(
+        nextStatus === 'friends'
+          ? `Connected with ${requestTargetUser.name}!`
+          : `Friend request sent to ${requestTargetUser.name}!`,
+        'success'
+      );
+      setUsersList(prev => prev.map(u => u.id === requestTargetUser.id ? { ...u, friendStatus: nextStatus } : u));
+    } else {
+      showToast(res.error || 'Could not send friend request.', 'error');
     }
     setRequestTargetUser(null);
   };
 
   const handleAcceptRequest = async (target: ChatUser) => {
-    const res = await respondToSupabaseFriendRequest(target.id, currentUser.id, 'accepted');
+    const res = await respondToSupabaseFriendRequest(target.id, currentUser.id, 'accept');
     if (res.success) {
       showToast(`Connected with ${target.name}! You can now message them.`, 'success');
       setUsersList(prev => prev.map(u => u.id === target.id ? { ...u, friendStatus: 'friends' } : u));
+    } else {
+      showToast(res.error || 'Could not accept friend request.', 'error');
     }
   };
 
   const handleDeclineRequest = async (target: ChatUser) => {
-    const res = await respondToSupabaseFriendRequest(target.id, currentUser.id, 'declined');
+    const res = await respondToSupabaseFriendRequest(target.id, currentUser.id, 'decline');
     if (res.success) {
       showToast(`Declined friend request from ${target.name}.`, 'info');
       setUsersList(prev => prev.map(u => u.id === target.id ? { ...u, friendStatus: 'none' } : u));
@@ -380,49 +383,39 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
         )}
 
         {/* Portal Hero Header */}
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-200/80 dark:border-slate-800 shadow-sm relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-96 h-96 bg-gradient-to-bl from-indigo-500/10 via-purple-500/5 to-transparent rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
-          
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
-            <div className="space-y-2">
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-indigo-50 dark:bg-indigo-950/80 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-800/60">
-                  <Database className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
-                  Supabase Cloud Directory
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                  {isSupabaseLive ? 'Live PostgreSQL Synchronized' : 'Local & Offline Cached'}
-                </span>
-              </div>
-              <h1 className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white tracking-tight">
-                Academic Member Directory & Friend Portal
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-200/80 dark:border-slate-800 shadow-xs">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="space-y-1.5">
+              <p className="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                Academic Member Directory · {isSupabaseLive ? 'Live Cloud Directory' : 'Cached Directory'}
+              </p>
+              <h1 className="text-2xl sm:text-3xl font-bold text-slate-900 dark:text-white tracking-tight font-display">
+                Classmates & Educators
               </h1>
               <p className="text-sm text-slate-600 dark:text-slate-400 max-w-2xl">
-                Discover, search, and connect with faculty educators, professors, and fellow students across the platform. Send friend requests to unlock direct messaging and study collaborations.
+                Search and connect with faculty educators and fellow students across Edu AI. Accepted connections unlock direct messaging and study groups.
               </p>
             </div>
 
-            {/* Current User Discoverability Card & Edit Profile Button */}
+            {/* Current User Card & Edit Profile Button */}
             <div className="flex items-center gap-3 shrink-0">
               <div className="bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-2xl p-3 flex items-center gap-3">
-                <img 
-                  src={currentUser.avatar} 
-                  alt={currentUser.name} 
-                  className="w-11 h-11 rounded-full object-cover ring-2 ring-indigo-500/30"
+                <AvatarBadge
+                  name={currentUser.name}
+                  avatarUrl={currentUser.avatar}
+                  role={currentUser.role}
+                  isOnline={true}
+                  size="md"
                 />
-                <div className="text-left">
-                  <div className="flex items-center gap-1.5">
-                    <p className="text-xs font-bold text-slate-900 dark:text-white">{currentUser.name}</p>
-                    <span className="text-[9px] px-1.5 py-0.2 font-semibold uppercase bg-indigo-100 dark:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 rounded">
-                      {currentUser.role}
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Discoverable in Supabase</p>
+                <div className="text-left min-w-0">
+                  <p className="text-xs font-bold text-slate-900 dark:text-white truncate">{currentUser.name}</p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {currentUser.role === 'teacher' ? 'Educator' : 'Student'} · Discoverable
+                  </p>
                 </div>
                 <button
                   onClick={() => setIsEditProfileOpen(true)}
-                  className="p-2 rounded-xl bg-white dark:bg-slate-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-600 transition-colors shadow-xs"
+                  className="p-2 rounded-xl bg-white dark:bg-slate-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/50 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-600 transition-colors cursor-pointer"
                   title="Edit my searchable profile"
                 >
                   <Edit3 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
@@ -433,7 +426,7 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
         </div>
 
         {/* Search, Filter Tabs & Subject Chips */}
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 shadow-sm space-y-4">
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4">
           
           {/* Main Search Input */}
           <div className="relative">
@@ -442,13 +435,13 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search by educator name, student, subject (e.g. Physics, Calculus, Algorithms), institution, or bio..."
+              placeholder="Search by educator name, student, subject (e.g. Physics, Calculus, Algorithms), or institution..."
               className="w-full pl-12 pr-12 py-3 bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 rounded-2xl text-sm text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500/40 transition-all"
             />
             {searchQuery && (
               <button 
                 onClick={() => setSearchQuery('')}
-                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="absolute right-4 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -459,21 +452,21 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
           <div className="flex items-center justify-between gap-3 flex-wrap border-b border-slate-100 dark:border-slate-800 pb-3">
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1">
               {[
-                { id: 'all', label: 'All Members', count: usersList.length - 1 },
-                { id: 'teacher', label: 'Teachers & Faculty 🎓', count: usersList.filter(u => u.id !== currentUser.id && u.role === 'teacher').length },
-                { id: 'student', label: 'Students & Peers 🎒', count: usersList.filter(u => u.id !== currentUser.id && u.role === 'student').length },
-                { id: 'friends', label: `Friends (${friendsCount}) 🤝` },
+                { id: 'all', label: `All Members (${Math.max(0, usersList.filter(u => u.id !== currentUser.id).length)})` },
+                { id: 'teacher', label: `Teachers (${usersList.filter(u => u.id !== currentUser.id && u.role === 'teacher').length})` },
+                { id: 'student', label: `Students (${usersList.filter(u => u.id !== currentUser.id && u.role === 'student').length})` },
+                { id: 'friends', label: `Friends (${friendsCount})` },
                 { 
                   id: 'pending', 
-                  label: `Requests ${pendingReceivedCount > 0 ? `(${pendingReceivedCount} New)` : ''} 📬` 
+                  label: pendingReceivedCount > 0 ? `Requests (${pendingReceivedCount} New)` : 'Requests'
                 }
               ].map(tab => (
                 <button
                   key={tab.id}
                   onClick={() => setRoleFilter(tab.id as any)}
-                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 ${
+                  className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all flex items-center gap-1.5 cursor-pointer tabular-nums ${
                     roleFilter === tab.id
-                      ? 'bg-indigo-600 text-white shadow-sm shadow-indigo-500/20'
+                      ? 'bg-indigo-600 text-white shadow-xs'
                       : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
                   }`}
                 >
@@ -482,7 +475,7 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
               ))}
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+            <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 tabular-nums">
               <span className="font-semibold text-slate-800 dark:text-slate-200">{filteredUsers.length}</span> members found
             </div>
           </div>
@@ -549,30 +542,26 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
                   className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200/80 dark:border-slate-800 shadow-sm hover:shadow-md hover:border-indigo-300 dark:hover:border-indigo-800/80 transition-all flex flex-col justify-between group"
                 >
                   <div className="space-y-4">
-                    {/* Top Row: Avatar, Online Dot, Name & Role Badge */}
+                    {/* Top Row: Avatar, Name & Role */}
                     <div className="flex items-start justify-between gap-3">
                       <div className="flex items-start gap-3 min-w-0">
-                        <div className="relative shrink-0">
-                          <img 
-                            src={member.avatar} 
-                            alt={member.name} 
-                            className="w-13 h-13 rounded-2xl object-cover ring-2 ring-slate-100 dark:ring-slate-800 shadow-xs" 
-                          />
-                          {member.status === 'online' && (
-                            <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900 shadow-xs" />
-                          )}
-                        </div>
+                        <AvatarBadge
+                          name={member.name}
+                          avatarUrl={member.avatar}
+                          role={member.role}
+                          isOnline={member.status === 'online'}
+                          size="lg"
+                          shape="rounded"
+                        />
                         <div className="min-w-0">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <h3 
-                              onClick={() => setInspectUser(member)}
-                              className="text-sm font-bold text-slate-900 dark:text-white truncate hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
-                            >
-                              {member.name}
-                            </h3>
-                          </div>
+                          <h3 
+                            onClick={() => setInspectUser(member)}
+                            className="text-sm font-bold text-slate-900 dark:text-white truncate hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
+                          >
+                            {member.name}
+                          </h3>
                           <p className="text-xs font-medium text-slate-600 dark:text-slate-300 truncate mt-0.5">
-                            {member.title}
+                            {isTeacher ? 'Educator' : 'Student'} · {member.title}
                           </p>
                           <p className="text-[11px] text-slate-400 dark:text-slate-500 flex items-center gap-1 truncate mt-0.5">
                             <School className="w-3 h-3 shrink-0" />
@@ -580,15 +569,6 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
                           </p>
                         </div>
                       </div>
-
-                      {/* Role Pill */}
-                      <span className={`shrink-0 px-2 py-0.5 rounded-lg text-[10px] font-bold uppercase tracking-wider ${
-                        isTeacher 
-                          ? 'bg-amber-100 dark:bg-amber-950/80 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700' 
-                          : 'bg-emerald-100 dark:bg-emerald-950/80 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
-                      }`}>
-                        {isTeacher ? 'Teacher' : 'Student'}
-                      </span>
                     </div>
 
                     {/* Bio */}
@@ -686,23 +666,24 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
           <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <img 
-                  src={requestTargetUser.avatar} 
-                  alt={requestTargetUser.name} 
-                  className="w-11 h-11 rounded-full object-cover ring-2 ring-indigo-500/30"
+                <AvatarBadge
+                  name={requestTargetUser.name}
+                  avatarUrl={requestTargetUser.avatar}
+                  role={requestTargetUser.role}
+                  size="md"
                 />
                 <div>
                   <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                     Connect with {requestTargetUser.name}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-slate-400">
-                    {requestTargetUser.title} • {requestTargetUser.institution}
+                    {requestTargetUser.title} · {requestTargetUser.institution}
                   </p>
                 </div>
               </div>
               <button 
                 onClick={() => setRequestTargetUser(null)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -724,13 +705,13 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
                 onClick={() => setRequestTargetUser(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleConfirmSendRequest}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm shadow-indigo-500/20"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm shadow-indigo-500/20 cursor-pointer"
               >
                 <Send className="w-3.5 h-3.5" /> Send Request
               </button>
@@ -745,16 +726,14 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
           <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start justify-between">
               <div className="flex items-center gap-4">
-                <div className="relative">
-                  <img 
-                    src={inspectUser.avatar} 
-                    alt={inspectUser.name} 
-                    className="w-16 h-16 rounded-2xl object-cover ring-2 ring-indigo-500/20"
-                  />
-                  {inspectUser.status === 'online' && (
-                    <span className="absolute bottom-0 right-0 w-4 h-4 bg-emerald-500 rounded-full ring-2 ring-white dark:ring-slate-900" />
-                  )}
-                </div>
+                <AvatarBadge
+                  name={inspectUser.name}
+                  avatarUrl={inspectUser.avatar}
+                  role={inspectUser.role}
+                  isOnline={inspectUser.status === 'online'}
+                  size="lg"
+                  shape="rounded"
+                />
                 <div>
                   <div className="flex items-center gap-2">
                     <h2 className="text-base font-bold text-slate-900 dark:text-white">

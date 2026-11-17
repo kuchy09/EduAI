@@ -1,360 +1,558 @@
-import React, { useState } from 'react';
-import { 
-  Search, Plus, MoreVertical, Check, CheckCheck, 
-  UserPlus, X, Users, BookOpen
+import React, { useState, useMemo } from 'react';
+import {
+  Search,
+  UserPlus,
+  Users,
+  Check,
+  X,
+  MessageSquare,
+  Clock,
+  ShieldCheck,
+  GraduationCap,
 } from 'lucide-react';
-import { ChatUser, Conversation, UserRole } from './types';
+import { ChatUser, Conversation, FriendRequestRecord } from './types';
+import { AvatarBadge } from './AvatarBadge';
 
 interface ChatSidebarProps {
   currentUser: ChatUser;
   conversations: Conversation[];
-  allUsers: ChatUser[];
   activeConversationId: string;
-  onSelectConversation: (id: string) => void;
+  onSelectConversation: (convId: string) => void;
+  onStartDirectChat: (partnerId: string) => void;
+  users: ChatUser[];
+  friendRequests?: FriendRequestRecord[];
+  onAcceptFriendRequest: (senderId: string) => void;
+  onDeclineFriendRequest: (senderId: string) => void;
+  onCancelFriendRequest: (targetId: string) => void;
   onOpenFindFriends: () => void;
-  onOpenNewGroupModal: () => void;
-  onOpenSharedNotes?: () => void;
-  sharedNotesCount?: number;
-  onToggleUserRole?: (role: UserRole) => void;
-  typingConversations?: Record<string, boolean>;
-  filterTab?: 'all' | 'direct' | 'teachers' | 'students' | 'groups';
-  setFilterTab?: (tab: 'all' | 'direct' | 'teachers' | 'students' | 'groups') => void;
+  onOpenCreateGroup: () => void;
+  typingByConversation?: Record<string, string[]>;
+  isWsConnected?: boolean;
 }
+
+type SidebarTab = 'all' | 'friends' | 'requests' | 'groups';
 
 export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   currentUser,
   conversations,
-  allUsers,
   activeConversationId,
   onSelectConversation,
+  onStartDirectChat,
+  users,
+  friendRequests = [],
+  onAcceptFriendRequest,
+  onDeclineFriendRequest,
+  onCancelFriendRequest,
   onOpenFindFriends,
-  onOpenNewGroupModal,
-  onOpenSharedNotes,
-  sharedNotesCount = 0,
-  typingConversations = {},
+  onOpenCreateGroup,
+  typingByConversation = {},
+  isWsConnected = false,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [showMenuDropdown, setShowMenuDropdown] = useState(false);
+  const [activeTab, setActiveTab] = useState<SidebarTab>('all');
 
-  // Helper to find partner in a direct chat
-  const currentUid = currentUser?.id || 'current-user-id';
-  const getPartner = (conv: Conversation): ChatUser | undefined => {
-    if (conv.type === 'direct') {
-      const participants = Array.isArray(conv.participants) ? conv.participants : [];
-      const partnerId = participants.find(p => p !== currentUid);
-      return (allUsers || []).find(u => u.id === partnerId);
+  const incomingRequests = useMemo(() => {
+    return users.filter((u) => u.id !== currentUser.id && u.friendStatus === 'pending_received');
+  }, [users, currentUser.id]);
+
+  const outgoingRequests = useMemo(() => {
+    return users.filter((u) => u.id !== currentUser.id && u.friendStatus === 'pending_sent');
+  }, [users, currentUser.id]);
+
+  const connectedFriends = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return users
+      .filter((u) => u.id !== currentUser.id && u.friendStatus === 'friends')
+      .filter((u) => {
+        if (!q) return true;
+        return `${u.name} ${u.institution} ${u.title} ${u.subjects.join(' ')}`.toLowerCase().includes(q);
+      })
+      .sort((a, b) => {
+        if (a.status === 'online' && b.status !== 'online') return -1;
+        if (a.status !== 'online' && b.status === 'online') return 1;
+        return a.name.localeCompare(b.name);
+      });
+  }, [users, currentUser.id, searchQuery]);
+
+  const filteredConversations = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return conversations
+      .filter((conv) => {
+        if (activeTab === 'groups' && conv.type !== 'group') return false;
+        if (activeTab === 'friends' && conv.type !== 'direct') return false;
+
+        if (!q) return true;
+        if (conv.type === 'group') {
+          return (
+            (conv.name || '').toLowerCase().includes(q) ||
+            (conv.description || '').toLowerCase().includes(q) ||
+            (conv.lastMessage?.content || '').toLowerCase().includes(q)
+          );
+        }
+        const partnerId = conv.participants.find((id) => id !== currentUser.id);
+        const partner = users.find((u) => u.id === partnerId);
+        return (
+          (partner?.name || '').toLowerCase().includes(q) ||
+          (partner?.institution || '').toLowerCase().includes(q) ||
+          (conv.lastMessage?.content || '').toLowerCase().includes(q)
+        );
+      })
+      .sort((a, b) => {
+        if (a.isPinned && !b.isPinned) return -1;
+        if (!a.isPinned && b.isPinned) return 1;
+        return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+      });
+  }, [conversations, activeTab, searchQuery, currentUser.id, users]);
+
+  const formatListTime = (iso?: string) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    const now = new Date();
+    const isSameDay =
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    if (isSameDay) {
+      return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
     }
-    return undefined;
+    return d.toLocaleDateString([], { month: 'short', day: 'numeric' });
   };
 
-  // Filter conversations based on search
-  const filteredConversations = (conversations || []).filter(conv => {
-    if (!searchQuery.trim()) return true;
-    const partner = getPartner(conv);
-    const title = conv.type === 'group' ? conv.name || '' : partner?.name || '';
-    const lastMsg = conv.lastMessage?.content || '';
-    const q = searchQuery.toLowerCase();
-    
-    return title.toLowerCase().includes(q) || lastMsg.toLowerCase().includes(q);
-  });
+  const findRequestNote = (userId: string) => {
+    const found = friendRequests.find(
+      (r) =>
+        r.status === 'pending' &&
+        ((r.senderId === userId && r.receiverId === currentUser.id) ||
+          (r.senderId === currentUser.id && r.receiverId === userId))
+    );
+    return found?.note;
+  };
+
+  const totalPendingCount = incomingRequests.length;
 
   return (
-    <div className="w-full h-full bg-white dark:bg-[#111b21] text-slate-900 dark:text-white border-r border-slate-200/80 dark:border-slate-800 flex flex-col shrink-0 select-none min-w-0 font-sans">
-      
-      {/* 1. TOP HEADER */}
-      <div className="px-4 py-3.5 flex items-center justify-between bg-white dark:bg-[#111b21] border-b border-slate-100 dark:border-slate-800/60 shrink-0 min-h-[60px]">
-        {isSearchOpen ? (
-          <div className="flex items-center gap-2 w-full animate-in fade-in duration-150">
-            <div className="flex-1 flex items-center gap-2 bg-[#f0f2f5] dark:bg-[#202c33] rounded-full px-3 py-1.5 border border-emerald-500/50">
-              <Search className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
-              <input
-                autoFocus
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search chats or colleagues..."
-                className="bg-transparent text-xs sm:text-sm text-slate-900 dark:text-white placeholder:text-slate-500 dark:placeholder:text-slate-400 outline-none w-full min-w-0"
-              />
-              {searchQuery && (
-                <button
-                  onClick={() => setSearchQuery('')}
-                  className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5 cursor-pointer"
-                  title="Clear search"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+    <aside className="w-full md:w-80 lg:w-[348px] bg-white dark:bg-slate-900 border-r border-slate-200 dark:border-slate-800 flex flex-col h-full shrink-0 select-none overflow-hidden">
+      {/* Top Bar — pt-16 sm:pt-[72px] clears the floating top-left navigation button */}
+      <div className="px-4 pt-16 sm:pt-[72px] pb-3 border-b border-slate-200/80 dark:border-slate-800 space-y-3 shrink-0">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight font-display">
+                Messages
+              </h1>
+              <span
+                title={isWsConnected ? 'Real-time WebSocket active' : 'Syncing over HTTPS'}
+                className={`text-[11px] font-medium ${
+                  isWsConnected ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'
+                }`}
+              >
+                {isWsConnected ? '· Live' : ''}
+              </span>
+            </div>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              {connectedFriends.length} {connectedFriends.length === 1 ? 'connection' : 'connections'} ·{' '}
+              {conversations.filter((c) => c.type === 'group').length} groups
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onOpenCreateGroup}
+              className="h-10 w-10 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 flex items-center justify-center transition-colors cursor-pointer"
+              title="Create Study Group"
+              aria-label="Create Study Group"
+            >
+              <Users className="w-4.5 h-4.5" />
+            </button>
+            <button
+              type="button"
+              onClick={onOpenFindFriends}
+              className="h-10 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+              title="Find Classmates & Educators"
+            >
+              <UserPlus className="w-4 h-4" />
+              <span>Find</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Search Field */}
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search chats, classmates, subjects..."
+            className="w-full h-10 pl-10 pr-8 bg-slate-100 dark:bg-slate-800/80 border border-transparent focus:border-indigo-500/40 focus:bg-white dark:focus:bg-slate-800 rounded-xl text-xs text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none transition-colors"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          )}
+        </div>
+
+        {/* Segmented Filter Bar */}
+        <div className="grid grid-cols-4 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800/80">
+          {(
+            [
+              { id: 'all', label: 'All' },
+              { id: 'friends', label: 'Friends' },
+              { id: 'requests', label: 'Requests', badge: totalPendingCount },
+              { id: 'groups', label: 'Groups' },
+            ] as Array<{ id: SidebarTab; label: string; badge?: number }>
+          ).map((tab) => {
+            const isActive = activeTab === tab.id;
+            return (
+              <button
+                type="button"
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`h-8 rounded-lg text-xs font-semibold flex items-center justify-center gap-1 transition-all cursor-pointer ${
+                  isActive
+                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                }`}
+              >
+                <span>{tab.label}</span>
+                {typeof tab.badge === 'number' && tab.badge > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-indigo-600 text-white text-[10px] font-bold tabular-nums flex items-center justify-center">
+                    {tab.badge}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Main Scrollable Content */}
+      <div className="flex-1 overflow-y-auto px-2.5 py-2.5 space-y-2">
+        {/* REQUESTS TAB */}
+        {activeTab === 'requests' ? (
+          <div className="space-y-4 px-1">
+            {/* Incoming */}
+            <div>
+              <div className="flex items-center justify-between px-1 mb-2">
+                <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                  Incoming Requests ({incomingRequests.length})
+                </h2>
+              </div>
+              {incomingRequests.length === 0 ? (
+                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-800 text-center">
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    No pending friend requests right now.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {incomingRequests.map((reqUser) => {
+                    const note = findRequestNote(reqUser.id);
+                    return (
+                      <div
+                        key={reqUser.id}
+                        className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-800 space-y-2.5"
+                      >
+                        <div className="flex items-start gap-2.5">
+                          <AvatarBadge
+                            name={reqUser.name}
+                            avatarUrl={reqUser.avatar}
+                            role={reqUser.role}
+                            isOnline={reqUser.status === 'online'}
+                            size="md"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                              {reqUser.name}
+                            </p>
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {reqUser.role === 'teacher' ? 'Educator' : 'Student'} · {reqUser.institution}
+                            </p>
+                            {note && (
+                              <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 line-clamp-2 italic">
+                                “{note}”
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => onAcceptFriendRequest(reqUser.id)}
+                            className="flex-1 h-9 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center justify-center gap-1 transition-colors cursor-pointer"
+                          >
+                            <Check className="w-3.5 h-3.5" /> Accept
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeclineFriendRequest(reqUser.id)}
+                            className="h-9 px-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-slate-600 dark:text-slate-300 hover:text-rose-600 text-xs font-semibold transition-colors cursor-pointer"
+                          >
+                            Decline
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </div>
-            <button
-              onClick={() => {
-                setIsSearchOpen(false);
-                setSearchQuery('');
-              }}
-              className="text-xs font-semibold text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-white px-1.5 py-1 rounded cursor-pointer shrink-0"
-            >
-              Cancel
-            </button>
+
+            {/* Outgoing */}
+            <div>
+              <h2 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 px-1 mb-2">
+                Sent Requests ({outgoingRequests.length})
+              </h2>
+              {outgoingRequests.length === 0 ? (
+                <p className="text-xs text-slate-400 px-1">No outgoing requests.</p>
+              ) : (
+                <div className="space-y-2">
+                  {outgoingRequests.map((reqUser) => (
+                    <div
+                      key={reqUser.id}
+                      className="p-2.5 rounded-2xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800 flex items-center justify-between gap-2"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <AvatarBadge
+                          name={reqUser.name}
+                          avatarUrl={reqUser.avatar}
+                          role={reqUser.role}
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                            {reqUser.name}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1">
+                            <Clock className="w-3 h-3" /> Pending approval
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onCancelFriendRequest(reqUser.id)}
+                        className="h-8 px-2.5 rounded-lg text-[11px] font-semibold text-slate-600 dark:text-slate-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 hover:text-rose-600 transition-colors cursor-pointer shrink-0"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         ) : (
           <>
-            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-              Chats
-            </h1>
-
-            <div className="flex items-center gap-1.5 relative">
-              {/* Search Lens Icon Button - Placed right next to 'SharedBooks And Takeaways' icon */}
-              <button
-                onClick={() => setIsSearchOpen(true)}
-                className={`w-8.5 h-8.5 rounded-full flex items-center justify-center transition-colors cursor-pointer ${
-                  searchQuery
-                    ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
-                    : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
-                }`}
-                title="Search chats"
-              >
-                <Search className="w-5 h-5" />
-              </button>
-
-              {/* SharedBooks And Takeaways Icon Button */}
-              {onOpenSharedNotes && (
+            {/* Compact Incoming Request Notice Banner in All Tab */}
+            {activeTab === 'all' && incomingRequests.length > 0 && (
+              <div className="p-2.5 rounded-2xl bg-indigo-50/80 dark:bg-indigo-950/40 border border-indigo-200/70 dark:border-indigo-900/70 flex items-center justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-indigo-950 dark:text-indigo-100 truncate">
+                    {incomingRequests.length}{' '}
+                    {incomingRequests.length === 1 ? 'friend request waiting' : 'friend requests waiting'}
+                  </p>
+                  <p className="text-[11px] text-indigo-700 dark:text-indigo-300 truncate">
+                    From {incomingRequests[0].name}
+                  </p>
+                </div>
                 <button
-                  onClick={onOpenSharedNotes}
-                  className="w-8.5 h-8.5 rounded-full flex items-center justify-center text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 transition-colors cursor-pointer relative"
-                  title="SharedBooks And Takeaways"
+                  type="button"
+                  onClick={() => setActiveTab('requests')}
+                  className="h-8 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shrink-0 cursor-pointer transition-colors"
                 >
-                  <BookOpen className="w-5 h-5" />
-                  {sharedNotesCount > 0 && (
-                    <span className="absolute -top-0.5 -right-0.5 w-4 h-4 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-xs">
-                      {sharedNotesCount > 9 ? '9+' : sharedNotesCount}
-                    </span>
-                  )}
+                  Review
                 </button>
-              )}
+              </div>
+            )}
 
-              {/* 3-dots Menu Button */}
-              <div className="relative">
-                <button
-                  onClick={() => setShowMenuDropdown(prev => !prev)}
-                  className="w-8.5 h-8.5 rounded-full flex items-center justify-center text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
-                  title="Menu"
-                >
-                  <MoreVertical className="w-5 h-5" />
-                </button>
-
-                {/* Menu Dropdown */}
-                {showMenuDropdown && (
-                  <>
-                    <div 
-                      className="fixed inset-0 z-40" 
-                      onClick={() => setShowMenuDropdown(false)} 
-                    />
-                    <div className="absolute right-0 top-full mt-1.5 w-52 bg-white dark:bg-[#233138] rounded-xl shadow-xl border border-slate-200/70 dark:border-slate-700 py-1.5 z-50 animate-in fade-in zoom-in-95">
-                      <button
-                        onClick={() => {
-                          setShowMenuDropdown(false);
-                          onOpenNewGroupModal();
-                        }}
-                        className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
-                      >
-                        <Users className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                        <span>New group</span>
-                      </button>
-                      <button
-                        onClick={() => {
-                          setShowMenuDropdown(false);
-                          onOpenFindFriends();
-                        }}
-                        className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
-                      >
-                        <UserPlus className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                        <span>Find contacts</span>
-                      </button>
-                      {onOpenSharedNotes && (
-                        <button
-                          onClick={() => {
-                            setShowMenuDropdown(false);
-                            onOpenSharedNotes();
-                          }}
-                          className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
-                        >
-                          <BookOpen className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                          <span>SharedBooks And Takeaways</span>
-                        </button>
-                      )}
-                      <div className="my-1 border-t border-slate-200/60 dark:border-slate-700/60" />
-                      <button
-                        onClick={() => {
-                          setShowMenuDropdown(false);
-                          setIsSearchOpen(true);
-                        }}
-                        className="w-full px-4 py-2.5 text-left text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-[#182229] flex items-center gap-3 cursor-pointer"
-                      >
-                        <Search className="w-4 h-4 text-slate-500" />
-                        <span>Search chats</span>
-                      </button>
-                    </div>
-                  </>
+            {/* Quick Start DM list in Friends Tab */}
+            {activeTab === 'friends' && (
+              <div className="space-y-1 pb-2 border-b border-slate-100 dark:border-slate-800/80">
+                <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 px-2 pt-1">
+                  Connected Peers ({connectedFriends.length})
+                </p>
+                {connectedFriends.length === 0 ? (
+                  <div className="p-4 text-center space-y-2">
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      No connected friends yet.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={onOpenFindFriends}
+                      className="h-9 px-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold cursor-pointer"
+                    >
+                      Find Classmates
+                    </button>
+                  </div>
+                ) : (
+                  connectedFriends.map((friend) => (
+                    <button
+                      type="button"
+                      key={friend.id}
+                      onClick={() => onStartDirectChat(friend.id)}
+                      className="w-full p-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/70 flex items-center justify-between gap-2.5 text-left transition-colors cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <AvatarBadge
+                          name={friend.name}
+                          avatarUrl={friend.avatar}
+                          role={friend.role}
+                          isOnline={friend.status === 'online'}
+                          size="sm"
+                        />
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                            {friend.name}
+                          </p>
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                            {friend.status === 'online' ? 'Active now' : friend.title}
+                          </p>
+                        </div>
+                      </div>
+                      <MessageSquare className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
+                    </button>
+                  ))
                 )}
               </div>
+            )}
 
-              {/* Green New Chat Plus Button */}
-              <button
-                onClick={onOpenFindFriends}
-                className="w-8.5 h-8.5 rounded-xl bg-[#00a884] hover:bg-[#008f6f] text-white flex items-center justify-center transition-all shadow-xs active:scale-95 cursor-pointer shrink-0"
-                title="New Chat / Add Contact"
-              >
-                <Plus className="w-5 h-5 stroke-[2.5]" />
-              </button>
-            </div>
+            {/* Conversation Threads */}
+            {filteredConversations.length === 0 ? (
+              <div className="py-12 px-4 text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 mx-auto flex items-center justify-center text-slate-400">
+                  <GraduationCap className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                    {activeTab === 'groups'
+                      ? 'No study groups yet'
+                      : searchQuery
+                      ? 'No matching conversations'
+                      : 'No active conversations'}
+                  </p>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                    {activeTab === 'groups'
+                      ? 'Create a study group to collaborate on textbooks and shared notes.'
+                      : 'Search the directory to send friend requests and start chatting with peers.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={activeTab === 'groups' ? onOpenCreateGroup : onOpenFindFriends}
+                  className="h-9 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  {activeTab === 'groups' ? 'New Study Group' : 'Find Friends'}
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {filteredConversations.map((conv) => {
+                  const isActive = conv.id === activeConversationId;
+                  const isGroup = conv.type === 'group';
+                  const partnerId = !isGroup
+                    ? conv.participants.find((id) => id !== currentUser.id)
+                    : undefined;
+                  const partner = partnerId ? users.find((u) => u.id === partnerId) : undefined;
+
+                  const title = isGroup ? conv.name || 'Study Group' : partner?.name || 'Academic Peer';
+                  const typingNames = typingByConversation[conv.id] || [];
+                  const isTyping = typingNames.length > 0;
+
+                  const previewText = isTyping
+                    ? `${typingNames[0]} is typing...`
+                    : conv.lastMessage?.content
+                    ? conv.lastMessage.content
+                    : isGroup
+                    ? `${conv.participants.length} members · Ready for discussion`
+                    : partner?.friendStatus === 'friends'
+                    ? 'Connected · Start your conversation'
+                    : 'Connection pending';
+
+                  const timeDisplay = formatListTime(conv.lastMessage?.createdAt || conv.updatedAt);
+
+                  return (
+                    <button
+                      type="button"
+                      key={conv.id}
+                      onClick={() => onSelectConversation(conv.id)}
+                      className={`w-full p-2.5 rounded-2xl flex items-center gap-3 text-left transition-colors cursor-pointer ${
+                        isActive
+                          ? 'bg-indigo-50/90 dark:bg-indigo-950/60 border border-indigo-200/70 dark:border-indigo-800/70'
+                          : 'border border-transparent hover:bg-slate-100/80 dark:hover:bg-slate-800/60'
+                      }`}
+                    >
+                      {isGroup ? (
+                        <div className="w-11 h-11 rounded-2xl bg-indigo-600 text-white flex items-center justify-center shrink-0 font-bold text-sm">
+                          <Users className="w-5 h-5" />
+                        </div>
+                      ) : (
+                        <AvatarBadge
+                          name={title}
+                          avatarUrl={partner?.avatar}
+                          role={partner?.role}
+                          isOnline={partner?.status === 'online'}
+                          size="md"
+                        />
+                      )}
+
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <span
+                              className={`text-xs font-bold truncate ${
+                                isActive
+                                  ? 'text-indigo-950 dark:text-white'
+                                  : 'text-slate-900 dark:text-slate-100'
+                              }`}
+                            >
+                              {title}
+                            </span>
+                            {!isGroup && partner?.role === 'teacher' && (
+                              <span title="Verified Educator" className="shrink-0 flex items-center">
+                                <ShieldCheck className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-[11px] text-slate-400 dark:text-slate-500 tabular-nums shrink-0">
+                            {timeDisplay}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between gap-2 mt-0.5">
+                          <p
+                            className={`text-xs truncate ${
+                              isTyping
+                                ? 'text-emerald-600 dark:text-emerald-400 font-medium'
+                                : conv.unreadCount > 0
+                                ? 'text-slate-900 dark:text-slate-100 font-semibold'
+                                : 'text-slate-500 dark:text-slate-400'
+                            }`}
+                          >
+                            {previewText}
+                          </p>
+                          {conv.unreadCount > 0 && (
+                            <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold tabular-nums flex items-center justify-center shrink-0">
+                              {conv.unreadCount > 99 ? '99+' : conv.unreadCount}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </>
         )}
       </div>
-
-      {/* Active Search Result Indicator (if searching with query) */}
-      {searchQuery && (
-        <div className="px-4 py-2 bg-slate-50 dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 text-xs text-slate-500 flex items-center justify-between">
-          <span>Results for "{searchQuery}" ({filteredConversations.length})</span>
-          <button
-            onClick={() => setSearchQuery('')}
-            className="text-emerald-600 dark:text-emerald-400 font-semibold hover:underline"
-          >
-            Clear
-          </button>
-        </div>
-      )}
-
-      {/* 2. CONVERSATIONS LIST (Directly below header) */}
-      <div className="flex-1 overflow-y-auto divide-y divide-slate-100/70 dark:divide-slate-800/40 select-none">
-        {filteredConversations.length === 0 ? (
-          <div className="p-8 text-center text-slate-400 dark:text-slate-500">
-            <p className="text-sm font-medium">No chats found</p>
-            <p className="text-xs mt-1">Try a different search or start a new chat</p>
-            <button
-              onClick={onOpenFindFriends}
-              className="mt-3 px-4 py-1.5 bg-[#00a884] text-white text-xs font-semibold rounded-full hover:bg-[#008f6f] cursor-pointer"
-            >
-              Find Contacts
-            </button>
-          </div>
-        ) : (
-          filteredConversations.map(conv => {
-            const partner = getPartner(conv);
-            const isGroup = conv.type === 'group';
-            const title = isGroup ? conv.name : partner?.name;
-            const isSelected = conv.id === activeConversationId;
-            const unread = conv.unreadCount || 0;
-            const lastMsg = conv.lastMessage;
-            const isSentByMe = lastMsg?.senderId === currentUser.id;
-            const isMaggy = partner?.id === 'user-maggy' || title?.toLowerCase().includes('maggy');
-
-            // Format time display
-            const timeDisplay = conv.updatedAt || '12:00 PM';
-
-            return (
-              <div
-                key={conv.id}
-                onClick={() => onSelectConversation(conv.id)}
-                className={`px-3.5 py-3 flex items-center gap-3 cursor-pointer transition-colors relative ${
-                  isSelected
-                    ? 'bg-[#f0f2f5] dark:bg-[#2a3942]'
-                    : 'hover:bg-[#f5f6f6] dark:hover:bg-[#202c33]'
-                }`}
-              >
-                {/* Left: Avatar with optional Status Circle Ring */}
-                <div className="relative shrink-0">
-                  {isGroup ? (
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white text-xl shadow-xs">
-                      {conv.groupAvatar || '👥'}
-                    </div>
-                  ) : (
-                    <div className={isMaggy ? 'p-[2px] rounded-full ring-2 ring-emerald-500 ring-offset-2 dark:ring-offset-[#111b21]' : ''}>
-                      <img
-                        src={partner?.avatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'}
-                        alt={partner?.name}
-                        className="w-12 h-12 rounded-full object-cover ring-1 ring-slate-200 dark:ring-slate-700"
-                      />
-                    </div>
-                  )}
-                  {partner?.status === 'online' && !isGroup && (
-                    <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-[#00a884] rounded-full ring-2 ring-white dark:ring-[#111b21]" />
-                  )}
-                </div>
-
-                {/* Middle: Name & Last Message Snippet */}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center justify-between mb-0.5">
-                    <div className="flex items-center gap-1.5 min-w-0">
-                      <h3 className="font-semibold text-sm sm:text-[15px] text-slate-900 dark:text-white truncate">
-                        {title}
-                      </h3>
-                      {!isGroup && partner && (
-                        <span className={`px-1.5 py-0.2 rounded text-[9px] font-bold uppercase tracking-wider shrink-0 ${
-                          partner.role === 'teacher' 
-                            ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300' 
-                            : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300'
-                        }`}>
-                          {partner.role}
-                        </span>
-                      )}
-                    </div>
-                    <span className={`text-[11px] shrink-0 font-normal ${
-                      unread > 0 ? 'text-[#00a884] font-semibold' : 'text-slate-400 dark:text-slate-400'
-                    }`}>
-                      {timeDisplay}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400 gap-2">
-                    {typingConversations[conv.id] ? (
-                      <p className="truncate flex items-center gap-1.5 min-w-0 font-medium text-[#00a884] dark:text-[#00a884] animate-pulse">
-                        <span className="flex items-center gap-0.5">
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#00a884] animate-bounce [animation-delay:-0.3s]" />
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#00a884] animate-bounce [animation-delay:-0.15s]" />
-                          <span className="w-1.5 h-1.5 rounded-full bg-[#00a884] animate-bounce" />
-                        </span>
-                        <span>typing...</span>
-                      </p>
-                    ) : (
-                      <p className="truncate flex items-center gap-1 min-w-0 font-normal">
-                        {isSentByMe && (
-                          lastMsg?.status === 'read' ? (
-                            <span title="Seen" className="inline-flex items-center">
-                              <CheckCheck className="w-3.5 h-3.5 text-[#53bdeb] shrink-0 inline stroke-[2.2]" />
-                            </span>
-                          ) : lastMsg?.status === 'delivered' ? (
-                            <span title="Delivered" className="inline-flex items-center">
-                              <CheckCheck className="w-3.5 h-3.5 text-slate-400 shrink-0 inline" />
-                            </span>
-                          ) : (
-                            <span title="Sent" className="inline-flex items-center">
-                              <Check className="w-3.5 h-3.5 text-slate-400 shrink-0 inline" />
-                            </span>
-                          )
-                        )}
-                        {lastMsg?.attachment?.type === 'note' ? (
-                          <span className="text-indigo-600 dark:text-indigo-400 font-medium flex items-center gap-1">
-                            📖 Shared Note: {lastMsg.attachment.name || 'Takeaways'}
-                          </span>
-                        ) : (
-                          <span>{lastMsg?.content || 'No messages yet'}</span>
-                        )}
-                      </p>
-                    )}
-
-                    {/* Unread Pill Count */}
-                    {unread > 0 && (
-                      <span className="w-5 h-5 rounded-full bg-[#00a884] text-white text-[11px] font-bold flex items-center justify-center shrink-0 shadow-xs">
-                        {unread}
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-    </div>
+    </aside>
   );
 };

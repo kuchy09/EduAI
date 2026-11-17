@@ -68,6 +68,7 @@ import {
   mergeBooksLists,
   mergeBookmarksLists,
 } from './lib/accountSyncService';
+import { socialWsClient } from './lib/socialChatClient';
 
 export interface SystemHealth {
   status: 'checking' | 'healthy' | 'degraded' | 'offline';
@@ -1088,6 +1089,7 @@ export default function App() {
     const activeSb = getSupabaseClient() || supabase;
 
     // Immediately revoke client interactive seal & React state so UI locks with 0ms delay
+    socialWsClient.stop();
     revokeInteractiveSession();
     clearAccountLocalCaches(signingOutUserId);
     setSession(null);
@@ -1328,7 +1330,15 @@ export default function App() {
 
               <OfflineBanner onNavigate={(view) => changeView(view as any)} />
               
-              <div className={`flex-1 overflow-y-auto overflow-x-hidden w-full max-w-full relative z-0 ${currentView === 'ai-tutor' ? 'pb-[52px] sm:pb-[60px]' : 'pb-24'}`}>
+              <div
+                className={`flex-1 overflow-x-hidden w-full max-w-full relative z-0 ${
+                  currentView === 'ai-tutor'
+                    ? 'h-[100dvh] overflow-hidden pb-[52px] sm:pb-[60px]'
+                    : currentView === 'chat'
+                    ? 'h-[100dvh] overflow-hidden pb-[68px] sm:pb-[76px]'
+                    : 'overflow-y-auto pt-14 sm:pt-16 pb-24'
+                }`}
+              >
                 <AnimatePresence mode="wait" initial={false}>
                   <motion.div
                     key={currentView}
@@ -1386,7 +1396,24 @@ export default function App() {
                     )}
                     {currentView === 'quizzes' && <Quizzes user={session?.user} profile={profile} books={books} />}
                     {currentView === 'community' && <Community />}
-                    {currentView === 'users-portal' && <UserPortal user={session?.user} profile={profile} onStartChat={(userId) => changeView('chat')} onNavigate={(view) => changeView(view as any)} />}
+                    {currentView === 'users-portal' && (
+                      <UserPortal
+                        user={session?.user}
+                        profile={profile}
+                        onStartChat={(partnerId) => {
+                          try {
+                            safeSessionStorage.setItem('eduai_pending_chat_user_id', partnerId);
+                            window.dispatchEvent(
+                              new CustomEvent('eduai_open_chat_with_user', {
+                                detail: { userId: partnerId },
+                              })
+                            );
+                          } catch (_) {}
+                          changeView('chat');
+                        }}
+                        onNavigate={(view) => changeView(view as any)}
+                      />
+                    )}
                     {currentView === 'chat' && <Chat user={session?.user} profile={profile} onNavigate={(view) => changeView(view as any)} />}
                     {currentView === 'settings' && <Settings user={session?.user} onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}
                     {currentView === 'support' && <Settings user={session?.user} initialTab="support" onNavigate={(view) => changeView(view as any)} onSignOut={handleSignOut} />}

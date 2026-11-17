@@ -1,7 +1,9 @@
 import express from "express";
+import http from "http";
 import path from "path";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
+import { WebSocketServer, WebSocket } from "ws";
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
 import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -9,6 +11,30 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import PDFDocument from "pdfkit";
 import { generateKLBPhysicsPdf } from "./server/klbPhysicsPdf";
+import {
+  addCommunityReplyAction,
+  addGroupMemberAction,
+  createCommunityPostAction,
+  createGroupConversationAction,
+  formatDirectoryUserForViewer,
+  getBootstrapDataForUser,
+  getConversationIfParticipant,
+  getMessagesForConversation,
+  hydrateDirectoryFromSupabase,
+  hydrateFriendRequestsFromSupabase,
+  listCommunityPosts,
+  markConversationReadAction,
+  openOrCreateDirectConversation,
+  removeFriendshipAction,
+  respondToFriendRequestAction,
+  sendChatMessageAction,
+  sendFriendRequestAction,
+  syncUserProfileToStoreAndSupabase,
+  toggleCommunityPostLikeAction,
+  toggleMessageReactionAction,
+  parseSubjectsList,
+  normalizeRole,
+} from "./server/socialStore";
 
 const UPLOADS_DIR = process.env.VERCEL ? path.join("/tmp", "uploads") : path.join(process.cwd(), "uploads");
 if (!fs.existsSync(UPLOADS_DIR)) {
@@ -1837,6 +1863,461 @@ app.post("/api/auth/signout", async (req, res) => {
   }
 });
 
+// ============================================================================
+// REAL-TIME SOCIAL CHAT, DIRECTORY, FRIEND REQUESTS & COMMUNITY API
+// ============================================================================
+const socialSocketsByUser = new Map<string, Set<WebSocket>>();
+
+function getOnlineUserIdSet(): Set<string> {
+  const active = new Set<string>();
+  for (const [uid, sockets] of socialSocketsByUser.entries()) {
+    for (const sock of sockets) {
+      if (sock.readyState === WebSocket.OPEN) {
+        active.add(uid);
+        break;
+      }
+    }
+  }
+  return active;
+}
+
+function sendWsPayloadToUser(userId: string, payload: Record<string, any>): void {
+  const sockets = socialSocketsByUser.get(userId);
+  if (!sockets || sockets.size === 0) return;
+  const serialized = JSON.stringify(payload);
+  for (const sock of sockets) {
+    if (sock.readyState === WebSocket.OPEN) {
+      try {
+        sock.send(serialized);
+      } catch (_) {}
+    }
+  }
+}
+
+function broadcastSocialEventToUsers(userIds: string[], payload: Record<string, any>, excludeUserId?: string): void {
+  const unique = new Set(userIds);
+  for (const uid of unique) {
+    if (excludeUserId && uid === excludeUserId) continue;
+    sendWsPayloadToUser(uid, payload);
+  }
+}
+
+function broadcastPresenceUpdate(): void {
+  const onlineUserIds = Array.from(getOnlineUserIdSet());
+  const serialized = JSON.stringify({ type: "presence:update", onlineUserIds });
+  for (const sockets of socialSocketsByUser.values()) {
+    for (const sock of sockets) {
+      if (sock.readyState === WebSocket.OPEN) {
+        try {
+          sock.send(serialized);
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+async function verifySocialToken(token: string): Promise<{ user: any; sb: SupabaseClient } | null> {
+  if (!token || token === "demo_token" || token === "local_token") return null;
+  const sb = getServerSupabase(token);
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb.auth.getUser(token);
+    if (error || !data?.user?.id) return null;
+    return { user: data.user, sb };
+  } catch {
+    return null;
+  }
+}
+
+async function requireSocialAuth(req: express.Request, res: express.Response) {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+  const verified = await verifySocialToken(token);
+  if (!verified) {
+    res.status(401).json({ error: "Unauthorized" });
+    return null;
+  }
+  return verified;
+}
+
+app.get("/api/social/bootstrap", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    await hydrateDirectoryFromSupabase(auth.sb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, auth.sb);
+    const data = getBootstrapDataForUser(auth.user.id, getOnlineUserIdSet());
+    return res.json({ ok: true, ...data });
+  } catch (err) {
+    console.error("[Social] GET /api/social/bootstrap error:", err);
+    return res.status(500).json({ error: "Failed to load social workspace." });
+  }
+});
+
+app.get("/api/social/users", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    await hydrateDirectoryFromSupabase(auth.sb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, auth.sb);
+    const bootstrap = getBootstrapDataForUser(auth.user.id, getOnlineUserIdSet());
+
+    const q = String(req.query.q || "").trim().toLowerCase();
+    const roleFilter = String(req.query.role || "all").trim().toLowerCase();
+
+    const filtered = bootstrap.users.filter((u: any) => {
+      if (u.id === auth.user.id) return false;
+      if (roleFilter === "teacher" && u.role !== "teacher") return false;
+      if (roleFilter === "student" && u.role !== "student") return false;
+      if (roleFilter === "friends" && u.friendStatus !== "friends") return false;
+      if (roleFilter === "pending" && u.friendStatus !== "pending_received" && u.friendStatus !== "pending_sent") return false;
+      if (q) {
+        const hay = `${u.name} ${u.email} ${u.title} ${u.institution} ${u.bio} ${(u.subjects || []).join(" ")}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+
+    return res.json({ ok: true, users: filtered, currentUser: bootstrap.currentUser });
+  } catch (err) {
+    console.error("[Social] GET /api/social/users error:", err);
+    return res.status(500).json({ error: "Failed to search user directory." });
+  }
+});
+
+app.post("/api/social/profile", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const updated = await syncUserProfileToStoreAndSupabase(auth.user, auth.sb, {
+      name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined,
+      role: body.role ? normalizeRole(body.role) : undefined,
+      title: typeof body.title === "string" ? body.title.trim() : undefined,
+      institution: typeof body.institution === "string" ? body.institution.trim() : undefined,
+      subjects: body.subjects !== undefined ? parseSubjectsList(body.subjects) : undefined,
+      bio: typeof body.bio === "string" ? body.bio.trim() : undefined,
+      location: typeof body.location === "string" ? body.location.trim() : undefined,
+      avatar: typeof body.avatar === "string" && !body.avatar.includes("unsplash.com") ? body.avatar.trim() : undefined,
+    });
+    return res.json({ ok: true, profile: updated });
+  } catch (err) {
+    console.error("[Social] POST /api/social/profile error:", err);
+    return res.status(500).json({ error: "Failed to update social profile." });
+  }
+});
+
+app.post("/api/social/friend-requests", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const senderProfile = await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const receiverId = typeof req.body?.receiverId === "string" ? req.body.receiverId.trim() : "";
+    const note = typeof req.body?.note === "string" ? req.body.note : undefined;
+
+    const result = await sendFriendRequestAction(auth.user.id, receiverId, note, auth.sb);
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error || "Could not send friend request." });
+    }
+
+    if (result.status === "accepted") {
+      broadcastSocialEventToUsers([auth.user.id, receiverId], {
+        type: "friend:responded",
+        action: "accept",
+        request: result.request,
+        conversation: result.conversation,
+        actor: { id: senderProfile.id, name: senderProfile.name, role: senderProfile.role, avatar: senderProfile.avatar },
+      });
+    } else {
+      sendWsPayloadToUser(receiverId, {
+        type: "friend:request",
+        request: result.request,
+        sender: {
+          id: senderProfile.id,
+          name: senderProfile.name,
+          role: senderProfile.role,
+          title: senderProfile.title,
+          institution: senderProfile.institution,
+          avatar: senderProfile.avatar,
+        },
+      });
+    }
+
+    return res.json(result);
+  } catch (err) {
+    console.error("[Social] POST /api/social/friend-requests error:", err);
+    return res.status(500).json({ error: "Could not process friend request." });
+  }
+});
+
+app.post("/api/social/friend-requests/respond", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const responderProfile = await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const senderId = typeof req.body?.senderId === "string" ? req.body.senderId.trim() : "";
+    const action = req.body?.action === "decline" ? "decline" : "accept";
+    if (!senderId) {
+      return res.status(400).json({ error: "senderId is required." });
+    }
+
+    const result = await respondToFriendRequestAction(auth.user.id, senderId, action, auth.sb);
+    if (!result.ok) {
+      return res.status(404).json({ error: result.error || "Friend request not found." });
+    }
+
+    broadcastSocialEventToUsers([auth.user.id, senderId], {
+      type: "friend:responded",
+      action,
+      request: result.request,
+      conversation: result.conversation,
+      actor: {
+        id: responderProfile.id,
+        name: responderProfile.name,
+        role: responderProfile.role,
+        avatar: responderProfile.avatar,
+      },
+    });
+
+    if (action === "accept" && result.conversation) {
+      broadcastSocialEventToUsers([auth.user.id, senderId], {
+        type: "chat:conversation",
+        conversation: result.conversation,
+      });
+    }
+
+    return res.json(result);
+  } catch (err) {
+    console.error("[Social] POST /api/social/friend-requests/respond error:", err);
+    return res.status(500).json({ error: "Could not respond to friend request." });
+  }
+});
+
+app.delete("/api/social/friend-requests/:targetId", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const targetId = String(req.params.targetId || "").trim();
+    if (!targetId) {
+      return res.status(400).json({ error: "Target user ID is required." });
+    }
+    await removeFriendshipAction(auth.user.id, targetId, auth.sb);
+    broadcastSocialEventToUsers([auth.user.id, targetId], {
+      type: "friend:removed",
+      actorId: auth.user.id,
+      targetId,
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("[Social] DELETE /api/social/friend-requests error:", err);
+    return res.status(500).json({ error: "Could not remove connection." });
+  }
+});
+
+app.post("/api/social/conversations/direct", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const partnerId = typeof req.body?.partnerId === "string" ? req.body.partnerId.trim() : "";
+    const result = openOrCreateDirectConversation(auth.user.id, partnerId);
+    if (!result.ok) {
+      return res.status(400).json({ error: result.error || "Could not open direct chat." });
+    }
+    sendWsPayloadToUser(partnerId, {
+      type: "chat:conversation",
+      conversation: result.conversation,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[Social] POST /api/social/conversations/direct error:", err);
+    return res.status(500).json({ error: "Failed to open conversation." });
+  }
+});
+
+app.post("/api/social/conversations/group", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const result = createGroupConversationAction(auth.user.id, {
+      name: req.body?.name,
+      description: req.body?.description,
+      participantIds: Array.isArray(req.body?.participantIds) ? req.body.participantIds : [],
+      groupRoleType: req.body?.groupRoleType,
+      subjectTag: req.body?.subjectTag,
+    });
+    if (!result.ok || !result.conversation) {
+      return res.status(400).json({ error: result.error || "Could not create study group." });
+    }
+    broadcastSocialEventToUsers(result.conversation.participants || [], {
+      type: "chat:conversation",
+      conversation: result.conversation,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[Social] POST /api/social/conversations/group error:", err);
+    return res.status(500).json({ error: "Failed to create study group." });
+  }
+});
+
+app.post("/api/social/conversations/:id/members", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const convId = String(req.params.id || "").trim();
+    const memberId = typeof req.body?.memberId === "string" ? req.body.memberId.trim() : "";
+    const result = addGroupMemberAction(auth.user.id, convId, memberId);
+    if (!result.ok || !result.conversation) {
+      return res.status(400).json({ error: result.error || "Could not add member." });
+    }
+    broadcastSocialEventToUsers(result.conversation.participants || [], {
+      type: "chat:conversation",
+      conversation: result.conversation,
+    });
+    return res.json(result);
+  } catch (err) {
+    console.error("[Social] POST /api/social/conversations/:id/members error:", err);
+    return res.status(500).json({ error: "Failed to add group member." });
+  }
+});
+
+app.get("/api/social/conversations/:id/messages", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  const convId = String(req.params.id || "").trim();
+  const result = getMessagesForConversation(convId, auth.user.id);
+  if (!result.ok) {
+    return res.status(403).json({ error: result.error || "Forbidden" });
+  }
+  return res.json(result);
+});
+
+app.post("/api/social/messages", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const result = sendChatMessageAction(
+      auth.user.id,
+      {
+        conversationId: String(req.body?.conversationId || "").trim(),
+        clientMessageId: typeof req.body?.clientMessageId === "string" ? req.body.clientMessageId : undefined,
+        content: String(req.body?.content || ""),
+        attachment: req.body?.attachment,
+        replyTo: req.body?.replyTo,
+      },
+      getOnlineUserIdSet()
+    );
+
+    if (!result.ok || !result.message) {
+      return res.status(400).json({ error: result.error || "Could not send message." });
+    }
+
+    if (!result.deduplicated) {
+      broadcastSocialEventToUsers(result.participants || [], {
+        type: "chat:message",
+        message: result.message,
+      });
+    }
+
+    return res.json({ ok: true, message: result.message });
+  } catch (err) {
+    console.error("[Social] POST /api/social/messages error:", err);
+    return res.status(500).json({ error: "Failed to send message." });
+  }
+});
+
+app.post("/api/social/conversations/:id/read", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  const convId = String(req.params.id || "").trim();
+  const result = markConversationReadAction(auth.user.id, convId);
+  if (!result.ok) {
+    return res.status(403).json({ error: "Conversation access denied." });
+  }
+  if (result.updatedMessageIds.length > 0) {
+    broadcastSocialEventToUsers(result.participants, {
+      type: "chat:read",
+      conversationId: convId,
+      readerId: auth.user.id,
+      messageIds: result.updatedMessageIds,
+      seenAt: result.seenAt,
+    });
+  }
+  return res.json({ ok: true, ...result });
+});
+
+app.post("/api/social/messages/:id/react", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  const msgId = String(req.params.id || "").trim();
+  const emoji = String(req.body?.emoji || "").trim();
+  const result = toggleMessageReactionAction(auth.user.id, msgId, emoji);
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error || "Could not react to message." });
+  }
+  broadcastSocialEventToUsers(result.participants || [], {
+    type: "chat:reaction",
+    conversationId: result.conversationId,
+    messageId: result.messageId,
+    reactions: result.reactions,
+  });
+  return res.json({ ok: true, reactions: result.reactions });
+});
+
+app.get("/api/social/community/posts", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  return res.json({ ok: true, posts: listCommunityPosts() });
+});
+
+app.post("/api/social/community/posts", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+  const result = createCommunityPostAction(auth.user.id, {
+    title: req.body?.title,
+    content: req.body?.content,
+    tags: req.body?.tags,
+  });
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error || "Could not create post." });
+  }
+  return res.json(result);
+});
+
+app.post("/api/social/community/posts/:id/like", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  const result = toggleCommunityPostLikeAction(auth.user.id, String(req.params.id || "").trim());
+  if (!result.ok) {
+    return res.status(404).json({ error: result.error || "Post not found." });
+  }
+  return res.json(result);
+});
+
+app.post("/api/social/community/posts/:id/replies", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+  const result = addCommunityReplyAction(
+    auth.user.id,
+    String(req.params.id || "").trim(),
+    String(req.body?.content || "")
+  );
+  if (!result.ok) {
+    return res.status(400).json({ error: result.error || "Could not post reply." });
+  }
+  return res.json(result);
+});
+
 // OAuth callback relay for Supabase Auth (Google, Apple, GitHub) — supports both popup mode (AI Studio iframe) and full-tab mode
 app.get(["/auth/callback", "/auth/callback/"], (_req, res) => {
   res.setHeader("Content-Type", "text/html; charset=utf-8");
@@ -2855,6 +3336,124 @@ Would you like me to walk through a concrete numerical example or test your unde
 
   // Vite middleware for development
 
+function attachSocialWebSocketServer(httpServer: http.Server): void {
+  const wss = new WebSocketServer({ server: httpServer, path: "/ws/chat" });
+
+  wss.on("connection", async (ws, req) => {
+    let authedUserId: string | null = null;
+    let authedUserName = "Scholar";
+
+    const registerUser = async (token: string) => {
+      const verified = await verifySocialToken(token);
+      if (!verified) {
+        try {
+          ws.send(JSON.stringify({ type: "error", code: 4001, message: "Invalid or expired token" }));
+          ws.close(4001, "Unauthorized");
+        } catch (_) {}
+        return;
+      }
+
+      const uid = verified.user.id;
+      authedUserId = uid;
+      const prof = await syncUserProfileToStoreAndSupabase(verified.user, verified.sb);
+      authedUserName = prof.name;
+
+      let set = socialSocketsByUser.get(uid);
+      if (!set) {
+        set = new Set();
+        socialSocketsByUser.set(uid, set);
+      }
+      set.add(ws);
+
+      try {
+        ws.send(
+          JSON.stringify({
+            type: "auth:ok",
+            userId: uid,
+            onlineUserIds: Array.from(getOnlineUserIdSet()),
+          })
+        );
+      } catch (_) {}
+      broadcastPresenceUpdate();
+    };
+
+    try {
+      const urlObj = new URL(req.url || "/ws/chat", "http://localhost");
+      const queryToken = urlObj.searchParams.get("token");
+      if (queryToken) {
+        await registerUser(queryToken);
+      }
+    } catch (_) {}
+
+    ws.on("message", async (rawData) => {
+      let msg: any = null;
+      try {
+        msg = JSON.parse(rawData.toString("utf-8"));
+      } catch {
+        return;
+      }
+      if (!msg || typeof msg !== "object") return;
+
+      if (msg.type === "auth" && typeof msg.token === "string") {
+        await registerUser(msg.token);
+        return;
+      }
+
+      if (msg.type === "ping") {
+        try {
+          ws.send(JSON.stringify({ type: "pong", ts: Date.now() }));
+        } catch (_) {}
+        return;
+      }
+
+      if (!authedUserId) return;
+
+      if (msg.type === "typing" && typeof msg.conversationId === "string") {
+        const conv = getConversationIfParticipant(msg.conversationId, authedUserId);
+        if (!conv) return;
+        broadcastSocialEventToUsers(
+          conv.participants,
+          {
+            type: "chat:typing",
+            conversationId: conv.id,
+            userId: authedUserId,
+            name: authedUserName,
+            isTyping: Boolean(msg.isTyping),
+          },
+          authedUserId
+        );
+        return;
+      }
+
+      if (msg.type === "read" && typeof msg.conversationId === "string") {
+        const result = markConversationReadAction(authedUserId, msg.conversationId);
+        if (result.ok && result.updatedMessageIds.length > 0) {
+          broadcastSocialEventToUsers(result.participants, {
+            type: "chat:read",
+            conversationId: msg.conversationId,
+            readerId: authedUserId,
+            messageIds: result.updatedMessageIds,
+            seenAt: result.seenAt,
+          });
+        }
+      }
+    });
+
+    ws.on("close", () => {
+      if (authedUserId) {
+        const set = socialSocketsByUser.get(authedUserId);
+        if (set) {
+          set.delete(ws);
+          if (set.size === 0) {
+            socialSocketsByUser.delete(authedUserId);
+          }
+        }
+        broadcastPresenceUpdate();
+      }
+    });
+  });
+}
+
 async function startDevServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -2870,8 +3469,11 @@ async function startDevServer() {
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  const httpServer = http.createServer(app);
+  attachSocialWebSocketServer(httpServer);
+
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on http://localhost:${PORT} (HTTP + WS /ws/chat)`);
   });
 }
 

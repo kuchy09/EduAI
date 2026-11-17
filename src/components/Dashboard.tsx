@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
 import { DailyReadingGoalCard } from './DailyReadingGoalCard';
+import { HomeSearchBar } from './HomeSearchBar';
 import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
 import { fetchUserDashboardMetrics, UserStatsSummary } from '../lib/userHomeDataService';
 import { isAppOnline } from '../lib/offlineManager';
@@ -268,6 +269,16 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
 
   return (
     <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 md:py-8 space-y-4 sm:space-y-6 md:space-y-8 min-w-0 transition-all duration-300">
+      {/* Scrollable Search Bar (does not hover) */}
+      <HomeSearchBar
+        books={books}
+        user={user}
+        profile={profile}
+        onBookSelect={onBookSelect}
+        onNavigate={(view) => onNavigate?.(view)}
+        onAddBookToLibrary={onAddBookToLibrary}
+      />
+
       {/* Elastic Adaptive Subject Check & User Welcome Header */}
       <motion.div 
         initial={{ opacity: 0, y: 8 }}

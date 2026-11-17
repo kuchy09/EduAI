@@ -88,7 +88,7 @@ export function OfflineBanner({ onNavigate, onNavigateToOfflineBooks }: OfflineB
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="fixed top-3 right-4 z-50 bg-slate-900/90 text-white backdrop-blur-md px-3.5 py-1.5 rounded-full text-xs flex items-center gap-2 shadow-xl border border-slate-700"
+            className="fixed top-16 sm:top-[72px] right-4 z-50 bg-slate-900/90 text-white backdrop-blur-md px-3.5 py-1.5 rounded-full text-xs flex items-center gap-2 shadow-xl border border-slate-700"
           >
             <RefreshCw className="w-3.5 h-3.5 text-brand-400 animate-spin" />
             <span>Syncing reading data...</span>

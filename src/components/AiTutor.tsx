@@ -1119,7 +1119,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-[#161616]/75 dark:backdrop-blur-xl border-r border-slate-200/60 dark:border-white/10 font-sans select-none sidebar-pane">
-      <div className="p-4 border-b border-slate-200/50 dark:border-white/10 shrink-0">
+      <div className="px-4 pb-4 pt-16 sm:pt-[72px] border-b border-slate-200/50 dark:border-white/10 shrink-0">
         <button
           onClick={handleStartNewChat}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 dark:bg-indigo-600/80 hover:bg-slate-800 dark:hover:bg-indigo-600 text-white font-semibold text-sm rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-[0.99] cursor-pointer"
@@ -1229,7 +1229,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
       <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-[#121212] relative overflow-hidden main-canvas-bg">
 
         {/* Message Container Scroller */}
-        <div className="flex-1 overflow-y-auto pt-6 pb-48 px-4 md:px-10 scroll-smooth relative">
+        <div className="flex-1 overflow-y-auto pt-16 sm:pt-20 pb-48 px-4 md:px-10 scroll-smooth relative">
           <div className="max-w-3xl mx-auto space-y-7 flex flex-col">
             {messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 space-y-6">

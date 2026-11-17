@@ -328,53 +328,53 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
           </div>
 
           {/* Learning Statistics */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
-            <h3 className="font-bold text-slate-900">Learning Statistics</h3>
+          <div className="bg-white dark:bg-[#1a1a1d] p-6 rounded-2xl border border-slate-200 dark:border-[#2e2e32] shadow-sm dark:shadow-[0_8px_28px_-4px_rgba(0,0,0,0.55)] space-y-6">
+            <h3 className="font-bold text-slate-900 dark:text-[#ededed]">Learning Statistics</h3>
             
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
-                <div className="w-10 h-10 bg-emerald-100 text-emerald-600 rounded-full flex items-center justify-center mb-1">
+              <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-1">
                   <Award className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900">0</div>
-                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Certificates</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Certificates</div>
               </div>
               
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
-                <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-full flex items-center justify-center mb-1">
+              <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-1">
                   <BookOpen className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900">0</div>
-                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Books Read</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Books Read</div>
               </div>
               
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
-                <div className="w-10 h-10 bg-amber-100 text-amber-600 rounded-full flex items-center justify-center mb-1">
+              <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mb-1">
                   <Star className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900">0</div>
-                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Avg Quiz Score</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Avg Quiz Score</div>
               </div>
               
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center justify-center text-center space-y-2">
-                <div className="w-10 h-10 bg-purple-100 text-purple-600 rounded-full flex items-center justify-center mb-1">
+              <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
+                <div className="w-10 h-10 bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 rounded-full flex items-center justify-center mb-1">
                   <Clock className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900">0h</div>
-                <div className="text-xs font-medium text-slate-500 uppercase tracking-wider">Study Time</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0h</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Study Time</div>
               </div>
             </div>
             
             {/* Extended Stats */}
-            <div className="p-5 border border-slate-100 rounded-xl flex flex-col sm:flex-row items-center gap-4">
-              <div className="p-3 bg-brand-50 text-brand-600 rounded-xl shrink-0">
+            <div className="p-5 border border-slate-100 dark:border-[#2e2e34] dark:bg-[#222226] rounded-xl flex flex-col sm:flex-row items-center gap-4">
+              <div className="p-3 bg-brand-50 dark:bg-brand-500/20 text-brand-600 dark:text-[#b8a5f0] rounded-xl shrink-0">
                 <BarChart2 className="w-6 h-6" />
               </div>
               <div className="flex-1 text-center sm:text-left">
-                <h4 className="font-semibold text-slate-900">Start Your Journey!</h4>
-                <p className="text-sm text-slate-500 mt-1">You're ready to start learning. Pick a book or course to begin tracking your progress.</p>
+                <h4 className="font-semibold text-slate-900 dark:text-[#ededed]">Start Your Journey!</h4>
+                <p className="text-sm text-slate-500 dark:text-[#a1a1aa] mt-1">You're ready to start learning. Pick a book or course to begin tracking your progress.</p>
               </div>
-              <button className="text-sm font-medium text-brand-600 hover:text-brand-700 whitespace-nowrap bg-brand-50 px-4 py-2 rounded-lg">
+              <button className="text-sm font-medium text-brand-600 dark:text-[#b8a5f0] hover:text-brand-700 dark:hover:text-[#d8cef6] whitespace-nowrap bg-brand-50 dark:bg-brand-500/20 dark:hover:bg-brand-500/30 px-4 py-2 rounded-lg transition-colors">
                 View Library
               </button>
             </div>

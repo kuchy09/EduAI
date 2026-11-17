@@ -1,20 +1,23 @@
 import React from 'react';
 import { 
-  X, Phone, Video, Search, Bell, BellOff, 
-  FileText, BookOpen, Image, ShieldCheck, 
+  X, Phone, Video, Users, UserPlus,
+  FileText, BookOpen,
   UserMinus, School, Sparkles, MapPin, Mail
 } from 'lucide-react';
 import { ChatUser, Conversation, ChatMessage } from './types';
+import { AvatarBadge } from './AvatarBadge';
 
 interface ChatInfoDrawerProps {
   isOpen: boolean;
   onClose: () => void;
   conversation: Conversation;
   partner?: ChatUser;
+  allUsers?: ChatUser[];
   messages: ChatMessage[];
   onStartCall: (type: 'audio' | 'video') => void;
   onUnfriend?: (userId: string) => void;
   onOpenSharedNotes?: () => void;
+  onAddGroupMember?: (conversationId: string, memberId: string) => void;
 }
 
 export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
@@ -22,10 +25,12 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
   onClose,
   conversation,
   partner,
+  allUsers = [],
   messages,
   onStartCall,
   onUnfriend,
-  onOpenSharedNotes
+  onOpenSharedNotes,
+  onAddGroupMember,
 }) => {
   if (!isOpen) return null;
 
@@ -41,13 +46,13 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
       {/* Mobile Backdrop Overlay */}
       <div 
         onClick={onClose}
-        className="fixed inset-0 bg-black/40 z-40 md:hidden backdrop-blur-xs transition-opacity"
+        className="fixed inset-0 bg-black/40 z-[105] md:hidden backdrop-blur-xs transition-opacity"
       />
 
       {/* Drawer Container */}
-      <div className="fixed inset-y-0 right-0 z-50 w-full sm:w-80 md:w-80 lg:w-88 md:static md:z-auto border-l border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col h-full shrink-0 select-none overflow-y-auto shadow-2xl md:shadow-none animate-in slide-in-from-right duration-200">
+      <div className="fixed inset-y-0 right-0 z-[110] w-full sm:w-80 md:w-80 lg:w-88 md:static md:z-auto border-l border-slate-200/80 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col h-full shrink-0 select-none overflow-y-auto shadow-2xl md:shadow-none animate-in slide-in-from-right duration-200">
         {/* Header */}
-        <div className="p-3.5 sm:p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs z-10">
+        <div className="px-3.5 sm:px-4 pt-3.5 md:pt-[72px] pb-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between sticky top-0 bg-white/95 dark:bg-slate-900/95 backdrop-blur-xs z-10">
           <h3 className="text-sm font-bold text-slate-900 dark:text-white">
             {isGroup ? 'Group Information' : 'Profile & Academic Details'}
           </h3>
@@ -63,18 +68,17 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
       <div className="p-6 flex flex-col items-center text-center border-b border-slate-100 dark:border-slate-800 bg-slate-50/40 dark:bg-slate-900/40">
         <div className="relative mb-3">
           {isGroup ? (
-            <div className="w-20 h-20 rounded-3xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-3xl shadow-md">
-              {conversation.groupAvatar || '👥'}
+            <div className="w-20 h-20 rounded-3xl bg-indigo-600 flex items-center justify-center text-white shadow-sm">
+              <Users className="w-9 h-9" />
             </div>
           ) : (
-            <>
-              <img 
-                src={partner?.avatar} 
-                alt={partner?.name} 
-                className="w-20 h-20 rounded-full object-cover ring-4 ring-indigo-500/20 shadow-md"
-              />
-              <span className={`absolute bottom-0 right-0 w-4 h-4 ${partner?.status === 'online' ? 'bg-emerald-500' : 'bg-slate-400'} rounded-full ring-2 ring-white dark:ring-slate-900`} />
-            </>
+            <AvatarBadge
+              name={partner?.name}
+              avatarUrl={partner?.avatar}
+              role={partner?.role}
+              isOnline={partner?.status === 'online'}
+              size="xl"
+            />
           )}
         </div>
 
@@ -84,14 +88,10 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
 
         {!isGroup && partner && (
           <>
-            <span className={`mt-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-              partner.role === 'teacher' 
-                ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-700' 
-                : 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-700'
-            }`}>
-              {partner.role} • Verified
-            </span>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 max-w-[220px]">
+            <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
+              {partner.role === 'teacher' ? 'Faculty Educator' : 'Student'} · Verified
+            </p>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 max-w-[220px]">
               {partner.title}
             </p>
           </>
@@ -99,7 +99,7 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
 
         {isGroup && (
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-[240px]">
-            {conversation.description || 'Active study group on the Edu AI platform.'}
+            {conversation.description || 'Active study group on Edu AI.'}
           </p>
         )}
 
@@ -128,6 +128,56 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
           </div>
         )}
       </div>
+
+      {/* Group Members Panel */}
+      {isGroup && (
+        <div className="p-4 border-b border-slate-100 dark:border-slate-800 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-slate-900 dark:text-white">
+              Members ({conversation.participants.length})
+            </span>
+          </div>
+          <div className="space-y-2 max-h-48 overflow-y-auto">
+            {conversation.participants.map((uid) => {
+              const member = allUsers.find((u) => u.id === uid);
+              const memberName = member?.name || (uid === partner?.id ? partner.name : 'Group Member');
+              return (
+                <div key={uid} className="flex items-center gap-2.5">
+                  <AvatarBadge
+                    name={memberName}
+                    avatarUrl={member?.avatar}
+                    role={member?.role}
+                    isOnline={member?.status === 'online'}
+                    size="xs"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">{memberName}</p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                      {member?.role === 'teacher' ? 'Educator' : 'Student'}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {onAddGroupMember && (
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+              {allUsers.filter((u) => u.friendStatus === 'friends' && !conversation.participants.includes(u.id)).slice(0, 3).map((friend) => (
+                <button
+                  type="button"
+                  key={friend.id}
+                  onClick={() => onAddGroupMember(conversation.id, friend.id)}
+                  className="w-full py-1.5 px-2 rounded-lg hover:bg-indigo-50 dark:hover:bg-indigo-950/50 text-left text-xs text-indigo-600 dark:text-indigo-400 font-medium flex items-center justify-between transition-colors cursor-pointer"
+                >
+                  <span className="truncate">+ Add {friend.name}</span>
+                  <UserPlus className="w-3.5 h-3.5 shrink-0" />
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Academic Info & Subjects */}
       {!isGroup && partner && (

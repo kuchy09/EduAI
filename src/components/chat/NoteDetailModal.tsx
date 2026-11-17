@@ -141,19 +141,26 @@ export const NoteDetailModal: React.FC<NoteDetailModalProps> = ({
           {/* Author & Tabs Switcher */}
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
             <div className="flex items-center gap-2.5">
-              <img 
-                src={note.authorAvatar || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80'} 
-                alt={note.authorName} 
-                className="w-8 h-8 rounded-full object-cover ring-2 ring-indigo-500/20"
-              />
+              <div className="w-8 h-8 rounded-full bg-indigo-600 text-white flex items-center justify-center text-xs font-semibold shrink-0 overflow-hidden">
+                {note.authorAvatar && !note.authorAvatar.includes('unsplash.com') ? (
+                  <img
+                    src={note.authorAvatar}
+                    alt={note.authorName}
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  <span>{String(note.authorName || 'EA').slice(0, 2).toUpperCase()}</span>
+                )}
+              </div>
               <div>
                 <p className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
                   <span>{note.authorName}</span>
-                  <span className="text-[9px] uppercase px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-semibold">
-                    {note.authorRole}
+                  <span className="text-[10px] uppercase text-slate-500 dark:text-slate-400 font-semibold">
+                    · {note.authorRole}
                   </span>
                 </p>
-                <p className="text-[10px] text-slate-400">Created note author</p>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">Note author</p>
               </div>
             </div>
 

@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { 
-  PhoneOff, Mic, MicOff, Video, VideoOff, 
-  Volume2, ShieldCheck, Sparkles, User, Maximize2
+  PhoneOff, Mic, MicOff, Video, VideoOff
 } from 'lucide-react';
-import { ChatUser, CallSession } from './types';
+import { CallSession } from './types';
+import { AvatarBadge } from './AvatarBadge';
 
 interface CallModalProps {
   callSession: CallSession;
@@ -56,12 +56,15 @@ export const CallModal: React.FC<CallModalProps> = ({
         <div className="relative h-80 sm:h-96 bg-gradient-to-b from-slate-900 via-slate-950 to-slate-900 flex flex-col items-center justify-center p-6 text-center">
           {type === 'video' && !isVideoOff ? (
             <div className="absolute inset-0 overflow-hidden">
-              <img 
-                src={partner.avatar} 
-                alt={partner.name} 
-                className="w-full h-full object-cover blur-xs opacity-60 scale-105"
-              />
-              <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-slate-950/80" />
+              {partner.avatar && (
+                <img
+                  src={partner.avatar}
+                  alt={partner.name}
+                  referrerPolicy="no-referrer"
+                  className="w-full h-full object-cover blur-xs opacity-40 scale-105"
+                />
+              )}
+              <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-900/60 to-slate-950/80" />
               
               {/* Picture-in-picture student preview */}
               <div className="absolute top-4 right-4 w-24 h-32 rounded-xl bg-slate-800 border-2 border-slate-700/80 shadow-lg overflow-hidden flex items-center justify-center">
@@ -73,20 +76,18 @@ export const CallModal: React.FC<CallModalProps> = ({
           {/* Caller Details */}
           <div className="relative z-10 flex flex-col items-center">
             <div className="relative mb-4">
-              <img 
-                src={partner.avatar} 
-                alt={partner.name} 
-                className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover ring-4 ring-indigo-500/30 shadow-xl"
+              <AvatarBadge
+                name={partner.name}
+                avatarUrl={partner.avatar}
+                role={partner.role}
+                size="xl"
               />
-              <span className={`absolute bottom-1 right-1 px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
-                partner.role === 'teacher' ? 'bg-amber-500 text-slate-950' : 'bg-indigo-500 text-white'
-              }`}>
-                {partner.role}
-              </span>
             </div>
 
             <h3 className="text-xl font-bold text-white mb-1">{partner.name}</h3>
-            <p className="text-xs text-slate-400 max-w-xs">{partner.title} • {partner.institution}</p>
+            <p className="text-xs text-slate-400 max-w-xs">
+              {partner.role === 'teacher' ? 'Educator' : 'Student'} · {partner.institution}
+            </p>
 
             {/* Audio Waveform Animation */}
             <div className="flex items-center gap-1.5 mt-6 h-8">

@@ -33,7 +33,7 @@ When calculating electron-positron scattering amplitudes (Bhabha scattering), tw
     authorId: 'user-prof-amara',
     authorName: 'Prof. Amara Ochieng',
     authorRole: 'teacher',
-    authorAvatar: 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: '',
     conversationId: 'conv-physics-dept',
     permissionType: 'group',
     allowedUserIds: ['user-prof-amara', 'user-david-kip', 'current-user-id'],
@@ -96,7 +96,7 @@ def fib_memo(n, memo={}):
     authorId: 'current-user-id',
     authorName: 'You',
     authorRole: 'student',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: '',
     conversationId: 'conv-cs-cohort',
     permissionType: 'group',
     allowedUserIds: ['current-user-id', 'user-sarah-mutiso'],
@@ -149,7 +149,7 @@ Find the roots of $2x^2 - 8x + 6 = 0$ using:
     authorId: 'user-dr-kamau',
     authorName: 'Dr. Julius Kamau',
     authorRole: 'teacher',
-    authorAvatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: '',
     conversationId: 'conv-cbc-form4',
     permissionType: 'individual',
     allowedUserIds: ['user-dr-kamau', 'current-user-id'],
@@ -199,7 +199,7 @@ Confidential synthesis for final semester lab exam.
     authorId: 'current-user-id',
     authorName: 'You',
     authorRole: 'student',
-    authorAvatar: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150&auto=format&fit=crop&q=80',
+    authorAvatar: '',
     permissionType: 'private',
     allowedUserIds: ['current-user-id'],
     allowedGroupIds: [],
@@ -307,4 +307,35 @@ export function canUserEditNote(note: SharedBookNote, userId?: string): boolean 
   const collaborators = Array.isArray(note.collaborators) ? note.collaborators : [];
   const collab = collaborators.find(c => c.userId === uid || (c.userId === 'current-user-id' && uid));
   return collab ? (collab.permission === 'edit' || collab.permission === 'admin') : false;
+}
+
+export async function syncNoteToSupabase(note: SharedBookNote): Promise<void> {
+  if (!supabase || !note?.id) return;
+  try {
+    await supabase.from('shared_notes').upsert(
+      {
+        id: note.id,
+        title: note.title,
+        book_id: note.bookId,
+        book_title: note.bookTitle,
+        content: note.content,
+        author_id: note.authorId,
+        conversation_id: note.conversationId || null,
+        permission_type: note.permissionType,
+        updated_at: note.updatedAt || new Date().toISOString(),
+      },
+      { onConflict: 'id' }
+    );
+  } catch (_) {
+    // Local storage persistence already succeeded
+  }
+}
+
+export async function deleteNoteFromSupabase(noteId: string): Promise<void> {
+  if (!supabase || !noteId) return;
+  try {
+    await supabase.from('shared_notes').delete().eq('id', noteId);
+  } catch (_) {
+    // Local storage cleanup already succeeded
+  }
 }

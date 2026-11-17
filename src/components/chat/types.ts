@@ -19,6 +19,16 @@ export interface ChatUser {
   location?: string;
 }
 
+export interface FriendRequestRecord {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  status: 'pending' | 'accepted' | 'declined';
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface UserNote {
   id: string;
   userId: string;
@@ -44,8 +54,8 @@ export interface ChatAttachment {
   bookTitle?: string;
   bookAuthor?: string;
   bookCover?: string;
-  duration?: number; // in seconds for voice notes
-  transcript?: string; // Web Speech API live transcription
+  duration?: number;
+  transcript?: string;
   language?: string;
   codeSnippet?: string;
   noteId?: string;
@@ -55,6 +65,7 @@ export interface ChatAttachment {
 
 export interface ChatMessage {
   id: string;
+  clientMessageId?: string;
   conversationId: string;
   senderId: string;
   senderName: string;
@@ -64,7 +75,7 @@ export interface ChatMessage {
   createdAt: string;
   status: 'sending' | 'sent' | 'delivered' | 'read';
   seenAt?: string;
-  reactions?: Record<string, string[]>; // emoji -> array of user IDs
+  reactions?: Record<string, string[]>;
   attachment?: ChatAttachment;
   replyTo?: {
     id: string;
@@ -76,10 +87,11 @@ export interface ChatMessage {
 export interface Conversation {
   id: string;
   type: ConversationType;
-  participants: string[]; // user IDs
-  name?: string; // for group chats
+  participants: string[];
+  name?: string;
   groupAvatar?: string;
   groupRoleType?: GroupRoleType;
+  subjectTag?: string;
   description?: string;
   lastMessage?: ChatMessage;
   unreadCount: number;
@@ -117,22 +129,43 @@ export interface SharedBookNote {
   bookAuthor?: string;
   bookCover?: string;
   chapterOrPage?: string;
-  keyTakeaways: string[]; // Bulleted key takeaways
-  content: string; // Markdown notes / synthesis
+  keyTakeaways: string[];
+  content: string;
   tags: string[];
   authorId: string;
   authorName: string;
   authorRole: UserRole;
   authorAvatar?: string;
-  conversationId?: string; // Associated chat conversation / study room
+  conversationId?: string;
   permissionType: SharedNotePermission;
-  // Specific allowed user IDs (individual permission)
   allowedUserIds: string[];
-  // Specific allowed group/conversation IDs (group permission)
   allowedGroupIds: string[];
-  // Collaborators with edit or view access
   collaborators: NoteCollaborator[];
   isPinned?: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CommunityReply {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole: string;
+  authorAvatar?: string;
+  content: string;
+  createdAt: string;
+}
+
+export interface CommunityPost {
+  id: string;
+  authorId: string;
+  authorName: string;
+  authorRole: string;
+  authorAvatar?: string;
+  title: string;
+  content: string;
+  tags: string[];
+  likedBy: string[];
+  replies: CommunityReply[];
+  createdAt: string;
 }
