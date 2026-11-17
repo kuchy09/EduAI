@@ -1,7 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { supabase, clearStaleSupabaseTokens, getPersistedDeviceSession } from '../lib/supabase';
 import { safeStorage } from '../lib/safeStorage';
-import { getMergedBookCoverOverrides, saveBookCoverOverrideToSync } from '../lib/accountSyncService';
+import {
+  applyGlobalCoversToBooks,
+  saveGlobalBookCover,
+  setGlobalBookCovers,
+} from '../lib/globalBookCoversService';
+import { isSystemBookConfigRow } from '../../shared/canonicalBookCovers';
 import { 
   Upload, FileText, CheckCircle, AlertCircle, Loader2, BookOpen, 
   Trash2, Search, Palette, Eye, Sparkles, Filter, CheckCircle2 
@@ -103,6 +108,9 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
           if (Array.isArray(payload.books)) {
             serverBooks = payload.books;
           }
+          if (payload.globalBookCovers && typeof payload.globalBookCovers === 'object') {
+            setGlobalBookCovers(payload.globalBookCovers);
+          }
           if (Array.isArray(payload.deletedIds)) {
             deletedIds = new Set(payload.deletedIds);
           }
@@ -117,29 +125,34 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
         try {
           const { data } = await supabase.from('books').select('*').order('created_at', { ascending: false });
           if (data) {
-            dbBooksList = data.map(b => {
-              const isKlb =
-                Boolean(b.publisher?.toLowerCase().includes('klb')) ||
-                Boolean(b.author?.toLowerCase().includes('klb')) ||
-                Boolean(b.title?.toLowerCase().includes('klb')) ||
-                Boolean(b.author?.toLowerCase().includes('kenya literature bureau'));
-              return {
-                id: b.id,
-                title: b.title,
-                author: b.author || (isKlb ? 'Kenya Literature Bureau (KLB)' : 'Unknown'),
-                publisher: b.publisher || (isKlb ? 'Kenya Literature Bureau (KLB)' : undefined),
-                isKicdApproved: b.is_kicd_approved ?? isKlb,
-                isbn: b.isbn || undefined,
-                coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
-                category: b.category || 'Textbook',
-                rating: 4.5,
-                description: b.description || '',
-                level: b.education_level,
-                curriculum: b.curriculum ? [b.curriculum] : undefined,
-                subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
-                fileUrl: b.file_url,
-              };
-            });
+            dbBooksList = data
+              .filter(b => !isSystemBookConfigRow(b))
+              .map(b => {
+                const isKlb =
+                  Boolean(b.publisher?.toLowerCase().includes('klb')) ||
+                  Boolean(b.author?.toLowerCase().includes('klb')) ||
+                  Boolean(b.title?.toLowerCase().includes('klb')) ||
+                  Boolean(b.author?.toLowerCase().includes('kenya literature bureau'));
+                return {
+                  id: b.id,
+                  title: b.title,
+                  author: b.author || (isKlb ? 'Kenya Literature Bureau (KLB)' : 'Unknown'),
+                  publisher: b.publisher || (isKlb ? 'Kenya Literature Bureau (KLB)' : undefined),
+                  isKicdApproved: b.is_kicd_approved ?? isKlb,
+                  isbn: b.isbn || undefined,
+                  coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
+                  coverMode: b.cover_mode || undefined,
+                  pdfCoverPage: b.pdf_cover_page ?? undefined,
+                  customCover: b.custom_cover || undefined,
+                  category: b.category || 'Textbook',
+                  rating: 4.5,
+                  description: b.description || '',
+                  level: b.education_level,
+                  curriculum: b.curriculum ? [b.curriculum] : undefined,
+                  subjects: b.subjects ? b.subjects.split(',').map((s: string) => s.trim()) : undefined,
+                  fileUrl: b.file_url,
+                };
+              });
           }
         } catch (sbErr) {
           console.warn('Admin Supabase books query warning:', sbErr);
@@ -200,7 +213,7 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
       const uniqueBooks: Book[] = [];
 
       for (const candidate of combinedCandidates) {
-        if (!candidate || !candidate.id || deletedIds.has(candidate.id)) continue;
+        if (!candidate || !candidate.id || !candidate.title || deletedIds.has(candidate.id) || isSystemBookConfigRow(candidate)) continue;
         const normTitle = `${candidate.title.trim().toLowerCase()}::${(candidate.publisher || candidate.author || '').trim().toLowerCase()}`;
         if (seenIds.has(candidate.id) || seenTitles.has(normTitle)) continue;
         seenIds.add(candidate.id);
@@ -208,28 +221,7 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
         uniqueBooks.push(candidate);
       }
 
-      // Apply any persisted cover overrides from user/local cache
-      let overrides: Record<string, any> = {};
-      try {
-        const uid = getPersistedDeviceSession()?.user?.id;
-        overrides = getMergedBookCoverOverrides(uid);
-      } catch (e) {
-        console.warn('Failed to parse cover overrides cache:', e);
-      }
-
-      const mergedBooks = uniqueBooks.map(b => {
-        const override = overrides[b.id];
-        if (override) {
-          return {
-            ...b,
-            coverMode: override.coverMode || b.coverMode,
-            coverImage: override.coverImage !== undefined ? override.coverImage : b.coverImage,
-            pdfCoverPage: override.pdfCoverPage ?? b.pdfCoverPage,
-            customCover: override.customCover || b.customCover,
-          };
-        }
-        return b;
-      });
+      const mergedBooks = applyGlobalCoversToBooks(uniqueBooks);
 
       setBooks(mergedBooks);
     } catch (err: any) {
@@ -385,12 +377,20 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
 
   const handleSaveCoverPage = async (updatedBook: Book) => {
     try {
-      // 1. Update in server catalog
+      const persistedSession = getPersistedDeviceSession();
+      const token = persistedSession?.access_token;
+      const authHeaders: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      // 1. Update in server catalog (with auth header for Supabase RLS)
       try {
         await fetch(`/api/books/${encodeURIComponent(updatedBook.id)}`, {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
+          headers: authHeaders,
           body: JSON.stringify({
+            title: updatedBook.title,
             coverImage: updatedBook.coverImage || '',
             coverMode: updatedBook.coverMode,
             pdfCoverPage: updatedBook.pdfCoverPage,
@@ -401,11 +401,9 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
         console.warn('Server cover update notice:', apiErr);
       }
 
-      // 2. Sync override across user devices immediately
+      // 2. Sync override globally across all user accounts & devices
       try {
-        const persistedSession = getPersistedDeviceSession();
-        saveBookCoverOverrideToSync(
-          persistedSession?.user?.id,
+        await saveGlobalBookCover(
           updatedBook.id,
           {
             coverMode: updatedBook.coverMode,
@@ -414,7 +412,8 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
             customCover: updatedBook.customCover,
             updatedAt: new Date().toISOString(),
           },
-          persistedSession?.access_token
+          updatedBook,
+          token
         );
       } catch (_) {}
 
@@ -425,7 +424,7 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
             cover_image: updatedBook.coverImage || ''
           }).eq('id', updatedBook.id);
         } catch (dbErr) {
-          console.warn('Supabase DB cover update warning (persisting via sync):', dbErr);
+          console.warn('Supabase DB cover update warning (persisting via global sync):', dbErr);
         }
       }
 

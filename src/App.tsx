@@ -63,11 +63,18 @@ import {
   clearAccountLocalCaches,
   getUnlockedBooksStorageKey,
   getBookmarksStorageKey,
-  getMergedBookCoverOverrides,
-  saveBookCoverOverrideToSync,
   mergeBooksLists,
   mergeBookmarksLists,
 } from './lib/accountSyncService';
+import {
+  GLOBAL_BOOK_COVERS_EVENT,
+  applyGlobalCoverToBook,
+  applyGlobalCoversToBooks,
+  fetchGlobalBookCoversFromServer,
+  saveGlobalBookCover,
+  setGlobalBookCovers,
+} from './lib/globalBookCoversService';
+import { isSystemBookConfigRow } from '../shared/canonicalBookCovers';
 import { socialWsClient } from './lib/socialChatClient';
 
 export interface SystemHealth {
@@ -197,29 +204,10 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSageSidebarOpen, setIsSageSidebarOpen] = useState(false);
-  const getPersistedBooks = useCallback((baseBooks: Book[], userIdOverride?: string): Book[] => {
-    let overrides: Record<string, any> = {};
-    try {
-      const uid = userIdOverride ?? getPersistedDeviceSession()?.user?.id;
-      overrides = getMergedBookCoverOverrides(uid);
-    } catch (e) {
-      console.warn('Failed to read cover overrides in App:', e);
-    }
-
-    return baseBooks.map(b => {
-      let bookWithCover = { ...b };
-      const override = overrides[b.id];
-      if (override) {
-        bookWithCover = {
-          ...bookWithCover,
-          coverMode: override.coverMode || bookWithCover.coverMode,
-          coverImage: override.coverImage !== undefined ? override.coverImage : bookWithCover.coverImage,
-          pdfCoverPage: override.pdfCoverPage ?? bookWithCover.pdfCoverPage,
-          customCover: override.customCover || bookWithCover.customCover,
-        };
-      }
-
-      const saved = safeStorage.getItem(`book_progress_${b.id}`);
+  const getPersistedBooks = useCallback((baseBooks: Book[], _userIdOverride?: string): Book[] => {
+    const withGlobalCovers = applyGlobalCoversToBooks(baseBooks);
+    return withGlobalCovers.map(bookWithCover => {
+      const saved = safeStorage.getItem(`book_progress_${bookWithCover.id}`);
       if (saved !== null) {
         return { ...bookWithCover, readProgress: parseInt(saved, 10) };
       }
@@ -459,6 +447,9 @@ export default function App() {
         if (res.ok) {
           const payload = await res.json();
           if (Array.isArray(payload.books)) serverBooks = payload.books;
+          if (payload.globalBookCovers && typeof payload.globalBookCovers === 'object') {
+            setGlobalBookCovers(payload.globalBookCovers, { notify: false });
+          }
           if (Array.isArray(payload.deletedIds)) deletedIds = new Set(payload.deletedIds);
         }
       } catch (apiErr) {
@@ -476,42 +467,47 @@ export default function App() {
             timeoutPromise,
           ]);
           const genericBooks = Array.isArray(genericBooksRes?.data) ? genericBooksRes.data : [];
-          dbGenericBooks = genericBooks.map((b: any) => {
-            let inferredPublisher = b.publisher || '';
-            let kicd = b.is_kicd_approved ?? b.isKicdApproved ?? false;
-            if (
-              !inferredPublisher &&
-              (b.author?.toLowerCase().includes('klb') ||
-                b.title?.toLowerCase().includes('klb') ||
-                b.author?.toLowerCase().includes('kenya literature bureau'))
-            ) {
-              inferredPublisher = 'Kenya Literature Bureau (KLB)';
-              kicd = true;
-            }
-            return {
-              id: b.id,
-              title: b.title,
-              author: b.author || 'Unknown',
-              coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
-              category: b.category || 'General',
-              rating: 4.5,
-              description: b.description || '',
-              level: b.education_level,
-              curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (kicd ? ['CBC', 'KCSE'] : undefined),
-              subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(',').map((s: string) => s.trim())) : undefined,
-              country: b.country
-                ? (Array.isArray(b.country) ? b.country : [b.country])
-                : b.description && b.description.includes('Location: ')
-                  ? [b.description.split('Location: ')[1].trim()]
-                  : kicd
-                    ? ['Kenya']
-                    : undefined,
-              fileUrl: b.file_url,
-              publisher: inferredPublisher || undefined,
-              isKicdApproved: kicd,
-              isbn: b.isbn || undefined,
-            };
-          });
+          dbGenericBooks = genericBooks
+            .filter((b: any) => !isSystemBookConfigRow(b))
+            .map((b: any) => {
+              let inferredPublisher = b.publisher || '';
+              let kicd = b.is_kicd_approved ?? b.isKicdApproved ?? false;
+              if (
+                !inferredPublisher &&
+                (b.author?.toLowerCase().includes('klb') ||
+                  b.title?.toLowerCase().includes('klb') ||
+                  b.author?.toLowerCase().includes('kenya literature bureau'))
+              ) {
+                inferredPublisher = 'Kenya Literature Bureau (KLB)';
+                kicd = true;
+              }
+              return {
+                id: b.id,
+                title: b.title,
+                author: b.author || 'Unknown',
+                coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
+                coverMode: b.cover_mode || undefined,
+                pdfCoverPage: b.pdf_cover_page ?? undefined,
+                customCover: b.custom_cover || undefined,
+                category: b.category || 'General',
+                rating: 4.5,
+                description: b.description || '',
+                level: b.education_level,
+                curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (kicd ? ['CBC', 'KCSE'] : undefined),
+                subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(',').map((s: string) => s.trim())) : undefined,
+                country: b.country
+                  ? (Array.isArray(b.country) ? b.country : [b.country])
+                  : b.description && b.description.includes('Location: ')
+                    ? [b.description.split('Location: ')[1].trim()]
+                    : kicd
+                      ? ['Kenya']
+                      : undefined,
+                fileUrl: b.file_url,
+                publisher: inferredPublisher || undefined,
+                isKicdApproved: kicd,
+                isbn: b.isbn || undefined,
+              };
+            });
         } catch (sbErr) {
           console.warn('[App] Supabase books query notice:', sbErr);
         }
@@ -555,9 +551,9 @@ export default function App() {
       const candidates = [
         ...serverBooks,
         ...dbGenericBooks,
-        ...localUploadedBooks,
         ...mappedCurriculum,
         ...mockBooks,
+        ...localUploadedBooks,
       ];
 
       const seenIds = new Set<string>();
@@ -565,7 +561,7 @@ export default function App() {
       const deduped: Book[] = [];
 
       for (const candidate of candidates) {
-        if (!candidate || !candidate.id || deletedIds.has(candidate.id)) continue;
+        if (!candidate || !candidate.id || !candidate.title || deletedIds.has(candidate.id) || isSystemBookConfigRow(candidate)) continue;
         const normTitle = `${candidate.title.trim().toLowerCase()}::${(candidate.publisher || candidate.author || '').trim().toLowerCase()}`;
         if (seenIds.has(candidate.id) || seenTitles.has(normTitle)) continue;
         seenIds.add(candidate.id);
@@ -957,6 +953,7 @@ export default function App() {
           syncUserReadingProgressFromSupabase(userId),
           hydrateAccountSync(session.user, session.access_token),
           syncUserDailyGoalFromSupabase(userId),
+          fetchGlobalBookCoversFromServer(),
         ]);
 
         if (!isMounted) return;
@@ -974,7 +971,7 @@ export default function App() {
         setBooks(prev => {
           const withUnlocked =
             hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0
-              ? mergeBooksLists(prev, hydrated.unlockedBooks)
+              ? mergeBooksLists(hydrated.unlockedBooks, prev)
               : prev;
           const withCovers = getPersistedBooks(withUnlocked, userId);
           return withCovers.map(book =>
@@ -997,7 +994,12 @@ export default function App() {
       setBooks(prev => getPersistedBooks(prev, userId));
       setActiveBook(prev => (prev ? getPersistedBooks([prev], userId)[0] : prev));
     };
+    const handleGlobalCoversEvent = () => {
+      setBooks(prev => applyGlobalCoversToBooks(prev));
+      setActiveBook(prev => (prev ? applyGlobalCoverToBook(prev) : prev));
+    };
     window.addEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
+    window.addEventListener(GLOBAL_BOOK_COVERS_EVENT, handleGlobalCoversEvent);
 
     // Re-hydrate on tab focus or returning from background (throttled >= 8s) so PC and Phone stay in live sync
     let lastRefreshAt = Date.now();
@@ -1047,6 +1049,7 @@ export default function App() {
     return () => {
       isMounted = false;
       window.removeEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
+      window.removeEventListener(GLOBAL_BOOK_COVERS_EVENT, handleGlobalCoversEvent);
       window.removeEventListener('focus', refreshOnResume);
       document.removeEventListener('visibilitychange', handleVisibility);
       cleanupSubscriptions();
@@ -1064,11 +1067,12 @@ export default function App() {
   const handleAddBookToLibrary = useCallback((newBook: Book) => {
     const userId = session?.user?.id;
     const unlockedKey = getUnlockedBooksStorageKey(userId);
+    const normalizedBook = applyGlobalCoverToBook(newBook);
     setBooks(prev => {
-      if (prev.some(b => b.id === newBook.id)) return prev;
-      const updated = [newBook, ...prev];
+      if (prev.some(b => b.id === normalizedBook.id)) return prev;
+      const updated = [normalizedBook, ...prev];
       const existingUnlocked = safeStorage.getJSON<Book[]>(unlockedKey, []);
-      const nextUnlocked = mergeBooksLists([newBook], existingUnlocked);
+      const nextUnlocked = mergeBooksLists([normalizedBook], existingUnlocked);
       safeStorage.setJSON(unlockedKey, nextUnlocked);
       safeStorage.setJSON('custom_uploaded_books', nextUnlocked);
       if (userId) {
@@ -1430,8 +1434,7 @@ export default function App() {
                             updatedBook.pdfCoverPage !== undefined ||
                             updatedBook.customCover
                           ) {
-                            saveBookCoverOverrideToSync(
-                              session?.user?.id,
+                            void saveGlobalBookCover(
                               updatedBook.id,
                               {
                                 coverMode: updatedBook.coverMode,
@@ -1440,6 +1443,7 @@ export default function App() {
                                 customCover: updatedBook.customCover,
                                 updatedAt: new Date().toISOString(),
                               },
+                              updatedBook,
                               session?.access_token
                             );
                           }
@@ -1494,6 +1498,8 @@ export default function App() {
             {activeBook && currentView !== 'reader' && (
               <BookDetail 
                 book={activeBook} 
+                allBooks={books}
+                onSelectBook={(nextBook) => setActiveBook(nextBook)}
                 onClose={() => setActiveBook(null)}
                 onDiscuss={() => {
                   setActiveBook(null);

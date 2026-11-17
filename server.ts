@@ -12,6 +12,16 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import PDFDocument from "pdfkit";
 import { generateKLBPhysicsPdf } from "./server/klbPhysicsPdf";
 import {
+  BookCoverOverride,
+  CANONICAL_BOOK_COVERS,
+  GLOBAL_BOOK_COVERS_ROW_ID,
+  GLOBAL_BOOK_COVERS_ROW_TITLE,
+  applyGlobalBookCover,
+  isSystemBookConfigRow,
+  mergeGlobalBookCoversMaps,
+  normalizeBookCoverTitleKey,
+} from "./shared/canonicalBookCovers";
+import {
   addCommunityReplyAction,
   addGroupMemberAction,
   createCommunityPostAction,
@@ -43,12 +53,13 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 
 const BOOKS_CATALOG_FILE = path.join(UPLOADS_DIR, "books-catalog.json");
 const DELETED_BOOKS_FILE = path.join(UPLOADS_DIR, "deleted-books.json");
+const GLOBAL_BOOK_COVERS_FILE = path.join(UPLOADS_DIR, "global-book-covers.json");
 
 function readLocalBooksCatalog(): any[] {
   try {
     if (fs.existsSync(BOOKS_CATALOG_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(BOOKS_CATALOG_FILE, "utf-8"));
-      return Array.isArray(parsed) ? parsed : [];
+      return Array.isArray(parsed) ? parsed.filter((b: any) => b && b.id && b.title && !isSystemBookConfigRow(b)) : [];
     }
   } catch (err) {
     console.warn("[Catalog] Failed to read books-catalog.json:", err);
@@ -58,7 +69,8 @@ function readLocalBooksCatalog(): any[] {
 
 function writeLocalBooksCatalog(books: any[]): void {
   try {
-    fs.writeFileSync(BOOKS_CATALOG_FILE, JSON.stringify(books, null, 2), "utf-8");
+    const clean = (Array.isArray(books) ? books : []).filter((b: any) => b && b.id && b.title && !isSystemBookConfigRow(b));
+    fs.writeFileSync(BOOKS_CATALOG_FILE, JSON.stringify(clean, null, 2), "utf-8");
   } catch (err) {
     console.warn("[Catalog] Failed to write books-catalog.json:", err);
   }
@@ -82,6 +94,150 @@ function writeDeletedBookIds(ids: string[]): void {
   } catch (err) {
     console.warn("[Catalog] Failed to write deleted-books.json:", err);
   }
+}
+
+function readGlobalBookCoversFromDisk(): Record<string, BookCoverOverride> {
+  let diskCovers: Record<string, BookCoverOverride> = {};
+  try {
+    if (fs.existsSync(GLOBAL_BOOK_COVERS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(GLOBAL_BOOK_COVERS_FILE, "utf-8"));
+      if (parsed && typeof parsed === "object") {
+        diskCovers = parsed;
+      }
+    }
+  } catch (err) {
+    console.warn("[Catalog] Failed to read global-book-covers.json:", err);
+  }
+
+  // Promote any cover overrides from local user-sync snapshots so all accounts stay unified
+  const userSyncCovers: Array<Record<string, BookCoverOverride>> = [];
+  try {
+    if (fs.existsSync(USER_SYNC_DIR)) {
+      for (const fname of fs.readdirSync(USER_SYNC_DIR)) {
+        if (!fname.endsWith(".json")) continue;
+        try {
+          const parsed = JSON.parse(fs.readFileSync(path.join(USER_SYNC_DIR, fname), "utf-8"));
+          if (parsed?.bookCoverOverrides && typeof parsed.bookCoverOverrides === "object") {
+            userSyncCovers.push(parsed.bookCoverOverrides);
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  return mergeGlobalBookCoversMaps(CANONICAL_BOOK_COVERS, ...userSyncCovers, diskCovers);
+}
+
+function writeGlobalBookCoversToDisk(covers: Record<string, BookCoverOverride>): void {
+  try {
+    if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    const tmp = `${GLOBAL_BOOK_COVERS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(covers, null, 2), "utf-8");
+    fs.renameSync(tmp, GLOBAL_BOOK_COVERS_FILE);
+  } catch (err) {
+    console.warn("[Catalog] Failed to write global-book-covers.json:", err);
+  }
+}
+
+async function readGlobalBookCovers(sb?: SupabaseClient | null): Promise<Record<string, BookCoverOverride>> {
+  const localMerged = readGlobalBookCoversFromDisk();
+  if (!sb) return localMerged;
+
+  let cloudMap: Record<string, BookCoverOverride> = {};
+  try {
+    const { data, error } = await sb
+      .from("books")
+      .select("id, description")
+      .eq("id", GLOBAL_BOOK_COVERS_ROW_ID)
+      .maybeSingle();
+    if (!error && data?.description) {
+      const parsed = JSON.parse(data.description);
+      if (parsed && typeof parsed === "object") {
+        cloudMap = parsed;
+      }
+    }
+  } catch (_) {}
+
+  const merged = mergeGlobalBookCoversMaps(localMerged, cloudMap);
+  if (Object.keys(merged).length > Object.keys(localMerged).length || JSON.stringify(merged) !== JSON.stringify(localMerged)) {
+    writeGlobalBookCoversToDisk(merged);
+  }
+  return merged;
+}
+
+async function persistGlobalBookCoversBatch(
+  incoming: Record<string, BookCoverOverride>,
+  sb?: SupabaseClient | null
+): Promise<Record<string, BookCoverOverride>> {
+  const existing = await readGlobalBookCovers(sb);
+  const next = mergeGlobalBookCoversMaps(existing, incoming);
+  writeGlobalBookCoversToDisk(next);
+
+  if (sb) {
+    try {
+      const { error } = await sb.from("books").upsert(
+        {
+          id: GLOBAL_BOOK_COVERS_ROW_ID,
+          title: GLOBAL_BOOK_COVERS_ROW_TITLE,
+          author: "Edu AI System",
+          category: "__SYSTEM_CONFIG__",
+          description: JSON.stringify(next),
+          cover_image: "",
+        },
+        { onConflict: "id" }
+      );
+      if (error) {
+        console.warn("[Catalog] Supabase global covers sync notice:", error.message);
+      }
+    } catch (err) {
+      console.warn("[Catalog] Supabase global covers sync warning:", err);
+    }
+  }
+
+  return next;
+}
+
+async function persistGlobalBookCoverUpdate(
+  bookId: string,
+  override: BookCoverOverride,
+  sb?: SupabaseClient | null,
+  bookMeta?: any
+): Promise<Record<string, BookCoverOverride>> {
+  const titleKey = override.titleKey || normalizeBookCoverTitleKey(bookMeta?.title);
+  const entry: BookCoverOverride = {
+    ...override,
+    ...(titleKey ? { titleKey } : {}),
+    updatedAt: override.updatedAt || new Date().toISOString(),
+  };
+
+  const next = await persistGlobalBookCoversBatch({ [bookId]: entry }, sb);
+
+  if (sb && bookId && bookId !== GLOBAL_BOOK_COVERS_ROW_ID) {
+    try {
+      const fullPatch: Record<string, any> = {
+        cover_image: entry.coverImage || "",
+      };
+      if (entry.coverMode) fullPatch.cover_mode = entry.coverMode;
+      if (entry.pdfCoverPage !== undefined) fullPatch.pdf_cover_page = entry.pdfCoverPage;
+      if (entry.customCover !== undefined) fullPatch.custom_cover = entry.customCover;
+
+      const { error: richErr } = await sb.from("books").update(fullPatch).eq("id", bookId);
+      if (richErr) {
+        await sb.from("books").update({ cover_image: entry.coverImage || "" }).eq("id", bookId);
+      }
+    } catch (_) {}
+
+    if (entry.coverImage !== undefined) {
+      try {
+        await sb
+          .from("curriculum_books")
+          .update({ cover_image_url: entry.coverImage || "" })
+          .eq("id", bookId);
+      } catch (_) {}
+    }
+  }
+
+  return next;
 }
 
 function isRealUrlEnv(val?: string): val is string {
@@ -1328,7 +1484,7 @@ function getMimeType(filename: string, defaultType = 'application/octet-stream')
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
 
-app.use(express.json());
+app.use(express.json({ limit: "5mb" }));
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
@@ -1808,6 +1964,10 @@ app.put("/api/account/sync", async (req, res) => {
     const userId = userData.user.id;
     const body = req.body && typeof req.body === "object" ? req.body : {};
     const nextState = await writeServerUserSync(userId, body, sb);
+
+    if (body.bookCoverOverrides && typeof body.bookCoverOverrides === "object") {
+      await persistGlobalBookCoversBatch(body.bookCoverOverrides, sb);
+    }
 
     if (body.profileSnapshot && typeof body.profileSnapshot === "object") {
       try {
@@ -2417,45 +2577,66 @@ app.get("/api/books", async (req, res) => {
     // Opportunistically fetch from Supabase if real credentials exist on server
     const sb = getServerSupabase();
     let cloudBooks: any[] = [];
+    let cloudGlobalCovers: Record<string, BookCoverOverride> = {};
     if (sb) {
       try {
         const { data: sbBooks } = await sb.from("books").select("*").order("created_at", { ascending: false });
         if (Array.isArray(sbBooks)) {
-          cloudBooks = sbBooks.map((b: any) => {
-            const isKlb =
-              Boolean(b.publisher?.toLowerCase().includes("klb")) ||
-              Boolean(b.author?.toLowerCase().includes("klb")) ||
-              Boolean(b.title?.toLowerCase().includes("klb")) ||
-              Boolean(b.author?.toLowerCase().includes("kenya literature bureau"));
-            return {
-              id: b.id,
-              title: b.title,
-              author: b.author || (isKlb ? "Kenya Literature Bureau (KLB)" : "Unknown"),
-              publisher: b.publisher || (isKlb ? "Kenya Literature Bureau (KLB)" : undefined),
-              isKicdApproved: b.is_kicd_approved ?? isKlb,
-              isbn: b.isbn || undefined,
-              coverImage: b.cover_image?.includes("unsplash.com") ? "" : b.cover_image || "",
-              category: b.category || "Textbook",
-              rating: 4.8,
-              description: b.description || "",
-              level: b.education_level || "All",
-              curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (isKlb ? ["CBC", "KCSE"] : undefined),
-              subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)) : undefined,
-              country: b.country
-                ? (Array.isArray(b.country) ? b.country : [b.country])
-                : b.description?.includes("Location: ")
-                  ? [b.description.split("Location: ")[1].trim()]
-                  : isKlb
-                    ? ["Kenya"]
-                    : undefined,
-              fileUrl: b.file_url,
-            };
-          });
+          cloudBooks = sbBooks
+            .filter((b: any) => {
+              if (isSystemBookConfigRow(b)) {
+                if (b?.description) {
+                  try {
+                    const parsed = JSON.parse(b.description);
+                    if (parsed && typeof parsed === "object") {
+                      cloudGlobalCovers = mergeGlobalBookCoversMaps(cloudGlobalCovers, parsed);
+                    }
+                  } catch (_) {}
+                }
+                return false;
+              }
+              return true;
+            })
+            .map((b: any) => {
+              const isKlb =
+                Boolean(b.publisher?.toLowerCase().includes("klb")) ||
+                Boolean(b.author?.toLowerCase().includes("klb")) ||
+                Boolean(b.title?.toLowerCase().includes("klb")) ||
+                Boolean(b.author?.toLowerCase().includes("kenya literature bureau"));
+              return {
+                id: b.id,
+                title: b.title,
+                author: b.author || (isKlb ? "Kenya Literature Bureau (KLB)" : "Unknown"),
+                publisher: b.publisher || (isKlb ? "Kenya Literature Bureau (KLB)" : undefined),
+                isKicdApproved: b.is_kicd_approved ?? isKlb,
+                isbn: b.isbn || undefined,
+                coverImage: b.cover_image?.includes("unsplash.com") ? "" : b.cover_image || "",
+                coverMode: b.cover_mode || undefined,
+                pdfCoverPage: b.pdf_cover_page ?? undefined,
+                customCover: b.custom_cover || undefined,
+                category: b.category || "Textbook",
+                rating: 4.8,
+                description: b.description || "",
+                level: b.education_level || "All",
+                curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (isKlb ? ["CBC", "KCSE"] : undefined),
+                subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)) : undefined,
+                country: b.country
+                  ? (Array.isArray(b.country) ? b.country : [b.country])
+                  : b.description?.includes("Location: ")
+                    ? [b.description.split("Location: ")[1].trim()]
+                    : isKlb
+                      ? ["Kenya"]
+                      : undefined,
+                fileUrl: b.file_url,
+              };
+            });
         }
       } catch (sbErr) {
         console.warn("[Catalog] Supabase books fetch warning:", sbErr);
       }
     }
+
+    const globalCovers = mergeGlobalBookCoversMaps(readGlobalBookCoversFromDisk(), cloudGlobalCovers);
 
     // Opportunistically discover PDFs in Backblaze B2 if configured
     const normalizeCatalogBookKey = (val?: string) =>
@@ -2515,7 +2696,7 @@ app.get("/api/books", async (req, res) => {
     // Deduplicate combined books (cloudBooks + localCatalog + b2Books) excluding deletedIds
     const mergedMap = new Map<string, any>();
     for (const book of [...cloudBooks, ...localCatalog, ...b2Books]) {
-      if (!book || !book.id || deletedSet.has(book.id)) continue;
+      if (!book || !book.id || !book.title || deletedSet.has(book.id) || isSystemBookConfigRow(book)) continue;
       const existing = mergedMap.get(book.id);
       if (!existing) {
         mergedMap.set(book.id, book);
@@ -2531,8 +2712,11 @@ app.get("/api/books", async (req, res) => {
       }
     }
 
+    const finalBooks = Array.from(mergedMap.values()).map((b) => applyGlobalBookCover(b, globalCovers));
+
     res.json({
-      books: Array.from(mergedMap.values()),
+      books: finalBooks,
+      globalBookCovers: globalCovers,
       deletedIds,
       cloudConnected: {
         supabase: Boolean(sb),
@@ -2542,6 +2726,55 @@ app.get("/api/books", async (req, res) => {
   } catch (err: any) {
     console.error("[Catalog] GET /api/books error:", err);
     res.status(500).json({ error: err.message || "Failed to load books catalog" });
+  }
+});
+
+// System-wide canonical book covers endpoints (shared identically across all users & devices)
+app.get("/api/book-covers", async (_req, res) => {
+  try {
+    const sb = getServerSupabase();
+    const covers = await readGlobalBookCovers(sb);
+    res.json({ covers });
+  } catch (err: any) {
+    console.error("[Catalog] GET /api/book-covers error:", err);
+    res.status(500).json({ error: "Failed to load global book covers" });
+  }
+});
+
+app.put("/api/book-covers/:id", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const bookId = req.params.id;
+    const rawOverride = req.body?.override || req.body || {};
+    const bookMeta = req.body?.bookMeta;
+    const override: BookCoverOverride = {
+      coverMode: rawOverride.coverMode,
+      coverImage: rawOverride.coverImage !== undefined ? String(rawOverride.coverImage || "") : undefined,
+      pdfCoverPage: rawOverride.pdfCoverPage !== undefined ? Number(rawOverride.pdfCoverPage) : undefined,
+      customCover: rawOverride.customCover,
+      titleKey: rawOverride.titleKey || normalizeBookCoverTitleKey(bookMeta?.title),
+      updatedAt: new Date().toISOString(),
+    };
+
+    const existingCatalog = readLocalBooksCatalog();
+    const idx = existingCatalog.findIndex((b: any) => b.id === bookId);
+    if (idx >= 0) {
+      existingCatalog[idx] = {
+        ...existingCatalog[idx],
+        ...(override.coverMode ? { coverMode: override.coverMode } : {}),
+        ...(override.coverImage !== undefined ? { coverImage: override.coverImage } : {}),
+        ...(override.pdfCoverPage !== undefined ? { pdfCoverPage: override.pdfCoverPage } : {}),
+        ...(override.customCover ? { customCover: override.customCover } : {}),
+      };
+      writeLocalBooksCatalog(existingCatalog);
+    }
+
+    const covers = await persistGlobalBookCoverUpdate(bookId, override, auth.sb, bookMeta);
+    res.json({ success: true, covers });
+  } catch (err: any) {
+    console.error("[Catalog] PUT /api/book-covers error:", err);
+    res.status(500).json({ error: err.message || "Failed to update global book cover" });
   }
 });
 
@@ -2631,23 +2864,38 @@ app.patch("/api/books/:id", async (req, res) => {
   try {
     const bookId = req.params.id;
     const updates = req.body || {};
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+    const sb = getServerSupabase(token);
 
     const existing = readLocalBooksCatalog();
     const idx = existing.findIndex((b: any) => b.id === bookId);
     if (idx >= 0) {
       existing[idx] = { ...existing[idx], ...updates };
       writeLocalBooksCatalog(existing);
-    } else if (updates && Object.keys(updates).length > 0) {
+    } else if (updates && updates.title) {
       writeLocalBooksCatalog([{ id: bookId, ...updates }, ...existing]);
     }
 
-    const sb = getServerSupabase();
-    if (sb && updates.coverImage !== undefined) {
-      try {
-        await sb.from("books").update({ cover_image: updates.coverImage || "" }).eq("id", bookId);
-      } catch (sbErr) {
-        console.warn("[Catalog] Supabase cover update warning:", sbErr);
-      }
+    if (
+      updates.coverImage !== undefined ||
+      updates.coverMode !== undefined ||
+      updates.pdfCoverPage !== undefined ||
+      updates.customCover !== undefined
+    ) {
+      await persistGlobalBookCoverUpdate(
+        bookId,
+        {
+          coverMode: updates.coverMode,
+          coverImage: updates.coverImage !== undefined ? updates.coverImage : undefined,
+          pdfCoverPage: updates.pdfCoverPage,
+          customCover: updates.customCover,
+          titleKey: normalizeBookCoverTitleKey(updates.title || existing[idx]?.title),
+          updatedAt: new Date().toISOString(),
+        },
+        sb,
+        updates.title ? updates : existing[idx]
+      );
     }
 
     res.json({ success: true });

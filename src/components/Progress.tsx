@@ -99,7 +99,7 @@ export function Progress({ user, books }: ProgressProps) {
         {/* Main Stats */}
         <div className="lg:col-span-2 space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm flex flex-col items-center text-center contrast-blocked-card plan-card">
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm flex flex-col items-center text-center plan-card transition-colors">
               <div className="w-12 h-12 bg-orange-100 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 rounded-full flex items-center justify-center mb-4">
                 <Flame className="w-6 h-6" />
               </div>
@@ -107,7 +107,7 @@ export function Progress({ user, books }: ProgressProps) {
               <div className="text-sm font-medium text-slate-500 dark:text-[#A0A0A0]">Day Streak</div>
             </motion.div>
 
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm flex flex-col items-center text-center contrast-blocked-card plan-card">
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm flex flex-col items-center text-center plan-card transition-colors">
               <div className="w-12 h-12 bg-emerald-100 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-4">
                 <Book className="w-6 h-6" />
               </div>
@@ -115,7 +115,7 @@ export function Progress({ user, books }: ProgressProps) {
               <div className="text-sm font-medium text-slate-500 dark:text-[#A0A0A0]">Books Completed</div>
             </motion.div>
 
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm flex flex-col items-center text-center sm:col-span-2 md:col-span-1 contrast-blocked-card plan-card">
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm flex flex-col items-center text-center sm:col-span-2 md:col-span-1 plan-card transition-colors">
               <div className="w-12 h-12 bg-blue-100 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-4">
                 <Target className="w-6 h-6" />
               </div>
@@ -125,13 +125,13 @@ export function Progress({ user, books }: ProgressProps) {
           </div>
 
           {/* Activity Chart Placeholder */}
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm contrast-blocked-card plan-card">
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm plan-card transition-colors">
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-lg font-bold text-slate-800 dark:text-[#EDEDED] flex items-center gap-2">
                 <Activity className="w-5 h-5 text-brand-500 dark:text-[#8a70d6]" />
                 Learning Activity
               </h3>
-              <select className="text-sm border-slate-200 dark:border-white/10 rounded-lg text-slate-600 dark:text-[#EDEDED] bg-white dark:bg-[#202020] p-1.5 focus:ring-brand-500 focus:border-brand-500 outline-none">
+              <select className="text-sm border border-slate-200 dark:border-white/10 rounded-lg text-slate-600 dark:text-[#EDEDED] bg-white dark:bg-[#202020] p-1.5 focus:ring-brand-500 focus:border-brand-500 outline-none">
                 <option>This Week</option>
                 <option>This Month</option>
               </select>
@@ -163,8 +163,8 @@ export function Progress({ user, books }: ProgressProps) {
         {/* Right Sidebar */}
         <div className="space-y-6">
           {/* AI Tutor Usage */}
-          <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm relative overflow-hidden contrast-blocked-card plan-card">
-            <div className="absolute top-0 right-0 p-6 opacity-5">
+          <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm relative overflow-hidden plan-card transition-colors">
+            <div className="absolute top-0 right-0 p-6 opacity-5 text-slate-900 dark:text-white">
               <Brain className="w-24 h-24" />
             </div>
             <h3 className="text-lg font-bold text-slate-800 dark:text-[#EDEDED] mb-4 flex items-center gap-2 relative z-10">
@@ -178,7 +178,7 @@ export function Progress({ user, books }: ProgressProps) {
                   <span className="text-3xl font-bold text-slate-900 dark:text-[#EDEDED]">{tokenUsage.total.toLocaleString()}</span>
                   <span className="text-sm text-slate-500 dark:text-[#A0A0A0] font-medium ml-1">/ {tokenUsage.limit.toLocaleString()} tokens</span>
                 </div>
-                <div className="text-sm font-semibold text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 border border-transparent dark:border-indigo-500/30 px-2 py-1 rounded-md">
+                <div className="text-sm font-semibold text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 border border-indigo-100 dark:border-indigo-500/30 px-2 py-1 rounded-md">
                   {usagePercent}% utilized
                 </div>
               </div>
@@ -203,7 +203,7 @@ export function Progress({ user, books }: ProgressProps) {
           </motion.div>
 
           {/* Recent Achievements */}
-          <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm contrast-blocked-card plan-card">
+          <motion.div initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.1 }} className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm plan-card transition-colors">
             <h3 className="text-lg font-bold text-slate-800 dark:text-[#EDEDED] mb-4 flex items-center gap-2">
               <Trophy className="w-5 h-5 text-amber-500" />
               Achievements
@@ -215,7 +215,7 @@ export function Progress({ user, books }: ProgressProps) {
                 { title: "Bookworm", desc: "Finished 2 books", icon: <BookOpen className="w-4 h-4 text-blue-500 dark:text-blue-400" />, time: "1 week ago" }
               ].map((achievement, i) => (
                 <div key={i} className="flex gap-3 items-start">
-                  <div className="mt-0.5 p-2 bg-slate-50 dark:bg-white/5 rounded-lg border border-slate-100 dark:border-white/10">
+                  <div className="mt-0.5 p-2 bg-slate-100 dark:bg-white/5 rounded-lg border border-slate-200/70 dark:border-white/10">
                     {achievement.icon}
                   </div>
                   <div className="flex-1">
@@ -226,7 +226,7 @@ export function Progress({ user, books }: ProgressProps) {
                 </div>
               ))}
             </div>
-            <button className="mt-6 w-full py-2 bg-slate-50 dark:bg-white/5 hover:bg-slate-100 dark:hover:bg-white/10 border border-transparent dark:border-white/5 text-slate-600 dark:text-[#EDEDED] text-sm font-medium rounded-xl transition-colors cursor-pointer">
+            <button className="mt-6 w-full py-2 bg-slate-100 dark:bg-white/5 hover:bg-slate-200 dark:hover:bg-white/10 border border-slate-200/70 dark:border-white/5 text-slate-700 dark:text-[#EDEDED] text-sm font-medium rounded-xl transition-colors cursor-pointer">
               View All Badges
             </button>
           </motion.div>

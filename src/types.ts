@@ -31,6 +31,8 @@ export interface Book {
   publisher?: string;
   isKicdApproved?: boolean;
   isbn?: string;
+  pages?: number;
+  publishedYear?: number;
 }
 
 export interface Bookmark {

@@ -6,6 +6,10 @@ import { BookCoverVisual } from './BookCoverVisual';
 import { useOffline } from '../lib/useOffline';
 import { platformBookStoreCatalog } from '../data';
 import {
+  GLOBAL_BOOK_COVERS_EVENT,
+  applyGlobalCoversToBooks,
+} from '../lib/globalBookCoversService';
+import {
   extractUserAcademicProfile,
   getPersonalizedBooks,
   getAiRecommendedBooks,
@@ -38,7 +42,11 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
   useEffect(() => {
     const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
     window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
-    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    window.addEventListener(GLOBAL_BOOK_COVERS_EVENT, onPrefsUpdated);
+    return () => {
+      window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+      window.removeEventListener(GLOBAL_BOOK_COVERS_EVENT, onPrefsUpdated);
+    };
   }, []);
 
   // Load prefilled search query if navigating from Header or Home
@@ -125,13 +133,18 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
     });
   }, [baseBooks, books, viewMode, activeCategory, q, selectedCountry, selectedCurriculum, isBookCached]);
 
+  const resolvedStoreCatalog = useMemo(
+    () => applyGlobalCoversToBooks(platformBookStoreCatalog),
+    [prefsTick]
+  );
+
   // AI Recommended syllabus titles (personalized to user's country, curriculum, level, and subjects)
   const aiRecommendedForLibrary = useMemo(() => {
     const libraryIds = new Set(books.map(b => b.id));
-    const unownedStoreBooks = platformBookStoreCatalog.filter(b => !libraryIds.has(b.id));
+    const unownedStoreBooks = resolvedStoreCatalog.filter(b => !libraryIds.has(b.id));
     const combinedPool = [...personalizedLibraryBooks, ...getPersonalizedBooks(unownedStoreBooks, academicProfile, { allowFallbackIfEmpty: false })];
     return getAiRecommendedBooks(combinedPool, academicProfile, 4);
-  }, [books, personalizedLibraryBooks, academicProfile]);
+  }, [books, personalizedLibraryBooks, resolvedStoreCatalog, academicProfile]);
 
   const libraryIdSet = useMemo(() => new Set(books.map(b => b.id)), [books]);
 
@@ -140,8 +153,8 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
     if (!q) return [];
     const libraryIds = new Set(books.map(b => b.id));
     const scopedStore = catalogScope === 'personalized' && academicProfile.isConfigured
-      ? getPersonalizedBooks(platformBookStoreCatalog, academicProfile, { allowFallbackIfEmpty: true })
-      : platformBookStoreCatalog;
+      ? getPersonalizedBooks(resolvedStoreCatalog, academicProfile, { allowFallbackIfEmpty: true })
+      : resolvedStoreCatalog;
     return scopedStore.filter(book => {
       if (libraryIds.has(book.id)) return false;
       return book.title.toLowerCase().includes(q) ||
@@ -151,7 +164,7 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
              (book.subjects && book.subjects.some(s => s.toLowerCase().includes(q))) ||
              (book.curriculum && book.curriculum.some(c => c.toLowerCase().includes(q)));
     });
-  }, [books, q, catalogScope, academicProfile]);
+  }, [books, resolvedStoreCatalog, q, catalogScope, academicProfile]);
 
   // Related books computation
   const relatedBooks = useMemo(() => {
@@ -165,7 +178,7 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
     });
 
     const directIds = new Set([...filteredBooks.map(b => b.id), ...platformStoreMatches.map(b => b.id)]);
-    const allPlatformBooks = [...books, ...platformBookStoreCatalog.filter(b => !libraryIds.has(b.id))];
+    const allPlatformBooks = [...books, ...resolvedStoreCatalog.filter(b => !libraryIds.has(b.id))];
     const related: { book: Book; reason: string; inLibrary: boolean }[] = [];
     const seen = new Set<string>();
 

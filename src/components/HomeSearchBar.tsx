@@ -8,6 +8,10 @@ import {
 } from 'lucide-react';
 import { Book, ViewState } from '../types';
 import { platformBookStoreCatalog } from '../data';
+import {
+  GLOBAL_BOOK_COVERS_EVENT,
+  applyGlobalCoversToBooks,
+} from '../lib/globalBookCoversService';
 import { useOffline } from '../lib/useOffline';
 import { getRelatedSearchSuggestions } from '../lib/searchSuggestions';
 import { triggerCapsuleFeedback } from '../lib/feedback';
@@ -71,12 +75,21 @@ export function HomeSearchBar({
   useEffect(() => {
     const refreshPrefs = () => setPrefsTick((t) => t + 1);
     window.addEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
-    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
+    window.addEventListener(GLOBAL_BOOK_COVERS_EVENT, refreshPrefs);
+    return () => {
+      window.removeEventListener(ACADEMIC_PREFS_EVENT, refreshPrefs);
+      window.removeEventListener(GLOBAL_BOOK_COVERS_EVENT, refreshPrefs);
+    };
   }, []);
 
   const academicProfile = useMemo(
     () => extractUserAcademicProfile(profile, user),
     [profile, user, prefsTick]
+  );
+
+  const resolvedStoreCatalog = useMemo(
+    () => applyGlobalCoversToBooks(platformBookStoreCatalog),
+    [prefsTick]
   );
 
   const personalizedLibraryBooks = useMemo(
@@ -85,13 +98,13 @@ export function HomeSearchBar({
   );
 
   const personalizedStoreCatalog = useMemo(
-    () => getPersonalizedBooks(platformBookStoreCatalog, academicProfile),
-    [academicProfile]
+    () => getPersonalizedBooks(resolvedStoreCatalog, academicProfile),
+    [resolvedStoreCatalog, academicProfile]
   );
 
   const aiSearchRecommendations = useMemo(
-    () => getAiRecommendedBooks([...books, ...platformBookStoreCatalog], academicProfile, 4),
-    [books, academicProfile]
+    () => getAiRecommendedBooks([...books, ...resolvedStoreCatalog], academicProfile, 4),
+    [books, resolvedStoreCatalog, academicProfile]
   );
 
   const primaryTrack =
@@ -160,7 +173,7 @@ export function HomeSearchBar({
       })
       .sort((a, b) => Number(personalizedIds.has(b.id)) - Number(personalizedIds.has(a.id)));
 
-    const storeMatches = platformBookStoreCatalog
+    const storeMatches = resolvedStoreCatalog
       .filter(b => {
         if (libraryIds.has(b.id)) return false;
         const titleMatch = b.title.toLowerCase().includes(searchLow);

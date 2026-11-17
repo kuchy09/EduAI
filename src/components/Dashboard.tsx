@@ -17,6 +17,10 @@ import { useUserAvatar } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
 import { platformBookStoreCatalog } from '../data';
 import {
+  GLOBAL_BOOK_COVERS_EVENT,
+  applyGlobalCoversToBooks,
+} from '../lib/globalBookCoversService';
+import {
   extractUserAcademicProfile,
   getPersonalizedBooks,
   getAiRecommendedBooks,
@@ -61,7 +65,11 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
   useEffect(() => {
     const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
     window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
-    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    window.addEventListener(GLOBAL_BOOK_COVERS_EVENT, onPrefsUpdated);
+    return () => {
+      window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+      window.removeEventListener(GLOBAL_BOOK_COVERS_EVENT, onPrefsUpdated);
+    };
   }, []);
 
   const academicProfile = React.useMemo(
@@ -117,9 +125,9 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
   // Merge library + unowned bookstore catalog items for comprehensive AI Recommendations
   const unifiedRecommendationPool = React.useMemo(() => {
     const seen = new Set(books.map((b) => b.id));
-    const extras = platformBookStoreCatalog.filter((b) => !seen.has(b.id));
+    const extras = applyGlobalCoversToBooks(platformBookStoreCatalog).filter((b) => !seen.has(b.id));
     return [...books, ...extras];
-  }, [books]);
+  }, [books, prefsTick]);
 
   const aiRecommendations = React.useMemo(
     () => getAiRecommendedBooks(unifiedRecommendationPool, academicProfile, 6),

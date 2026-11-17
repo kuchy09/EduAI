@@ -3,18 +3,18 @@ import { getSupabaseClient, getPersistedDeviceSession } from './supabase';
 import { saveStoredAcademicPrefs } from './bookPersonalization';
 import { saveDailyGoal, DailyReadingGoal } from './readingGoal';
 import { Book, Bookmark } from '../types';
+import {
+  getGlobalBookCovers,
+  setGlobalBookCovers,
+  saveGlobalBookCover,
+  BookCoverOverride,
+} from './globalBookCoversService';
 
 export const ACCOUNT_SYNC_EVENT = 'edu-account-sync-updated';
 export const SYNC_WORKSPACE_FILE_NAME = '__edu_account_sync__.json';
 export const SYNC_WORKSPACE_FILE_TYPE = 'application/vnd.eduai.sync+json';
 
-export interface BookCoverOverride {
-  coverMode?: 'auto' | 'image' | 'visual' | 'pdf';
-  coverImage?: string;
-  pdfCoverPage?: number;
-  customCover?: any;
-  updatedAt?: string;
-}
+export type { BookCoverOverride };
 
 export interface AccountSyncPayload {
   aiChatSessions?: any[];
@@ -409,33 +409,8 @@ export function computeBookCoverOverridesDigest(map?: Record<string, BookCoverOv
   return JSON.stringify(entries);
 }
 
-export function getMergedBookCoverOverrides(userId?: string): Record<string, BookCoverOverride> {
-  const perBookKeys: Record<string, BookCoverOverride> = {};
-  if (typeof window !== 'undefined') {
-    try {
-      const ls = window.localStorage;
-      for (let i = 0; i < ls.length; i++) {
-        const key = ls.key(i);
-        if (key && key.startsWith('book_cover_override_')) {
-          const bookId = key.slice('book_cover_override_'.length);
-          const parsed = safeStorage.getJSON<BookCoverOverride | null>(key, null);
-          if (bookId && parsed && typeof parsed === 'object') {
-            perBookKeys[bookId] = parsed;
-          }
-        }
-      }
-    } catch (_) {}
-  }
-
-  const globalOverrides = safeStorage.getJSON<Record<string, BookCoverOverride>>(BOOK_COVER_OVERRIDES_KEY, {});
-  const userOverrides = userId
-    ? safeStorage.getJSON<Record<string, BookCoverOverride>>(getBookCoverOverridesStorageKey(userId), {})
-    : {};
-
-  return mergeBookCoverOverridesMap(
-    mergeBookCoverOverridesMap(perBookKeys, globalOverrides),
-    userOverrides
-  );
+export function getMergedBookCoverOverrides(_userId?: string): Record<string, BookCoverOverride> {
+  return getGlobalBookCovers();
 }
 
 export function saveBookCoverOverrideToSync(
@@ -450,12 +425,8 @@ export function saveBookCoverOverrideToSync(
   };
 
   try {
-    safeStorage.setJSON(`book_cover_override_${bookId}`, entry);
-    const mergedGlobal = mergeBookCoverOverridesMap(
-      safeStorage.getJSON<Record<string, BookCoverOverride>>(BOOK_COVER_OVERRIDES_KEY, {}),
-      { [bookId]: entry }
-    );
-    safeStorage.setJSON(BOOK_COVER_OVERRIDES_KEY, mergedGlobal);
+    const mergedGlobal = setGlobalBookCovers({ [bookId]: entry });
+    void saveGlobalBookCover(bookId, entry, undefined, explicitToken);
 
     if (userId) {
       const userKey = getBookCoverOverridesStorageKey(userId);
@@ -470,7 +441,6 @@ export function saveBookCoverOverrideToSync(
         explicitToken,
         { immediate: true }
       );
-      return mergedUser;
     }
     return mergedGlobal;
   } catch (_) {
@@ -1121,18 +1091,10 @@ export async function hydrateAccountSync(
       safeStorage.setJSON(getUnlockedBooksStorageKey(userId), mergedUnlocked);
     }
 
-    const localCoverOverrides = getMergedBookCoverOverrides(userId);
-    const mergedCoverOverrides = mergeBookCoverOverridesMap(
-      localCoverOverrides,
-      cloudSync.bookCoverOverrides || {}
-    );
-    if (Object.keys(mergedCoverOverrides).length > 0) {
-      safeStorage.setJSON(getBookCoverOverridesStorageKey(userId), mergedCoverOverrides);
-      safeStorage.setJSON(BOOK_COVER_OVERRIDES_KEY, mergedCoverOverrides);
-      for (const [bid, ov] of Object.entries(mergedCoverOverrides)) {
-        safeStorage.setJSON(`book_cover_override_${bid}`, ov);
-      }
-    }
+    const mergedCoverOverrides =
+      cloudSync.bookCoverOverrides && Object.keys(cloudSync.bookCoverOverrides).length > 0
+        ? setGlobalBookCovers(cloudSync.bookCoverOverrides)
+        : getGlobalBookCovers();
 
     // 6. Hydrate Bookmarks
     const localBookmarks = safeStorage.getJSON<Bookmark[]>(getBookmarksStorageKey(userId), []);
@@ -1200,10 +1162,6 @@ export async function hydrateAccountSync(
         (cid) => (mergedPeerMsgs[cid] || []).length > ((cloudSync.peerMessages?.[cid] || []).length)
       );
     const booksNeedBackfill = mergedUnlocked.length > (cloudSync.unlockedBooks || []).length;
-    const coversNeedBackfill =
-      Object.keys(mergedCoverOverrides).length > 0 &&
-      computeBookCoverOverridesDigest(cloudSync.bookCoverOverrides) !==
-        computeBookCoverOverridesDigest(mergedCoverOverrides);
     const bookmarksNeedBackfill = mergedBookmarks.length > cloudBookmarks.length;
 
     if (
@@ -1211,7 +1169,6 @@ export async function hydrateAccountSync(
       readerNeedsBackfill ||
       peerNeedsBackfill ||
       booksNeedBackfill ||
-      coversNeedBackfill ||
       bookmarksNeedBackfill
     ) {
       pushAccountSyncPatch(
@@ -1229,7 +1186,6 @@ export async function hydrateAccountSync(
             ? { peerConversations: mergedPeerConvs, peerMessages: mergedPeerMsgs }
             : {}),
           ...(booksNeedBackfill ? { unlockedBooks: mergedUnlocked } : {}),
-          ...(coversNeedBackfill ? { bookCoverOverrides: mergedCoverOverrides } : {}),
           ...(bookmarksNeedBackfill ? { bookmarks: mergedBookmarks } : {}),
         },
         explicitToken,

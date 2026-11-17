@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
 import { getPersistedDeviceSession } from '../lib/supabase';
-import { saveBookCoverOverrideToSync } from '../lib/accountSyncService';
+import { saveGlobalBookCover } from '../lib/globalBookCoversService';
 
 interface BookCoverEditorModalProps {
   book: Book;
@@ -329,11 +329,10 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
         customCover: customCoverConfig
       };
 
-      // Persist to localStorage & cross-device account sync
+      // Persist to system-wide global book covers registry (shared across all users & devices)
       try {
         const persistedSession = getPersistedDeviceSession();
-        saveBookCoverOverrideToSync(
-          persistedSession?.user?.id,
+        await saveGlobalBookCover(
           book.id,
           {
             coverMode,
@@ -342,10 +341,11 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
             customCover: customCoverConfig,
             updatedAt: new Date().toISOString(),
           },
+          book,
           persistedSession?.access_token
         );
       } catch (lsErr) {
-        console.warn('Cover override sync skipped:', lsErr);
+        console.warn('Global cover sync notice:', lsErr);
       }
 
       await onSave(updatedBook);
