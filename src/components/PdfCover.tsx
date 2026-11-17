@@ -20,6 +20,10 @@ export function PdfCover({ url, className, alt, fallbackImage, pageNumber = 1, o
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    setHasError(false);
+  }, [url, pageNumber]);
+
+  useEffect(() => {
     const observer = new IntersectionObserver(
       (entries) => {
         if (entries[0].isIntersecting) {

@@ -173,6 +173,12 @@ function computeServerSyncDigest(snap: any): string {
   const bookIds = (Array.isArray(snap.unlockedBooks) ? snap.unlockedBooks : [])
     .map((b: any) => b?.id || "")
     .sort();
+  const coverKeys = Object.keys(snap.bookCoverOverrides || {})
+    .sort()
+    .map((id) => {
+      const o = snap.bookCoverOverrides[id] || {};
+      return [id, o.coverMode || "", typeof o.coverImage === "string" ? o.coverImage.length : 0, o.pdfCoverPage || 0, o.updatedAt || ""];
+    });
   const bmKeys = (Array.isArray(snap.bookmarks) ? snap.bookmarks : [])
     .map((bm: any) => `${bm?.bookId || ""}::${bm?.chapter || ""}`)
     .sort();
@@ -188,6 +194,7 @@ function computeServerSyncDigest(snap: any): string {
     pc: peerConvs,
     pm: peerMsgCounts,
     bk: bookIds,
+    bc: coverKeys,
     bm: bmKeys,
     pr: profKeys,
     dg: snap.dailyGoal || null,
@@ -204,11 +211,12 @@ function hasMeaningfulSyncState(snap: any): boolean {
     (Array.isArray(snap.peerConversations) && snap.peerConversations.length > 0) ||
     (snap.peerMessages && Object.keys(snap.peerMessages).length > 0);
   const hasBooks = Array.isArray(snap.unlockedBooks) && snap.unlockedBooks.length > 0;
+  const hasCoverOverrides = snap.bookCoverOverrides && Object.keys(snap.bookCoverOverrides).length > 0;
   const hasBookmarks = Array.isArray(snap.bookmarks) && snap.bookmarks.length > 0;
   const hasProfile = snap.profileSnapshot && Object.keys(snap.profileSnapshot).length > 0;
   const hasGoal = Boolean(snap.dailyGoal);
   return Boolean(
-    aiMeaningful || hasDeleted || hasReader || hasPeer || hasBooks || hasBookmarks || hasProfile || hasGoal
+    aiMeaningful || hasDeleted || hasReader || hasPeer || hasBooks || hasCoverOverrides || hasBookmarks || hasProfile || hasGoal
   );
 }
 
@@ -437,6 +445,28 @@ function serverMergePeerMessages(
   return result;
 }
 
+function serverMergeBookCoverOverrides(
+  mapA?: Record<string, any>,
+  mapB?: Record<string, any>
+): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const src of [mapA, mapB]) {
+    if (!src || typeof src !== "object") continue;
+    for (const [bookId, raw] of Object.entries(src)) {
+      if (!bookId || !raw || typeof raw !== "object") continue;
+      const prev = result[bookId];
+      if (!prev) {
+        result[bookId] = { ...raw };
+        continue;
+      }
+      const prevTs = prev.updatedAt ? Date.parse(prev.updatedAt) || 0 : 0;
+      const nextTs = raw.updatedAt ? Date.parse(raw.updatedAt) || 0 : 0;
+      result[bookId] = nextTs >= prevTs ? { ...prev, ...raw } : { ...raw, ...prev };
+    }
+  }
+  return result;
+}
+
 function mergeSyncSnapshots(snapshots: any[]): any {
   const valid = snapshots.filter((c) => c && typeof c === "object");
   if (valid.length === 0) return {};
@@ -460,6 +490,7 @@ function mergeSyncSnapshots(snapshots: any[]): any {
     peerConversations: [],
     peerMessages: {},
     unlockedBooks: [],
+    bookCoverOverrides: {},
     bookmarks: [],
     profileSnapshot: {},
     readingProgress: {},
@@ -483,6 +514,9 @@ function mergeSyncSnapshots(snapshots: any[]): any {
     }
     if (Array.isArray(snap.unlockedBooks)) {
       acc.unlockedBooks = serverMergeById(acc.unlockedBooks, snap.unlockedBooks);
+    }
+    if (snap.bookCoverOverrides && typeof snap.bookCoverOverrides === "object") {
+      acc.bookCoverOverrides = serverMergeBookCoverOverrides(acc.bookCoverOverrides, snap.bookCoverOverrides);
     }
     if (Array.isArray(snap.bookmarks)) {
       acc.bookmarks = serverMergeById(
@@ -1943,6 +1977,22 @@ app.get("/api/books", async (req, res) => {
     }
 
     // Opportunistically discover PDFs in Backblaze B2 if configured
+    const normalizeCatalogBookKey = (val?: string) =>
+      String(val || "")
+        .toLowerCase()
+        .replace(/^\d+[-_]?/, "")
+        .replace(/\.pdf$/i, "")
+        .replace(/[^a-z0-9]/g, "");
+
+    const knownNormalizedKeys = new Set<string>();
+    for (const b of [...localCatalog, ...cloudBooks]) {
+      const titleKey = normalizeCatalogBookKey(b?.title);
+      if (titleKey) knownNormalizedKeys.add(titleKey);
+      const fileLeaf = b?.fileUrl ? String(b.fileUrl).split("/").pop() : "";
+      const fileKey = normalizeCatalogBookKey(fileLeaf);
+      if (fileKey) knownNormalizedKeys.add(fileKey);
+    }
+
     const s3 = getS3Client();
     let b2Books: any[] = [];
     if (s3 && B2_BUCKET_NAME) {
@@ -1957,6 +2007,9 @@ app.get("/api/books", async (req, res) => {
           if (!key.toLowerCase().endsWith(".pdf") || cloudFileUrls.has(key) || deletedSet.has(`b2-${key}`)) continue;
           const filename = key.split("/").pop() || key;
           const cleanName = filename.replace(/^\d+-/, "").replace(/\.pdf$/i, "").replace(/[_\-]+/g, " ").trim();
+          const normKey = normalizeCatalogBookKey(cleanName || filename);
+          if (normKey && knownNormalizedKeys.has(normKey)) continue;
+          if (normKey) knownNormalizedKeys.add(normKey);
           const inferredKlb = cleanName.toLowerCase().includes("klb");
           b2Books.push({
             id: `b2-${key}`,
@@ -1980,10 +2033,20 @@ app.get("/api/books", async (req, res) => {
 
     // Deduplicate combined books (cloudBooks + localCatalog + b2Books) excluding deletedIds
     const mergedMap = new Map<string, any>();
-    for (const book of [...localCatalog, ...cloudBooks, ...b2Books]) {
+    for (const book of [...cloudBooks, ...localCatalog, ...b2Books]) {
       if (!book || !book.id || deletedSet.has(book.id)) continue;
-      if (!mergedMap.has(book.id)) {
+      const existing = mergedMap.get(book.id);
+      if (!existing) {
         mergedMap.set(book.id, book);
+      } else {
+        mergedMap.set(book.id, {
+          ...existing,
+          ...book,
+          coverImage: book.coverImage || existing.coverImage || "",
+          coverMode: book.coverMode || existing.coverMode,
+          pdfCoverPage: book.pdfCoverPage ?? existing.pdfCoverPage,
+          customCover: book.customCover || existing.customCover,
+        });
       }
     }
 
@@ -2093,6 +2156,8 @@ app.patch("/api/books/:id", async (req, res) => {
     if (idx >= 0) {
       existing[idx] = { ...existing[idx], ...updates };
       writeLocalBooksCatalog(existing);
+    } else if (updates && Object.keys(updates).length > 0) {
+      writeLocalBooksCatalog([{ id: bookId, ...updates }, ...existing]);
     }
 
     const sb = getServerSupabase();

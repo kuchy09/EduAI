@@ -11,6 +11,7 @@ import {
   findMatchingUserSubjects,
   ACADEMIC_PREFS_EVENT,
 } from '../lib/bookPersonalization';
+import { ACCOUNT_SYNC_EVENT, getMergedBookCoverOverrides } from '../lib/accountSyncService';
 
 interface BookStoreProps {
   books: Book[];
@@ -31,7 +32,11 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
   useEffect(() => {
     const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
     window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
-    return () => window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+    window.addEventListener(ACCOUNT_SYNC_EVENT, onPrefsUpdated);
+    return () => {
+      window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, onPrefsUpdated);
+    };
   }, []);
 
   // Load prefilled search query if navigating from Header, Home, or Library
@@ -43,17 +48,33 @@ export function BookStore({ books, onAddBookToLibrary, user, profile, onBookSele
     }
   }, []);
 
-  // Comprehensive catalog combining platform store items and general library items
+  // Comprehensive catalog combining platform store items and general library items with synced cover overrides
   const allStoreCatalog = useMemo(() => {
+    const overrides = getMergedBookCoverOverrides(user?.id);
+    const applyOverride = (book: Book): Book => {
+      const ov = overrides[book.id];
+      if (!ov) return book;
+      return {
+        ...book,
+        coverMode: ov.coverMode || book.coverMode,
+        coverImage: ov.coverImage !== undefined ? ov.coverImage : book.coverImage,
+        pdfCoverPage: ov.pdfCoverPage ?? book.pdfCoverPage,
+        customCover: ov.customCover || book.customCover,
+      };
+    };
+
     const map = new Map<string, Book>();
-    platformBookStoreCatalog.forEach(b => map.set(b.id, b));
+    platformBookStoreCatalog.forEach(b => map.set(b.id, applyOverride(b)));
     books.forEach(b => {
-      if (!map.has(b.id)) {
-        map.set(b.id, b);
+      const existing = map.get(b.id);
+      if (!existing) {
+        map.set(b.id, applyOverride(b));
+      } else if (b.coverImage || b.customCover || b.coverMode) {
+        map.set(b.id, applyOverride({ ...existing, ...b }));
       }
     });
     return Array.from(map.values());
-  }, [books]);
+  }, [books, user?.id, prefsTick]);
 
   const [purchasedBookIds, setPurchasedBookIds] = useState<string[]>(() => {
     const existingIds = books.map(b => b.id);

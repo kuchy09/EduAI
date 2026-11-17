@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Book } from '../types';
 import { 
   BookOpen, Compass, Award, Bookmark, Atom, Code, Scale, GraduationCap, 
@@ -14,6 +14,11 @@ interface BookCoverVisualProps {
 export function BookCoverVisual({ book, className }: BookCoverVisualProps) {
   const [imgError, setImgError] = useState(false);
   const [pdfError, setPdfError] = useState(false);
+
+  useEffect(() => {
+    setImgError(false);
+    setPdfError(false);
+  }, [book.id, book.coverImage, book.coverMode, book.pdfCoverPage, book.fileUrl]);
   
   const hasPdfFile = !!book.fileUrl;
   const customCover = book.customCover;

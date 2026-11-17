@@ -56,12 +56,15 @@ import {
 import { AcademicPreferencesModal } from './components/AcademicPreferencesModal';
 import { extractUserAcademicProfile, saveStoredAcademicPrefs } from './lib/bookPersonalization';
 import {
+  ACCOUNT_SYNC_EVENT,
   hydrateAccountSync,
   pushAccountSyncPatch,
   saveBookmarkToCloud,
   clearAccountLocalCaches,
   getUnlockedBooksStorageKey,
   getBookmarksStorageKey,
+  getMergedBookCoverOverrides,
+  saveBookCoverOverrideToSync,
   mergeBooksLists,
   mergeBookmarksLists,
 } from './lib/accountSyncService';
@@ -193,10 +196,11 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSageSidebarOpen, setIsSageSidebarOpen] = useState(false);
-  const getPersistedBooks = (baseBooks: Book[]): Book[] => {
+  const getPersistedBooks = useCallback((baseBooks: Book[], userIdOverride?: string): Book[] => {
     let overrides: Record<string, any> = {};
     try {
-      overrides = JSON.parse(safeStorage.getItem('edu_ai_book_cover_overrides') || '{}');
+      const uid = userIdOverride ?? getPersistedDeviceSession()?.user?.id;
+      overrides = getMergedBookCoverOverrides(uid);
     } catch (e) {
       console.warn('Failed to read cover overrides in App:', e);
     }
@@ -207,10 +211,10 @@ export default function App() {
       if (override) {
         bookWithCover = {
           ...bookWithCover,
-          coverMode: override.coverMode,
-          coverImage: override.coverImage ?? bookWithCover.coverImage,
-          pdfCoverPage: override.pdfCoverPage,
-          customCover: override.customCover,
+          coverMode: override.coverMode || bookWithCover.coverMode,
+          coverImage: override.coverImage !== undefined ? override.coverImage : bookWithCover.coverImage,
+          pdfCoverPage: override.pdfCoverPage ?? bookWithCover.pdfCoverPage,
+          customCover: override.customCover || bookWithCover.customCover,
         };
       }
 
@@ -220,7 +224,7 @@ export default function App() {
       }
       return bookWithCover;
     });
-  };
+  }, []);
 
   const [books, setBooks] = useState<Book[]>(() => getPersistedBooks(mockBooks));
   const [categories, setCategories] = useState<string[]>(initialCategories);
@@ -568,7 +572,8 @@ export default function App() {
         deduped.push(candidate);
       }
 
-      setBooks(getPersistedBooks(deduped));
+      const uid = getPersistedDeviceSession()?.user?.id;
+      setBooks(getPersistedBooks(deduped, uid));
 
       const dbCategories = Array.from(new Set(deduped.map(b => b.category))).filter(Boolean);
       if (dbCategories.length > 0) {
@@ -577,7 +582,7 @@ export default function App() {
     } catch (err) {
       console.warn('[App] loadUnifiedCatalog notice:', err);
     }
-  }, []);
+  }, [getPersistedBooks]);
 
   useEffect(() => {
     // Purge any legacy guest or demo bypass flags so unauthenticated visitors never bypass login
@@ -965,28 +970,33 @@ export default function App() {
           setBookmarks(prev => mergeBookmarksLists(prev, combinedBookmarks));
         }
 
-        if (
-          Object.keys(progressMap).length > 0 ||
-          (hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0)
-        ) {
-          setBooks(prev => {
-            const withUnlocked =
-              hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0
-                ? getPersistedBooks(mergeBooksLists(hydrated.unlockedBooks, prev))
-                : prev;
-            return withUnlocked.map(book =>
-              progressMap[book.id] !== undefined
-                ? { ...book, readProgress: progressMap[book.id] }
-                : book
-            );
-          });
-        }
+        setBooks(prev => {
+          const withUnlocked =
+            hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0
+              ? mergeBooksLists(prev, hydrated.unlockedBooks)
+              : prev;
+          const withCovers = getPersistedBooks(withUnlocked, userId);
+          return withCovers.map(book =>
+            progressMap[book.id] !== undefined
+              ? { ...book, readProgress: progressMap[book.id] }
+              : book
+          );
+        });
+        setActiveBook(prev => (prev ? getPersistedBooks([prev], userId)[0] : prev));
       } catch (err) {
         console.warn('[App] Realtime initial sync notice:', err);
       }
     };
 
     syncUserData();
+
+    const handleAccountSyncEvent = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.userId && detail.userId !== userId) return;
+      setBooks(prev => getPersistedBooks(prev, userId));
+      setActiveBook(prev => (prev ? getPersistedBooks([prev], userId)[0] : prev));
+    };
+    window.addEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
 
     // Re-hydrate on tab focus or returning from background (throttled >= 8s) so PC and Phone stay in live sync
     let lastRefreshAt = Date.now();
@@ -1035,11 +1045,12 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
       window.removeEventListener('focus', refreshOnResume);
       document.removeEventListener('visibilitychange', handleVisibility);
       cleanupSubscriptions();
     };
-  }, [session?.user?.id, session?.access_token, loadUnifiedCatalog]);
+  }, [session?.user?.id, session?.access_token, loadUnifiedCatalog, getPersistedBooks]);
 
   const handleAddBookmark = useCallback((bookmark: Bookmark) => {
     setBookmarks(prev => {
@@ -1386,6 +1397,25 @@ export default function App() {
                       <Admin 
                         appBooks={books} 
                         onUpdateBook={(updatedBook) => {
+                          if (
+                            updatedBook.coverMode ||
+                            updatedBook.coverImage !== undefined ||
+                            updatedBook.pdfCoverPage !== undefined ||
+                            updatedBook.customCover
+                          ) {
+                            saveBookCoverOverrideToSync(
+                              session?.user?.id,
+                              updatedBook.id,
+                              {
+                                coverMode: updatedBook.coverMode,
+                                coverImage: updatedBook.coverImage ?? '',
+                                pdfCoverPage: updatedBook.pdfCoverPage,
+                                customCover: updatedBook.customCover,
+                                updatedAt: new Date().toISOString(),
+                              },
+                              session?.access_token
+                            );
+                          }
                           setBooks(prev => {
                             const exists = prev.some(b => b.id === updatedBook.id);
                             return exists

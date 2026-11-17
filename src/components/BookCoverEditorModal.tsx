@@ -7,6 +7,8 @@ import {
   Globe, Languages, Landmark, TrendingUp, Wheat, Award, Compass, ShieldCheck
 } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
+import { getPersistedDeviceSession } from '../lib/supabase';
+import { saveBookCoverOverrideToSync } from '../lib/accountSyncService';
 
 interface BookCoverEditorModalProps {
   book: Book;
@@ -227,6 +229,52 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
     }
   };
 
+  const compressCoverToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('Failed to read image file'));
+      reader.onload = (ev) => {
+        const rawDataUrl = ev.target?.result as string;
+        if (!rawDataUrl) {
+          reject(new Error('Empty image data'));
+          return;
+        }
+        if (file.type === 'image/svg+xml' || rawDataUrl.length < 110_000) {
+          resolve(rawDataUrl);
+          return;
+        }
+        const img = new Image();
+        img.onload = () => {
+          try {
+            const maxW = 540;
+            const maxH = 720;
+            let w = img.width || 540;
+            let h = img.height || 720;
+            const scale = Math.min(1, maxW / w, maxH / h);
+            w = Math.max(1, Math.round(w * scale));
+            h = Math.max(1, Math.round(h * scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w;
+            canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              resolve(rawDataUrl);
+              return;
+            }
+            ctx.drawImage(img, 0, 0, w, h);
+            const compressed = canvas.toDataURL('image/jpeg', 0.84);
+            resolve(compressed.length < rawDataUrl.length ? compressed : rawDataUrl);
+          } catch (_) {
+            resolve(rawDataUrl);
+          }
+        };
+        img.onerror = () => resolve(rawDataUrl);
+        img.src = rawDataUrl;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
@@ -234,37 +282,12 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
 
     try {
       setIsUploading(true);
-      setStatusMessage({ type: 'info', text: 'Processing and optimizing cover image...' });
+      setStatusMessage({ type: 'info', text: 'Optimizing cover image for cross-device sync...' });
 
-      // First create local data URL so it displays immediately
-      const reader = new FileReader();
-      reader.onload = async (event) => {
-        const dataUrl = event.target?.result as string;
-        if (dataUrl) {
-          setCoverImageUrl(dataUrl);
-          setCoverMode('image');
-          setStatusMessage({ type: 'success', text: 'Cover image loaded! Ready to save to user platform.' });
-        }
-      };
-      reader.readAsDataURL(file);
-
-      // Attempt background upload to cloud storage if API endpoint is available
-      try {
-        const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(`cover-${Date.now()}-${file.name}`)}`, {
-          method: 'POST',
-          body: file,
-          headers: { 'Content-Type': file.type || 'image/jpeg' }
-        });
-        if (uploadRes.ok) {
-          const { key } = await uploadRes.json();
-          if (key) {
-            const publicUrl = `/api/download?key=${encodeURIComponent(key)}`;
-            setCoverImageUrl(publicUrl);
-          }
-        }
-      } catch (uploadErr) {
-        console.warn('Direct cloud upload skipped, retained high-res local data URL:', uploadErr);
-      }
+      const portableDataUrl = await compressCoverToDataUrl(file);
+      setCoverImageUrl(portableDataUrl);
+      setCoverMode('image');
+      setStatusMessage({ type: 'success', text: 'Cover image optimized! Click Save to sync across all devices.' });
     } catch (err: any) {
       setStatusMessage({ type: 'error', text: 'Failed to process file: ' + (err.message || 'Unknown error') });
     } finally {
@@ -306,27 +329,23 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
         customCover: customCoverConfig
       };
 
-      // Persist to localStorage override table for permanent persistence
+      // Persist to localStorage & cross-device account sync
       try {
-        localStorage.setItem(`book_cover_override_${book.id}`, JSON.stringify({
-          coverMode,
-          coverImage: coverMode === 'image' ? coverImageUrl : '',
-          pdfCoverPage: pdfPageNumber,
-          customCover: customCoverConfig,
-          updatedAt: new Date().toISOString()
-        }));
-
-        const existingOverrides = JSON.parse(localStorage.getItem('edu_ai_book_cover_overrides') || '{}');
-        existingOverrides[book.id] = {
-          coverMode,
-          coverImage: coverMode === 'image' ? coverImageUrl : '',
-          pdfCoverPage: pdfPageNumber,
-          customCover: customCoverConfig,
-          updatedAt: new Date().toISOString()
-        };
-        localStorage.setItem('edu_ai_book_cover_overrides', JSON.stringify(existingOverrides));
+        const persistedSession = getPersistedDeviceSession();
+        saveBookCoverOverrideToSync(
+          persistedSession?.user?.id,
+          book.id,
+          {
+            coverMode,
+            coverImage: coverMode === 'image' ? coverImageUrl : '',
+            pdfCoverPage: pdfPageNumber,
+            customCover: customCoverConfig,
+            updatedAt: new Date().toISOString(),
+          },
+          persistedSession?.access_token
+        );
       } catch (lsErr) {
-        console.warn('LocalStorage cover override cache skipped:', lsErr);
+        console.warn('Cover override sync skipped:', lsErr);
       }
 
       await onSave(updatedBook);

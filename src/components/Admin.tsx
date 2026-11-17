@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
+import { supabase, clearStaleSupabaseTokens, getPersistedDeviceSession } from '../lib/supabase';
 import { safeStorage } from '../lib/safeStorage';
+import { getMergedBookCoverOverrides, saveBookCoverOverrideToSync } from '../lib/accountSyncService';
 import { 
   Upload, FileText, CheckCircle, AlertCircle, Loader2, BookOpen, 
   Trash2, Search, Palette, Eye, Sparkles, Filter, CheckCircle2 
@@ -207,10 +208,11 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
         uniqueBooks.push(candidate);
       }
 
-      // Apply any persisted cover overrides from localStorage
+      // Apply any persisted cover overrides from user/local cache
       let overrides: Record<string, any> = {};
       try {
-        overrides = JSON.parse(safeStorage.getItem('edu_ai_book_cover_overrides') || '{}');
+        const uid = getPersistedDeviceSession()?.user?.id;
+        overrides = getMergedBookCoverOverrides(uid);
       } catch (e) {
         console.warn('Failed to parse cover overrides cache:', e);
       }
@@ -220,10 +222,10 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
         if (override) {
           return {
             ...b,
-            coverMode: override.coverMode,
-            coverImage: override.coverImage ?? b.coverImage,
-            pdfCoverPage: override.pdfCoverPage,
-            customCover: override.customCover,
+            coverMode: override.coverMode || b.coverMode,
+            coverImage: override.coverImage !== undefined ? override.coverImage : b.coverImage,
+            pdfCoverPage: override.pdfCoverPage ?? b.pdfCoverPage,
+            customCover: override.customCover || b.customCover,
           };
         }
         return b;
@@ -399,18 +401,35 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
         console.warn('Server cover update notice:', apiErr);
       }
 
-      // 2. Update in Supabase if connected
+      // 2. Sync override across user devices immediately
+      try {
+        const persistedSession = getPersistedDeviceSession();
+        saveBookCoverOverrideToSync(
+          persistedSession?.user?.id,
+          updatedBook.id,
+          {
+            coverMode: updatedBook.coverMode,
+            coverImage: updatedBook.coverImage ?? '',
+            pdfCoverPage: updatedBook.pdfCoverPage,
+            customCover: updatedBook.customCover,
+            updatedAt: new Date().toISOString(),
+          },
+          persistedSession?.access_token
+        );
+      } catch (_) {}
+
+      // 3. Update in Supabase if connected
       if (supabase && !mockBooks.some(m => m.id === updatedBook.id)) {
         try {
           await supabase.from('books').update({
             cover_image: updatedBook.coverImage || ''
           }).eq('id', updatedBook.id);
         } catch (dbErr) {
-          console.warn('Supabase DB cover update warning (persisting locally):', dbErr);
+          console.warn('Supabase DB cover update warning (persisting via sync):', dbErr);
         }
       }
 
-      // 3. Update local state
+      // 4. Update local state
       setBooks(prev => prev.map(b => b.id === updatedBook.id ? updatedBook : b));
 
       // 4. Notify parent app to update user platform immediately
