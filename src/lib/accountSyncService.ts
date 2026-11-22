@@ -37,6 +37,7 @@ export interface AccountSyncPayload {
   readerChats?: Record<string, any[]>;
   peerConversations?: any[];
   peerMessages?: Record<string, any[]>;
+  deletedPeerMessages?: Record<string, string>;
   unlockedBooks?: Book[];
   bookCoverOverrides?: Record<string, BookCoverOverride>;
   bookmarks?: Bookmark[];
@@ -92,6 +93,10 @@ export function getPeerConversationsStorageKey(userId?: string): string {
 
 export function getPeerMessagesStorageKey(userId?: string): string {
   return userId ? `eduai_chat_messages_${userId}` : 'eduai_chat_messages';
+}
+
+export function getPeerDeletedMessagesStorageKey(userId?: string): string {
+  return userId ? `eduai_chat_deleted_messages_${userId}` : 'eduai_chat_deleted_messages';
 }
 
 export function getPeerCurrentUserStorageKey(userId?: string): string {
@@ -406,9 +411,11 @@ export function mergePeerConversations(localConvs: any[], cloudConvs: any[]): an
 
 export function mergePeerMessagesMap(
   localMap: Record<string, any[]>,
-  cloudMap: Record<string, any[]>
+  cloudMap: Record<string, any[]>,
+  deletedPeerMessages?: Record<string, string>
 ): Record<string, any[]> {
   const result: Record<string, any[]> = {};
+  const delSet = deletedPeerMessages && typeof deletedPeerMessages === 'object' ? deletedPeerMessages : {};
   const allConvIds = new Set([...Object.keys(localMap || {}), ...Object.keys(cloudMap || {})]);
 
   for (const convId of allConvIds) {
@@ -416,7 +423,7 @@ export function mergePeerMessagesMap(
     const listB = Array.isArray(cloudMap?.[convId]) ? cloudMap[convId] : [];
     const msgMap = new Map<string, any>();
     for (const msg of [...listA, ...listB]) {
-      if (!msg?.id) continue;
+      if (!msg?.id || delSet[msg.id]) continue;
       const existing = msgMap.get(msg.id);
       msgMap.set(msg.id, existing ? { ...existing, ...msg } : msg);
     }
@@ -572,12 +579,15 @@ function mergeSyncPayloads(candidates: AccountSyncPayload[]): AccountSyncPayload
   });
 
   let deletedAiSessions: Record<string, string> = {};
+  let deletedPeerMessages: Record<string, string> = {};
   for (const c of ordered) {
     deletedAiSessions = mergeDeletedAiSessionsMap(deletedAiSessions, c.deletedAiSessions);
+    deletedPeerMessages = mergeDeletedAiSessionsMap(deletedPeerMessages, c.deletedPeerMessages);
   }
 
   const acc: AccountSyncPayload = {
     deletedAiSessions,
+    deletedPeerMessages,
     aiChatSessions: [],
     readerChats: {},
     peerConversations: [],
@@ -601,7 +611,7 @@ function mergeSyncPayloads(candidates: AccountSyncPayload[]): AccountSyncPayload
       acc.peerConversations = mergePeerConversations(acc.peerConversations || [], c.peerConversations);
     }
     if (c.peerMessages && typeof c.peerMessages === 'object') {
-      acc.peerMessages = mergePeerMessagesMap(acc.peerMessages || {}, c.peerMessages);
+      acc.peerMessages = mergePeerMessagesMap(acc.peerMessages || {}, c.peerMessages, deletedPeerMessages);
     }
     if (Array.isArray(c.unlockedBooks)) {
       acc.unlockedBooks = mergeBooksLists(acc.unlockedBooks || [], c.unlockedBooks);
@@ -644,10 +654,12 @@ function mergeSyncPayloads(candidates: AccountSyncPayload[]): AccountSyncPayload
 
 function combinePendingPatches(a: AccountSyncPayload, b: AccountSyncPayload): AccountSyncPayload {
   const deletedAiSessions = mergeDeletedAiSessionsMap(a.deletedAiSessions, b.deletedAiSessions);
+  const deletedPeerMessages = mergeDeletedAiSessionsMap(a.deletedPeerMessages, b.deletedPeerMessages);
   return {
     ...a,
     ...b,
     deletedAiSessions,
+    deletedPeerMessages,
     ...(a.aiChatSessions || b.aiChatSessions
       ? {
           aiChatSessions: mergeAiChatSessions(
@@ -677,7 +689,7 @@ function combinePendingPatches(a: AccountSyncPayload, b: AccountSyncPayload): Ac
       : {}),
     ...(a.peerMessages || b.peerMessages
       ? {
-          peerMessages: mergePeerMessagesMap(a.peerMessages || {}, b.peerMessages || {}),
+          peerMessages: mergePeerMessagesMap(a.peerMessages || {}, b.peerMessages || {}, deletedPeerMessages),
         }
       : {}),
     ...(a.unlockedBooks || b.unlockedBooks
@@ -1224,7 +1236,13 @@ export async function hydrateAccountSync(
       }
     }
 
-    // 4. Hydrate Peer Chat conversations & messages
+    // 4. Hydrate Peer Chat conversations & messages (pruning sender-deleted message tombstones)
+    const localDeletedPeer = safeStorage.getJSON<Record<string, string>>(getPeerDeletedMessagesStorageKey(userId), {});
+    const mergedDeletedPeer = mergeDeletedAiSessionsMap(localDeletedPeer, cloudSync.deletedPeerMessages);
+    if (Object.keys(mergedDeletedPeer).length > 0) {
+      safeStorage.setJSON(getPeerDeletedMessagesStorageKey(userId), mergedDeletedPeer);
+    }
+
     const localPeerConvs = safeStorage.getJSON<any[]>(getPeerConversationsStorageKey(userId), []);
     const mergedPeerConvs = mergePeerConversations(localPeerConvs, cloudSync.peerConversations || []);
     if (mergedPeerConvs.length > 0) {
@@ -1232,7 +1250,7 @@ export async function hydrateAccountSync(
     }
 
     const localPeerMsgs = safeStorage.getJSON<Record<string, any[]>>(getPeerMessagesStorageKey(userId), {});
-    const mergedPeerMsgs = mergePeerMessagesMap(localPeerMsgs, cloudSync.peerMessages || {});
+    const mergedPeerMsgs = mergePeerMessagesMap(localPeerMsgs, cloudSync.peerMessages || {}, mergedDeletedPeer);
     if (Object.keys(mergedPeerMsgs).length > 0) {
       safeStorage.setJSON(getPeerMessagesStorageKey(userId), mergedPeerMsgs);
     }
@@ -1352,6 +1370,7 @@ export async function hydrateAccountSync(
     const mergedSync: AccountSyncPayload = {
       ...cloudSync,
       deletedAiSessions: mergedDeletedAi,
+      deletedPeerMessages: mergedDeletedPeer,
       aiChatSessions: mergedAiChats,
       activeAiSessionId: resolvedActiveAi,
       readerChats: mergedReaderChats,

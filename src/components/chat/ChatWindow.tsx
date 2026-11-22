@@ -4,7 +4,7 @@ import {
   CheckCheck, Check, Clock, Smile, BookOpen, Play, 
   Pause, Copy, ExternalLink, Download, Sparkles,
   UserCheck, UserPlus, Users, ArrowLeft, ShieldAlert,
-  GraduationCap, MessageSquare, Send
+  GraduationCap, MessageSquare, Send, Trash2, RotateCcw
 } from 'lucide-react';
 import { ChatUser, Conversation, ChatMessage, ChatAttachment } from './types';
 import { ChatInput } from './ChatInput';
@@ -17,6 +17,8 @@ interface ChatWindowProps {
   messages: ChatMessage[];
   allUsers: ChatUser[];
   onSendMessage: (content: string, attachment?: ChatAttachment) => void;
+  onRetryMessage?: (message: ChatMessage) => void;
+  onDeleteMessage?: (messageId: string) => void;
   onReactToMessage: (messageId: string, emoji: string) => void;
   onStartCall: (type: 'audio' | 'video') => void;
   onToggleInfoDrawer: () => void;
@@ -39,6 +41,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
   messages,
   allUsers,
   onSendMessage,
+  onRetryMessage,
+  onDeleteMessage,
   onReactToMessage,
   onStartCall,
   onToggleInfoDrawer,
@@ -55,6 +59,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 }) => {
   const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
   const [activeReactionMenuId, setActiveReactionMenuId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [copiedCodeId, setCopiedCodeId] = useState<string | null>(null);
   
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -152,6 +157,8 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
     if (currentConvIdRef.current !== conversation.id) {
       currentConvIdRef.current = conversation.id;
       isFirstOpenRef.current = true;
+      setActiveReactionMenuId(null);
+      setConfirmDeleteId(null);
     }
   }, [conversation.id]);
 
@@ -494,14 +501,13 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
               </div>
             )}
 
-            {/* Vanishing hint */}
             <div className="mt-3 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[10px] text-slate-400">
               <span>Direct Academic Messaging</span>
               <span className="italic">
                 {messageCount === 0 
                   ? 'Colleague profile displayed' 
                   : messageCount <= 3 
-                  ? 'Vanishes as chats continue' 
+                  ? 'Profile minimizes as chats continue' 
                   : 'Active conversation'}
               </span>
             </div>
@@ -737,14 +743,16 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                       </span>
                       {isMe && (
                         <div 
-                          className="inline-flex items-center gap-0.5 ml-1 transition-all select-none cursor-default" 
+                          className="inline-flex items-center gap-1 ml-1 transition-all select-none" 
                           title={
                             msg.status === 'read' 
                               ? `Seen by ${partner?.name || 'colleague'}${msg.seenAt ? ` • ${msg.seenAt}` : ''}`
                               : msg.status === 'delivered' 
                               ? `Delivered to ${partner?.name || 'colleague'}'s device`
                               : msg.status === 'sent' 
-                              ? 'Sent to network' 
+                              ? 'Sent to network'
+                              : msg.status === 'failed'
+                              ? 'Failed to deliver — tap Retry'
                               : 'Sending...'
                           }
                         >
@@ -765,6 +773,24 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                             <span className="inline-flex items-center text-slate-400/80 dark:text-slate-400/70">
                               <Check className="w-3.5 h-3.5 stroke-[2] inline" />
                             </span>
+                          ) : msg.status === 'failed' ? (
+                            <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-semibold text-[10px]">
+                              <span>Not sent</span>
+                              {onRetryMessage && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onRetryMessage(msg);
+                                  }}
+                                  className="inline-flex items-center gap-0.5 underline hover:text-rose-700 cursor-pointer"
+                                  title="Retry sending message"
+                                >
+                                  <RotateCcw className="w-3 h-3" />
+                                  Retry
+                                </button>
+                              )}
+                            </span>
                           ) : (
                             <span className="inline-flex items-center text-slate-400/80 dark:text-slate-400/70">
                               <Clock className="w-3 h-3 inline animate-spin" />
@@ -772,20 +798,91 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                           )}
                         </div>
                       )}
+                      {/* Touch/keyboard accessible action menu toggle */}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmDeleteId(null);
+                          setActiveReactionMenuId((prev) => (prev === msg.id ? null : msg.id));
+                        }}
+                        className="ml-0.5 p-0.5 rounded hover:bg-slate-200/70 dark:hover:bg-slate-700/70 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors cursor-pointer"
+                        title={isMe ? 'Message actions (react or delete)' : 'React to message'}
+                        aria-label="Message actions"
+                      >
+                        <Smile className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
 
-                  {/* Quick Reaction Hover Menu */}
-                  <div className={`absolute top-0 -translate-y-1/2 ${isMe ? 'left-0 -translate-x-full' : 'right-0 translate-x-full'} hidden group-hover/bubble:flex items-center bg-white dark:bg-slate-800 shadow-md border border-slate-200 dark:border-slate-700 rounded-full px-1.5 py-0.5 gap-1 z-20`}>
-                    {reactionEmojis.map(emoji => (
-                      <button
-                        key={emoji}
-                        onClick={() => onReactToMessage(msg.id, emoji)}
-                        className="text-xs hover:scale-125 transition-transform p-0.5"
-                      >
-                        {emoji}
-                      </button>
-                    ))}
+                  {/* Quick Reaction & Sender Delete Action Menu */}
+                  <div
+                    className={`absolute top-0 -translate-y-1/2 ${isMe ? 'right-0' : 'left-0'} ${
+                      activeReactionMenuId === msg.id || confirmDeleteId === msg.id
+                        ? 'flex'
+                        : 'hidden group-hover/bubble:flex group-focus-within/bubble:flex'
+                    } items-center bg-white dark:bg-slate-800 shadow-md border border-slate-200 dark:border-slate-700 rounded-full px-1.5 py-0.5 gap-1 z-20 whitespace-nowrap`}
+                  >
+                    {confirmDeleteId === msg.id && isMe && onDeleteMessage ? (
+                      <div className="flex items-center gap-1 px-1 py-0.5 text-[11px]">
+                        <span className="text-slate-600 dark:text-slate-300 font-medium">Delete?</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteMessage(msg.id);
+                            setConfirmDeleteId(null);
+                            setActiveReactionMenuId(null);
+                          }}
+                          className="px-2 py-0.5 rounded-full bg-rose-600 hover:bg-rose-700 text-white font-semibold cursor-pointer"
+                        >
+                          Yes
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteId(null);
+                          }}
+                          className="px-1.5 py-0.5 rounded-full bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 font-medium cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        {reactionEmojis.map(emoji => (
+                          <button
+                            type="button"
+                            key={emoji}
+                            onClick={() => {
+                              onReactToMessage(msg.id, emoji);
+                              setActiveReactionMenuId(null);
+                            }}
+                            className="text-xs hover:scale-125 transition-transform p-0.5 cursor-pointer"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                        {isMe && onDeleteMessage && (
+                          <>
+                            <span className="w-px h-3.5 bg-slate-200 dark:bg-slate-700 mx-0.5" />
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setConfirmDeleteId(msg.id);
+                              }}
+                              className="p-1 rounded-full text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors cursor-pointer"
+                              title="Delete message"
+                              aria-label="Delete message"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
                   </div>
 
                   {/* Display Active Emoji Reactions */}

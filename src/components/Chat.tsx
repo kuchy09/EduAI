@@ -35,6 +35,7 @@ import {
   createGroupConversationApi,
   addGroupMemberApi,
   sendChatMessageApi,
+  deleteChatMessageApi,
   markConversationReadApi,
   reactToMessageApi,
   updateSocialProfileApi,
@@ -44,6 +45,139 @@ import {
   SOCIAL_SESSION_REFRESHED_EVENT,
 } from '../lib/socialChatClient';
 import { getPeerCurrentUserStorageKey } from '../lib/userDirectoryService';
+import {
+  getPeerConversationsStorageKey,
+  getPeerMessagesStorageKey,
+  getPeerDeletedMessagesStorageKey,
+  pushAccountSyncPatch,
+} from '../lib/accountSyncService';
+
+function safeMsgTimeMs(iso?: string): number {
+  if (!iso) return 0;
+  const ts = Date.parse(iso);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+function mergeDeletedIdMaps(
+  a?: Record<string, string> | null,
+  b?: Record<string, string> | null
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const src of [a, b]) {
+    if (!src || typeof src !== 'object') continue;
+    for (const [id, iso] of Object.entries(src)) {
+      if (!id || typeof iso !== 'string') continue;
+      if (!out[id] || safeMsgTimeMs(iso) >= safeMsgTimeMs(out[id])) {
+        out[id] = iso;
+      }
+    }
+  }
+  return out;
+}
+
+function mergeChatMessagesList(
+  existingList: ChatMessage[],
+  incomingList: ChatMessage[],
+  deletedIds: Record<string, string>
+): ChatMessage[] {
+  const byId = new Map<string, ChatMessage>();
+  const byClientKey = new Map<string, string>();
+
+  const addOrMerge = (msg: ChatMessage, preferIncoming: boolean) => {
+    if (!msg?.id || deletedIds[msg.id]) return;
+    if (msg.clientMessageId && deletedIds[msg.clientMessageId]) return;
+    const cKey = msg.clientMessageId ? `${msg.senderId || ''}::${msg.clientMessageId}` : '';
+    const mappedId = cKey ? byClientKey.get(cKey) : undefined;
+
+    // If an incoming server message confirms a local optimistic/failed message, replace the cmsg_ entry
+    if (mappedId && mappedId !== msg.id) {
+      const existingMapped = byId.get(mappedId);
+      if (existingMapped && mappedId.startsWith('cmsg_') && !msg.id.startsWith('cmsg_')) {
+        byId.delete(mappedId);
+        byId.set(msg.id, msg);
+        byClientKey.set(cKey, msg.id);
+        return;
+      }
+      if (existingMapped && !mappedId.startsWith('cmsg_') && msg.id.startsWith('cmsg_')) {
+        return;
+      }
+    }
+
+    const existing = byId.get(msg.id);
+    if (!existing) {
+      byId.set(msg.id, msg);
+      if (cKey) byClientKey.set(cKey, msg.id);
+    } else if (preferIncoming) {
+      byId.set(msg.id, {
+        ...existing,
+        ...msg,
+        attachment: msg.attachment?.url ? msg.attachment : existing.attachment || msg.attachment,
+        reactions: msg.reactions ?? existing.reactions,
+      });
+    }
+  };
+
+  for (const m of existingList || []) {
+    addOrMerge(m, false);
+  }
+  for (const m of incomingList || []) {
+    addOrMerge(m, true);
+  }
+
+  return Array.from(byId.values()).sort(
+    (a, b) => safeMsgTimeMs(a.createdAt) - safeMsgTimeMs(b.createdAt)
+  );
+}
+
+function mergeMessagesMapsSafe(
+  prevMap: Record<string, ChatMessage[]>,
+  incomingMap: Record<string, ChatMessage[]>,
+  deletedIds: Record<string, string>
+): Record<string, ChatMessage[]> {
+  const result: Record<string, ChatMessage[]> = {};
+  const convIds = new Set([
+    ...Object.keys(prevMap || {}),
+    ...Object.keys(incomingMap || {}),
+  ]);
+  for (const convId of convIds) {
+    result[convId] = mergeChatMessagesList(
+      prevMap?.[convId] || [],
+      incomingMap?.[convId] || [],
+      deletedIds
+    );
+  }
+  return result;
+}
+
+function mergeConversationsSafe(
+  prevConvs: Conversation[],
+  incomingConvs: Conversation[],
+  mergedMessagesMap: Record<string, ChatMessage[]>
+): Conversation[] {
+  const byId = new Map<string, Conversation>();
+  for (const c of prevConvs || []) {
+    if (c?.id) byId.set(c.id, c);
+  }
+  for (const c of incomingConvs || []) {
+    if (!c?.id) continue;
+    const prev = byId.get(c.id);
+    byId.set(c.id, prev ? { ...prev, ...c } : c);
+  }
+  return Array.from(byId.values())
+    .map((c) => {
+      const msgs = mergedMessagesMap[c.id];
+      if (Array.isArray(msgs)) {
+        const latest = msgs.length > 0 ? msgs[msgs.length - 1] : undefined;
+        return {
+          ...c,
+          lastMessage: latest,
+          updatedAt: latest?.createdAt || c.updatedAt,
+        };
+      }
+      return c;
+    })
+    .sort((a, b) => safeMsgTimeMs(b.updatedAt) - safeMsgTimeMs(a.updatedAt));
+}
 
 interface ChatProps {
   user?: any;
@@ -114,8 +248,15 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
   const [currentUser, setCurrentUser] = useState<ChatUser>(buildCurrentUser);
   const [allUsers, setAllUsers] = useState<ChatUser[]>([]);
   const [friendRequests, setFriendRequests] = useState<FriendRequestRecord[]>([]);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>({});
+  const [conversations, setConversations] = useState<Conversation[]>(() =>
+    user?.id ? safeStorage.getJSON<Conversation[]>(getPeerConversationsStorageKey(user.id), []) : []
+  );
+  const [messagesMap, setMessagesMap] = useState<Record<string, ChatMessage[]>>(() => {
+    if (!user?.id) return {};
+    const deleted = safeStorage.getJSON<Record<string, string>>(getPeerDeletedMessagesStorageKey(user.id), {});
+    const raw = safeStorage.getJSON<Record<string, ChatMessage[]>>(getPeerMessagesStorageKey(user.id), {});
+    return mergeMessagesMapsSafe({}, raw, deleted);
+  });
   const [activeConversationId, setActiveConversationId] = useState<string>('');
   const [typingByConversation, setTypingByConversation] = useState<
     Record<string, Record<string, { name: string; expiresAt: number }>>
@@ -124,6 +265,10 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
   const [isLoadingSocial, setIsLoadingSocial] = useState(true);
   const [socialError, setSocialError] = useState<string | null>(null);
   const [toastBanner, setToastBanner] = useState<{ text: string; tone: 'info' | 'success' | 'error' } | null>(null);
+
+  const deletedMessageIdsRef = useRef<Record<string, string>>(
+    user?.id ? safeStorage.getJSON<Record<string, string>>(getPeerDeletedMessagesStorageKey(user.id), {}) : {}
+  );
 
   // Mobile responsive view & drawers/modals
   const [mobileView, setMobileView] = useState<'list' | 'chat'>('list');
@@ -153,6 +298,8 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
   activeConversationIdRef.current = activeConversationId;
   const currentUserRef = useRef(currentUser);
   currentUserRef.current = currentUser;
+  const messagesMapRef = useRef<Record<string, ChatMessage[]>>(messagesMap);
+  messagesMapRef.current = messagesMap;
 
   const showToast = useCallback((text: string, tone: 'info' | 'success' | 'error' = 'info') => {
     setToastBanner({ text, tone });
@@ -167,6 +314,31 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       return { ...prev, ...next };
     });
   }, [buildCurrentUser]);
+
+  // Reload user-scoped cached peer chats immediately when signed-in user changes
+  useEffect(() => {
+    if (!user?.id) {
+      deletedMessageIdsRef.current = {};
+      setConversations([]);
+      setMessagesMap({});
+      return;
+    }
+    const del = safeStorage.getJSON<Record<string, string>>(getPeerDeletedMessagesStorageKey(user.id), {});
+    deletedMessageIdsRef.current = del;
+    const cachedConvs = safeStorage.getJSON<Conversation[]>(getPeerConversationsStorageKey(user.id), []);
+    const cachedMsgs = safeStorage.getJSON<Record<string, ChatMessage[]>>(getPeerMessagesStorageKey(user.id), {});
+    const cleanedMsgs = mergeMessagesMapsSafe({}, cachedMsgs, del);
+    setMessagesMap(cleanedMsgs);
+    setConversations(mergeConversationsSafe([], cachedConvs, cleanedMsgs));
+  }, [user?.id]);
+
+  // Persist user-scoped peer conversations and messages locally whenever updated
+  useEffect(() => {
+    if (!user?.id) return;
+    safeStorage.setJSON(getPeerConversationsStorageKey(user.id), conversations);
+    safeStorage.setJSON(getPeerMessagesStorageKey(user.id), messagesMap);
+    safeStorage.setJSON(getPeerDeletedMessagesStorageKey(user.id), deletedMessageIdsRef.current);
+  }, [user?.id, conversations, messagesMap]);
 
   // Persist shared book notes locally
   useEffect(() => {
@@ -196,8 +368,21 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       );
       setAllUsers(normalizedUsers);
       setFriendRequests(data.friendRequests || []);
-      setConversations(data.conversations || []);
-      setMessagesMap(data.messagesByConv || {});
+
+      const mergedDeleted = mergeDeletedIdMaps(deletedMessageIdsRef.current, data.deletedMessageIds);
+      deletedMessageIdsRef.current = mergedDeleted;
+      safeStorage.setJSON(getPeerDeletedMessagesStorageKey(user.id), mergedDeleted);
+
+      const nextMergedMsgs = mergeMessagesMapsSafe(
+        messagesMapRef.current,
+        data.messagesByConv || {},
+        mergedDeleted
+      );
+      messagesMapRef.current = nextMergedMsgs;
+      setMessagesMap(nextMergedMsgs);
+      setConversations((prev) =>
+        mergeConversationsSafe(prev, data.conversations || [], nextMergedMsgs)
+      );
 
       // Check if UserPortal requested opening a specific friend's direct chat
       const pendingPartnerId = safeSessionStorage.getItem('eduai_pending_chat_user_id');
@@ -215,14 +400,16 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
           try {
             const res = await openDirectConversationApi(pendingPartnerId);
             if (res.conversation) {
-              setConversations((prev) => [
-                res.conversation,
-                ...prev.filter((c) => c.id !== res.conversation.id),
-              ]);
-              setMessagesMap((prev) => ({
-                ...prev,
-                [res.conversation.id]: res.messages || [],
-              }));
+              const updatedMsgs = mergeMessagesMapsSafe(
+                messagesMapRef.current,
+                { [res.conversation.id]: res.messages || [] },
+                deletedMessageIdsRef.current
+              );
+              messagesMapRef.current = updatedMsgs;
+              setMessagesMap(updatedMsgs);
+              setConversations((cPrev) =>
+                mergeConversationsSafe(cPrev, [res.conversation], updatedMsgs)
+              );
               setActiveConversationId(res.conversation.id);
               setMobileView('chat');
             }
@@ -292,18 +479,15 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
 
       if (ev.type === 'chat:message') {
         const msg = ev.message;
+        if (deletedMessageIdsRef.current[msg.id]) return;
         const isCurrentActive = activeConversationIdRef.current === msg.conversationId;
 
         setMessagesMap((prev) => {
           const existing = prev[msg.conversationId] || [];
-          const withoutTemp = existing.filter(
-            (m) =>
-              m.id !== msg.id &&
-              !(msg.clientMessageId && m.clientMessageId === msg.clientMessageId)
-          );
+          const mergedList = mergeChatMessagesList(existing, [msg], deletedMessageIdsRef.current);
           return {
             ...prev,
-            [msg.conversationId]: [...withoutTemp, msg],
+            [msg.conversationId]: mergedList,
           };
         });
 
@@ -348,6 +532,42 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
             actionLabel: 'Reply in Chat',
             actionView: 'chat',
           });
+        }
+        return;
+      }
+
+      if (ev.type === 'chat:message-deleted') {
+        const deletedAt = ev.deletedAt || new Date().toISOString();
+        deletedMessageIdsRef.current = {
+          ...deletedMessageIdsRef.current,
+          [ev.messageId]: deletedAt,
+        };
+        if (user?.id) {
+          safeStorage.setJSON(getPeerDeletedMessagesStorageKey(user.id), deletedMessageIdsRef.current);
+        }
+        const currentList = messagesMapRef.current[ev.conversationId];
+        if (currentList) {
+          const nextList = currentList.filter(
+            (m) => m.id !== ev.messageId && m.clientMessageId !== ev.messageId
+          );
+          const nextMap = {
+            ...messagesMapRef.current,
+            [ev.conversationId]: nextList,
+          };
+          messagesMapRef.current = nextMap;
+          setMessagesMap(nextMap);
+          setConversations((cPrev) =>
+            cPrev.map((c) => {
+              if (c.id !== ev.conversationId) return c;
+              const fallbackLast = nextList.length > 0 ? nextList[nextList.length - 1] : undefined;
+              const nextLast = ev.lastMessage ?? fallbackLast;
+              return {
+                ...c,
+                lastMessage: nextLast || undefined,
+                updatedAt: nextLast?.createdAt || c.updatedAt,
+              };
+            })
+          );
         }
         return;
       }
@@ -598,7 +818,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
     } catch (_) {}
   }, []);
 
-  // Send message (optimistic + authoritative backend persistence + WebSocket broadcast)
+  // Send message (optimistic + authoritative backend persistence + never vanish unless deleted by sender)
   const handleSendMessage = async (content: string, attachment?: ChatAttachment) => {
     if (!activeConversation) return;
     const convId = activeConversation.id;
@@ -640,12 +860,10 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       if (res.message) {
         setMessagesMap((prev) => {
           const list = prev[convId] || [];
-          const hasConfirmed = list.some((m) => m.id === res.message.id);
+          const updatedList = mergeChatMessagesList(list, [res.message], deletedMessageIdsRef.current);
           return {
             ...prev,
-            [convId]: hasConfirmed
-              ? list.filter((m) => m.id !== clientMessageId)
-              : list.map((m) => (m.id === clientMessageId ? res.message : m)),
+            [convId]: updatedList,
           };
         });
         setConversations((prev) =>
@@ -655,11 +873,136 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
         );
       }
     } catch (err: any) {
-      showToast(err?.message || 'Message failed to deliver.', 'error');
+      showToast(err?.message || 'Message could not be sent yet. Tap Retry to resend.', 'error');
       setMessagesMap((prev) => ({
         ...prev,
-        [convId]: (prev[convId] || []).filter((m) => m.id !== clientMessageId),
+        [convId]: (prev[convId] || []).map((m) =>
+          m.id === clientMessageId ? { ...m, status: 'failed' as const } : m
+        ),
       }));
+    }
+  };
+
+  const handleRetryMessage = async (failedMsg: ChatMessage) => {
+    if (!failedMsg || failedMsg.senderId !== currentUser.id) return;
+    const convId = failedMsg.conversationId;
+    const cId = failedMsg.clientMessageId || failedMsg.id;
+    setMessagesMap((prev) => ({
+      ...prev,
+      [convId]: (prev[convId] || []).map((m) =>
+        m.id === failedMsg.id ? { ...m, status: 'sending' as const } : m
+      ),
+    }));
+
+    try {
+      const res = await sendChatMessageApi({
+        conversationId: convId,
+        clientMessageId: cId,
+        content: failedMsg.content,
+        attachment: failedMsg.attachment,
+        replyTo: failedMsg.replyTo,
+      });
+      if (res.message) {
+        setMessagesMap((prev) => ({
+          ...prev,
+          [convId]: mergeChatMessagesList(prev[convId] || [], [res.message], deletedMessageIdsRef.current),
+        }));
+        setConversations((prev) =>
+          prev.map((c) =>
+            c.id === convId ? { ...c, lastMessage: res.message, updatedAt: res.message.createdAt } : c
+          )
+        );
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Still unable to send message. Tap Retry again.', 'error');
+      setMessagesMap((prev) => ({
+        ...prev,
+        [convId]: (prev[convId] || []).map((m) =>
+          m.id === failedMsg.id ? { ...m, status: 'failed' as const } : m
+        ),
+      }));
+    }
+  };
+
+  const handleDeleteMessage = async (messageId: string) => {
+    if (!activeConversation) return;
+    const convId = activeConversation.id;
+    const list = messagesMap[convId] || [];
+    const target = list.find((m) => m.id === messageId);
+    if (!target) return;
+
+    if (target.senderId !== currentUser.id) {
+      showToast('Only the sender can delete this message.', 'error');
+      return;
+    }
+
+    // Local-only unsent/failed draft message can be removed locally without server call
+    if (target.id.startsWith('cmsg_') && (target.status === 'failed' || target.status === 'sending')) {
+      const deletedAt = new Date().toISOString();
+      deletedMessageIdsRef.current = {
+        ...deletedMessageIdsRef.current,
+        [target.id]: deletedAt,
+      };
+      const nextList = list.filter((m) => m.id !== target.id);
+      setMessagesMap((prev) => ({ ...prev, [convId]: nextList }));
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === convId
+            ? {
+                ...c,
+                lastMessage: nextList.length > 0 ? nextList[nextList.length - 1] : undefined,
+                updatedAt: (nextList.length > 0 ? nextList[nextList.length - 1].createdAt : c.updatedAt),
+              }
+            : c
+        )
+      );
+      showToast('Message removed.', 'info');
+      return;
+    }
+
+    try {
+      const res = await deleteChatMessageApi(target.id);
+      const deletedAt = res.deletedAt || new Date().toISOString();
+      const canonicalId = res.messageId || target.id;
+      deletedMessageIdsRef.current = {
+        ...deletedMessageIdsRef.current,
+        [canonicalId]: deletedAt,
+      };
+      if (user?.id) {
+        safeStorage.setJSON(getPeerDeletedMessagesStorageKey(user.id), deletedMessageIdsRef.current);
+        pushAccountSyncPatch(
+          user.id,
+          { deletedPeerMessages: { [canonicalId]: deletedAt } },
+          undefined,
+          { immediate: true }
+        );
+      }
+
+      const currentList = messagesMapRef.current[convId] || [];
+      const nextList = currentList.filter(
+        (m) => m.id !== canonicalId && m.id !== target.id
+      );
+      const nextMap = {
+        ...messagesMapRef.current,
+        [convId]: nextList,
+      };
+      messagesMapRef.current = nextMap;
+      setMessagesMap(nextMap);
+      setConversations((cPrev) =>
+        cPrev.map((c) => {
+          if (c.id !== convId) return c;
+          const fallbackLast = nextList.length > 0 ? nextList[nextList.length - 1] : undefined;
+          const nextLast = res.lastMessage ?? fallbackLast;
+          return {
+            ...c,
+            lastMessage: nextLast || undefined,
+            updatedAt: nextLast?.createdAt || c.updatedAt,
+          };
+        })
+      );
+      showToast('Message deleted.', 'info');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not delete message.', 'error');
     }
   };
 
@@ -997,6 +1340,8 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
             messages={activeMessages}
             allUsers={allUsers}
             onSendMessage={handleSendMessage}
+            onRetryMessage={handleRetryMessage}
+            onDeleteMessage={handleDeleteMessage}
             onReactToMessage={handleReactToMessage}
             onStartCall={handleStartCall}
             onToggleInfoDrawer={() => setIsInfoDrawerOpen((prev) => !prev)}

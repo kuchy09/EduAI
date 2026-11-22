@@ -16,6 +16,7 @@ export interface SocialBootstrapPayload {
   friendRequests: FriendRequestRecord[];
   conversations: Conversation[];
   messagesByConv: Record<string, ChatMessage[]>;
+  deletedMessageIds?: Record<string, string>;
   onlineUserIds: string[];
 }
 
@@ -24,6 +25,7 @@ export type SocialWsEvent =
   | { type: 'presence:update'; onlineUserIds: string[] }
   | { type: 'social:directory-updated'; userId?: string; updatedAt?: string }
   | { type: 'chat:message'; message: ChatMessage }
+  | { type: 'chat:message-deleted'; conversationId: string; messageId: string; lastMessage?: ChatMessage | null; deletedAt?: string }
   | { type: 'chat:typing'; conversationId: string; userId: string; name: string; isTyping: boolean }
   | { type: 'chat:read'; conversationId: string; readerId: string; messageIds: string[]; seenAt: string }
   | { type: 'chat:reaction'; conversationId: string; messageId: string; reactions: Record<string, string[]> }
@@ -273,6 +275,23 @@ function buildBodyAuthRequest(
       },
     };
   }
+  if (method === 'DELETE' && path.startsWith('/api/social/messages/')) {
+    return {
+      url: `${path}/delete`,
+      init: {
+        ...options,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...((options.headers as Record<string, string>) || {}),
+        },
+        body: JSON.stringify({
+          _accessToken: tok,
+          ...(refTok ? { _refreshToken: refTok } : {}),
+        }),
+      },
+    };
+  }
   if (method === 'POST' || method === 'PUT') {
     let parsedBody: Record<string, any> = {};
     if (typeof options.body === 'string' && options.body.trim()) {
@@ -499,6 +518,18 @@ export async function reactToMessageApi(messageId: string, emoji: string) {
       body: JSON.stringify({ emoji }),
     }
   );
+}
+
+export async function deleteChatMessageApi(messageId: string) {
+  return socialFetch<{
+    ok: boolean;
+    conversationId: string;
+    messageId: string;
+    lastMessage?: ChatMessage | null;
+    deletedAt?: string;
+  }>(`/api/social/messages/${encodeURIComponent(messageId)}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function fetchCommunityPostsApi(): Promise<CommunityPost[]> {

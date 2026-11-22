@@ -65,7 +65,7 @@ export interface Highlight {
   createdAt: string;
 }
 
-export type ViewState = 'dashboard' | 'library' | 'learning-path' | 'ai-tutor' | 'quizzes' | 'community' | 'chat' | 'users-portal' | 'settings' | 'support' | 'developer' | 'reader' | 'profile' | 'workspace' | 'admin' | 'progress' | 'book-store' | 'audiobooks' | 'notifications';
+export type ViewState = 'dashboard' | 'library' | 'learning-path' | 'edulab' | 'ai-tutor' | 'quizzes' | 'community' | 'chat' | 'users-portal' | 'settings' | 'support' | 'developer' | 'reader' | 'profile' | 'workspace' | 'admin' | 'progress' | 'book-store' | 'audiobooks' | 'notifications';
 
 // ============================================================================
 // Kenya CBC & KCSE Curriculum, Taxonomy & RAG Database Types

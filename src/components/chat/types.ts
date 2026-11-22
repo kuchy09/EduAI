@@ -73,7 +73,7 @@ export interface ChatMessage {
   senderAvatar?: string;
   content: string;
   createdAt: string;
-  status: 'sending' | 'sent' | 'delivered' | 'read';
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
   seenAt?: string;
   reactions?: Record<string, string[]>;
   attachment?: ChatAttachment;

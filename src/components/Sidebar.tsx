@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut } from 'lucide-react';
+import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut, FlaskConical } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
@@ -96,6 +96,7 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
   }[] = [
     { id: 'progress', label: 'My Progress', icon: <LineChart className="w-5 h-5" /> },
     { id: 'learning-path', label: 'Learning Path', icon: <Map className="w-5 h-5" /> },
+    { id: 'edulab', label: 'EduLab', icon: <FlaskConical className="w-5 h-5" /> },
     { id: 'community', label: 'Community', icon: <Users className="w-5 h-5" /> },
     { id: 'users-portal', label: 'Find Members & Friends', icon: <UserPlus className="w-5 h-5" /> },
     { 

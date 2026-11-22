@@ -5,6 +5,8 @@ import { SupabaseClient } from "@supabase/supabase-js";
 import {
   GLOBAL_SOCIAL_GRAPH_ROW_ID,
   GLOBAL_SOCIAL_GRAPH_ROW_TITLE,
+  GLOBAL_SOCIAL_MESSAGES_ROW_ID,
+  GLOBAL_SOCIAL_MESSAGES_ROW_TITLE,
 } from "../shared/canonicalBookCovers";
 
 export type SocialRole = "teacher" | "student" | "educator" | "admin";
@@ -101,6 +103,7 @@ interface SocialStateDisk {
   removedFriendPairs?: Record<string, string>;
   conversations: Record<string, SocialConversationRecord>;
   messages: Record<string, SocialMessageRecord[]>;
+  deletedMessageIds?: Record<string, string>;
   unreadCounts: Record<string, Record<string, number>>; // convId -> { userId: count }
   communityPosts: CommunityPostRecord[];
   updatedAt: string;
@@ -147,6 +150,7 @@ function getDefaultState(): SocialStateDisk {
     removedFriendPairs: {},
     conversations: {},
     messages: {},
+    deletedMessageIds: {},
     unreadCounts: {},
     communityPosts: createInitialCommunityPosts(),
     updatedAt: new Date().toISOString(),
@@ -181,6 +185,10 @@ function readDiskState(): SocialStateDisk {
               : {},
           conversations: parsed.conversations && typeof parsed.conversations === "object" ? parsed.conversations : {},
           messages: parsed.messages && typeof parsed.messages === "object" ? parsed.messages : {},
+          deletedMessageIds:
+            parsed.deletedMessageIds && typeof parsed.deletedMessageIds === "object"
+              ? parsed.deletedMessageIds
+              : {},
           unreadCounts: parsed.unreadCounts && typeof parsed.unreadCounts === "object" ? parsed.unreadCounts : {},
           communityPosts:
             Array.isArray(parsed.communityPosts) && parsed.communityPosts.length > 0
@@ -261,6 +269,21 @@ let lastCloudHydrateAt = 0;
 let inFlightCloudHydrate: Promise<void> | null = null;
 let cloudSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 
+function mergeReactionsMaps(
+  a?: Record<string, string[]>,
+  b?: Record<string, string[]>
+): Record<string, string[]> {
+  const result: Record<string, string[]> = {};
+  for (const src of [a, b]) {
+    if (!src || typeof src !== "object") continue;
+    for (const [emoji, uids] of Object.entries(src)) {
+      if (!Array.isArray(uids) || uids.length === 0) continue;
+      result[emoji] = Array.from(new Set([...(result[emoji] || []), ...uids]));
+    }
+  }
+  return result;
+}
+
 function mergeCloudSnapshotIntoState(state: SocialStateDisk, snapshot: any): boolean {
   if (!snapshot || typeof snapshot !== "object") return false;
   let changed = false;
@@ -272,6 +295,32 @@ function mergeCloudSnapshotIntoState(state: SocialStateDisk, snapshot: any): boo
       const existingDel = state.removedFriendPairs[pairKey];
       if (!existingDel || safeTimestampMs(delIso) > safeTimestampMs(existingDel)) {
         state.removedFriendPairs[pairKey] = delIso;
+        changed = true;
+      }
+    }
+  }
+
+  if (!state.deletedMessageIds) state.deletedMessageIds = {};
+  if (snapshot.deletedMessageIds && typeof snapshot.deletedMessageIds === "object") {
+    for (const [msgId, delIso] of Object.entries(snapshot.deletedMessageIds)) {
+      if (!msgId || typeof delIso !== "string") continue;
+      const existingDel = state.deletedMessageIds[msgId];
+      if (!existingDel || safeTimestampMs(delIso) > safeTimestampMs(existingDel)) {
+        state.deletedMessageIds[msgId] = delIso;
+        changed = true;
+      }
+    }
+  }
+
+  // Enforce sender-deleted message tombstones across all local conversations so deleted messages never resurrect
+  const deletedMsgKeys = Object.keys(state.deletedMessageIds);
+  if (deletedMsgKeys.length > 0) {
+    const delSet = new Set(deletedMsgKeys);
+    for (const [convId, list] of Object.entries(state.messages)) {
+      if (!Array.isArray(list) || list.length === 0) continue;
+      const filtered = list.filter((m) => m?.id && !delSet.has(m.id));
+      if (filtered.length !== list.length) {
+        state.messages[convId] = filtered;
         changed = true;
       }
     }
@@ -368,25 +417,54 @@ function mergeCloudSnapshotIntoState(state: SocialStateDisk, snapshot: any): boo
   }
 
   if (snapshot.messages && typeof snapshot.messages === "object") {
+    const deletedSet = state.deletedMessageIds || {};
     for (const [convId, rawList] of Object.entries<any>(snapshot.messages)) {
       if (!Array.isArray(rawList) || rawList.length === 0) continue;
       const currentList = state.messages[convId] || [];
       const byId = new Map<string, SocialMessageRecord>();
+      const clientKeyToId = new Map<string, string>();
       for (const m of currentList) {
-        if (m?.id) byId.set(m.id, m);
+        if (!m?.id || deletedSet[m.id]) continue;
+        byId.set(m.id, m);
+        if (m.clientMessageId && m.senderId) {
+          clientKeyToId.set(`${m.senderId}::${m.clientMessageId}`, m.id);
+        }
       }
       let addedOrUpdated = false;
       for (const m of rawList) {
-        if (!m?.id) continue;
-        const prev = byId.get(m.id);
+        if (!m?.id || deletedSet[m.id]) continue;
+        const clientKey = m.clientMessageId && m.senderId ? `${m.senderId}::${m.clientMessageId}` : "";
+        const mappedId = clientKey ? clientKeyToId.get(clientKey) : undefined;
+        const lookupId = mappedId || m.id;
+        const prev = byId.get(lookupId);
         if (!prev) {
           byId.set(m.id, m);
+          if (clientKey) clientKeyToId.set(clientKey, m.id);
           addedOrUpdated = true;
         } else {
           const prevRead = Array.isArray(prev.readBy) ? prev.readBy.length : 0;
           const nextRead = Array.isArray(m.readBy) ? m.readBy.length : 0;
-          if (nextRead > prevRead || (m.status === "read" && prev.status !== "read")) {
-            byId.set(m.id, { ...prev, ...m });
+          const unionReadBy = Array.from(
+            new Set([
+              ...(Array.isArray(prev.readBy) ? prev.readBy : []),
+              ...(Array.isArray(m.readBy) ? m.readBy : []),
+            ])
+          );
+          const mergedReactions = mergeReactionsMaps(prev.reactions, m.reactions);
+          const statusChanged = m.status === "read" && prev.status !== "read";
+          const reactionChanged = JSON.stringify(mergedReactions) !== JSON.stringify(prev.reactions || {});
+          const richerAttachment = !prev.attachment?.url && Boolean(m.attachment?.url);
+          if (unionReadBy.length > prevRead || nextRead > prevRead || statusChanged || reactionChanged || richerAttachment) {
+            byId.set(prev.id, {
+              ...prev,
+              ...m,
+              id: prev.id,
+              attachment: richerAttachment ? m.attachment : prev.attachment || m.attachment,
+              readBy: unionReadBy,
+              reactions: mergedReactions,
+              status: prev.status === "read" || m.status === "read" ? "read" : m.status || prev.status,
+              seenAt: prev.seenAt || m.seenAt,
+            });
             addedOrUpdated = true;
           }
         }
@@ -440,6 +518,44 @@ async function ensureSocialStorageBucket(sb: SupabaseClient): Promise<void> {
   } catch (_) {}
 }
 
+let cloudPersistChain: Promise<void> = Promise.resolve();
+
+function buildPostgresMessagesBackupPayload(state: SocialStateDisk): string {
+  const basePayload = {
+    conversations: state.conversations,
+    messages: state.messages,
+    deletedMessageIds: state.deletedMessageIds || {},
+    unreadCounts: state.unreadCounts,
+    updatedAt: state.updatedAt || new Date().toISOString(),
+  };
+  let serialized = JSON.stringify(basePayload);
+  if (serialized.length <= 900_000) {
+    return serialized;
+  }
+
+  // Strip oversized inline data URLs in Postgres backup fallback only if payload exceeds ~900KB
+  const compactedMessages: Record<string, SocialMessageRecord[]> = {};
+  for (const [cid, list] of Object.entries(state.messages || {})) {
+    compactedMessages[cid] = (list || []).map((m) => {
+      if (m?.attachment && typeof m.attachment.url === "string" && m.attachment.url.length > 32_768) {
+        return {
+          ...m,
+          attachment: {
+            ...m.attachment,
+            url: undefined,
+          },
+        };
+      }
+      return m;
+    });
+  }
+  serialized = JSON.stringify({
+    ...basePayload,
+    messages: compactedMessages,
+  });
+  return serialized;
+}
+
 export async function persistSocialCloudState(
   sb?: SupabaseClient | null,
   stateOverride?: SocialStateDisk
@@ -447,64 +563,90 @@ export async function persistSocialCloudState(
   const client = sb || registeredSocialSb;
   if (!client) return;
   if (sb) registeredSocialSb = sb;
-  const state = stateOverride || readDiskState();
 
-  const compactGraph = {
-    friendRequests: state.friendRequests,
-    removedFriendPairs: state.removedFriendPairs || {},
-    updatedAt: state.updatedAt || new Date().toISOString(),
-  };
+  const runPersist = async () => {
+    const state = stateOverride || readDiskState();
 
-  const fullPayload = {
-    friendRequests: state.friendRequests,
-    removedFriendPairs: state.removedFriendPairs || {},
-    conversations: state.conversations,
-    messages: state.messages,
-    unreadCounts: state.unreadCounts,
-    communityPosts: state.communityPosts,
-    updatedAt: state.updatedAt || new Date().toISOString(),
-  };
+    const compactGraph = {
+      friendRequests: state.friendRequests,
+      removedFriendPairs: state.removedFriendPairs || {},
+      updatedAt: state.updatedAt || new Date().toISOString(),
+    };
 
-  // 1. Persist full social state JSON to Supabase Storage (durable across container restarts)
-  const storageWrite = (async () => {
-    try {
-      await ensureSocialStorageBucket(client);
-      const buf = Buffer.from(JSON.stringify(fullPayload), "utf-8");
-      const { error: upErr } = await client.storage
-        .from(CLOUD_SOCIAL_BUCKET)
-        .upload(CLOUD_SOCIAL_OBJECT_KEY, buf, {
-          contentType: "application/json",
-          upsert: true,
-        });
-      if (upErr && String(upErr.message || "").toLowerCase().includes("bucket")) {
-        cloudBucketEnsured = false;
+    const fullPayload = {
+      friendRequests: state.friendRequests,
+      removedFriendPairs: state.removedFriendPairs || {},
+      conversations: state.conversations,
+      messages: state.messages,
+      deletedMessageIds: state.deletedMessageIds || {},
+      unreadCounts: state.unreadCounts,
+      communityPosts: state.communityPosts,
+      updatedAt: state.updatedAt || new Date().toISOString(),
+    };
+
+    const messagesBackupJson = buildPostgresMessagesBackupPayload(state);
+
+    // 1. Persist full social state JSON to Supabase Storage (durable across container restarts)
+    const storageWrite = (async () => {
+      try {
         await ensureSocialStorageBucket(client);
-        await client.storage.from(CLOUD_SOCIAL_BUCKET).upload(CLOUD_SOCIAL_OBJECT_KEY, buf, {
-          contentType: "application/json",
-          upsert: true,
-        });
-      }
-    } catch (_) {}
-  })();
+        const buf = Buffer.from(JSON.stringify(fullPayload), "utf-8");
+        const { error: upErr } = await client.storage
+          .from(CLOUD_SOCIAL_BUCKET)
+          .upload(CLOUD_SOCIAL_OBJECT_KEY, buf, {
+            contentType: "application/json",
+            upsert: true,
+          });
+        if (upErr && String(upErr.message || "").toLowerCase().includes("bucket")) {
+          cloudBucketEnsured = false;
+          await ensureSocialStorageBucket(client);
+          await client.storage.from(CLOUD_SOCIAL_BUCKET).upload(CLOUD_SOCIAL_OBJECT_KEY, buf, {
+            contentType: "application/json",
+            upsert: true,
+          });
+        }
+      } catch (_) {}
+    })();
 
-  // 2. Persist compact friendRequests graph in Postgres books __SYSTEM_CONFIG__ row
-  const dbWrite = (async () => {
-    try {
-      await client.from("books").upsert(
-        {
-          id: GLOBAL_SOCIAL_GRAPH_ROW_ID,
-          title: GLOBAL_SOCIAL_GRAPH_ROW_TITLE,
-          author: "Edu AI System",
-          category: "__SYSTEM_CONFIG__",
-          description: JSON.stringify(compactGraph),
-          cover_image: "",
-        },
-        { onConflict: "id" }
-      );
-    } catch (_) {}
-  })();
+    // 2. Persist compact friendRequests graph in Postgres books __SYSTEM_CONFIG__ row
+    const graphDbWrite = (async () => {
+      try {
+        await client.from("books").upsert(
+          {
+            id: GLOBAL_SOCIAL_GRAPH_ROW_ID,
+            title: GLOBAL_SOCIAL_GRAPH_ROW_TITLE,
+            author: "Edu AI System",
+            category: "__SYSTEM_CONFIG__",
+            description: JSON.stringify(compactGraph),
+            cover_image: "",
+          },
+          { onConflict: "id" }
+        );
+      } catch (_) {}
+    })();
 
-  await Promise.allSettled([storageWrite, dbWrite]);
+    // 3. Persist conversations, messages & deletedMessageIds backup in Postgres books __SYSTEM_CONFIG__ row
+    const messagesDbWrite = (async () => {
+      try {
+        await client.from("books").upsert(
+          {
+            id: GLOBAL_SOCIAL_MESSAGES_ROW_ID,
+            title: GLOBAL_SOCIAL_MESSAGES_ROW_TITLE,
+            author: "Edu AI System",
+            category: "__SYSTEM_CONFIG__",
+            description: messagesBackupJson,
+            cover_image: "",
+          },
+          { onConflict: "id" }
+        );
+      } catch (_) {}
+    })();
+
+    await Promise.allSettled([storageWrite, graphDbWrite, messagesDbWrite]);
+  };
+
+  cloudPersistChain = cloudPersistChain.then(runPersist, runPersist);
+  return cloudPersistChain;
 }
 
 function scheduleCloudSocialSync(sb?: SupabaseClient | null): void {
@@ -539,12 +681,17 @@ export async function hydrateSocialCloudState(
       const state = readDiskState();
       let changed = false;
 
-      const [storageRes, dbRes] = await Promise.allSettled([
+      const [storageRes, graphDbRes, msgsDbRes] = await Promise.allSettled([
         client.storage.from(CLOUD_SOCIAL_BUCKET).download(CLOUD_SOCIAL_OBJECT_KEY),
         client
           .from("books")
           .select("description")
           .eq("id", GLOBAL_SOCIAL_GRAPH_ROW_ID)
+          .maybeSingle(),
+        client
+          .from("books")
+          .select("description")
+          .eq("id", GLOBAL_SOCIAL_MESSAGES_ROW_ID)
           .maybeSingle(),
       ]);
 
@@ -560,8 +707,20 @@ export async function hydrateSocialCloudState(
         }
       }
 
-      if (dbRes.status === "fulfilled") {
-        const { data: rowData, error: rowErr } = dbRes.value;
+      if (graphDbRes.status === "fulfilled") {
+        const { data: rowData, error: rowErr } = graphDbRes.value;
+        if (!rowErr && rowData?.description) {
+          try {
+            const parsed = JSON.parse(rowData.description);
+            if (mergeCloudSnapshotIntoState(state, parsed)) {
+              changed = true;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (msgsDbRes.status === "fulfilled") {
+        const { data: rowData, error: rowErr } = msgsDbRes.value;
         if (!rowErr && rowData?.description) {
           try {
             const parsed = JSON.parse(rowData.description);
@@ -1399,23 +1558,27 @@ export function getBootstrapDataForUser(viewerId: string, onlineUserIds: Set<str
   const conversations: any[] = [];
   const messagesByConv: Record<string, any[]> = {};
 
+  const deletedSet = state.deletedMessageIds || {};
   for (const conv of Object.values(state.conversations)) {
     if (!conv.participants.includes(viewerId)) continue;
-    const convMsgs = (state.messages[conv.id] || []).map((m) => ({
-      id: m.id,
-      conversationId: m.conversationId,
-      senderId: m.senderId,
-      senderName: m.senderName,
-      senderRole: m.senderRole,
-      senderAvatar: state.users[m.senderId]?.avatar || m.senderAvatar || "",
-      content: m.content,
-      createdAt: m.createdAt,
-      status: m.status,
-      seenAt: m.seenAt,
-      reactions: m.reactions || {},
-      attachment: m.attachment,
-      replyTo: m.replyTo,
-    }));
+    const convMsgs = (state.messages[conv.id] || [])
+      .filter((m) => m?.id && !deletedSet[m.id])
+      .map((m) => ({
+        id: m.id,
+        clientMessageId: m.clientMessageId,
+        conversationId: m.conversationId,
+        senderId: m.senderId,
+        senderName: m.senderName,
+        senderRole: m.senderRole,
+        senderAvatar: state.users[m.senderId]?.avatar || m.senderAvatar || "",
+        content: m.content,
+        createdAt: m.createdAt,
+        status: m.status,
+        seenAt: m.seenAt,
+        reactions: m.reactions || {},
+        attachment: m.attachment,
+        replyTo: m.replyTo,
+      }));
 
     const unreadCount = state.unreadCounts[conv.id]?.[viewerId] || 0;
     const lastMessage = convMsgs.length > 0 ? convMsgs[convMsgs.length - 1] : undefined;
@@ -1458,6 +1621,7 @@ export function getBootstrapDataForUser(viewerId: string, onlineUserIds: Set<str
     friendRequests: relevantRequests,
     conversations,
     messagesByConv,
+    deletedMessageIds: state.deletedMessageIds || {},
     onlineUserIds: Array.from(onlineUserIds),
   };
 }
@@ -1971,15 +2135,17 @@ export function getConversationIfParticipant(
 export function getMessagesForConversation(
   conversationId: string,
   viewerId: string
-): { ok: boolean; messages?: any[]; error?: string } {
+): { ok: boolean; messages?: any[]; deletedMessageIds?: Record<string, string>; error?: string } {
   const state = readDiskState();
   const conv = state.conversations[conversationId];
   if (!conv || !conv.participants.includes(viewerId)) {
     return { ok: false, error: "Conversation not found or access denied." };
   }
+  const deletedSet = state.deletedMessageIds || {};
   return {
     ok: true,
-    messages: state.messages[conversationId] || [],
+    messages: (state.messages[conversationId] || []).filter((m) => m?.id && !deletedSet[m.id]),
+    deletedMessageIds: deletedSet,
   };
 }
 
@@ -2147,6 +2313,80 @@ export function toggleMessageReactionAction(
   }
 
   return { ok: false, error: "Message not found." };
+}
+
+export async function deleteChatMessageAction(
+  actorId: string,
+  messageId: string,
+  sb?: SupabaseClient | null
+): Promise<{
+  ok: boolean;
+  statusCode?: number;
+  conversationId?: string;
+  messageId?: string;
+  lastMessage?: SocialMessageRecord | null;
+  participants?: string[];
+  deletedAt?: string;
+  error?: string;
+}> {
+  const client = sb || registeredSocialSb;
+  if (sb) registeredSocialSb = sb;
+
+  await hydrateSocialCloudState(client, { force: true });
+  const state = readDiskState();
+
+  for (const [convId, list] of Object.entries(state.messages)) {
+    const conv = state.conversations[convId];
+    if (!conv || !conv.participants.includes(actorId)) continue;
+    const idx = list.findIndex(
+      (m) => m.id === messageId || (m.senderId === actorId && m.clientMessageId === messageId)
+    );
+    if (idx === -1) continue;
+
+    const target = list[idx];
+    if (target.senderId !== actorId) {
+      return {
+        ok: false,
+        statusCode: 403,
+        error: "Only the sender can delete this message.",
+      };
+    }
+
+    list.splice(idx, 1);
+    const now = new Date().toISOString();
+    if (!state.deletedMessageIds) state.deletedMessageIds = {};
+    state.deletedMessageIds[target.id] = now;
+
+    if (state.unreadCounts[convId]) {
+      const readBySet = new Set(target.readBy || []);
+      for (const uid of conv.participants) {
+        if (uid !== target.senderId && !readBySet.has(uid) && typeof state.unreadCounts[convId][uid] === "number") {
+          state.unreadCounts[convId][uid] = Math.max(0, state.unreadCounts[convId][uid] - 1);
+        }
+      }
+    }
+
+    const lastMessage = list.length > 0 ? list[list.length - 1] : null;
+    conv.updatedAt = lastMessage?.createdAt || conv.createdAt || now;
+
+    writeDiskState(state);
+    await persistSocialCloudState(client, state);
+
+    return {
+      ok: true,
+      conversationId: convId,
+      messageId: target.id,
+      lastMessage,
+      participants: conv.participants,
+      deletedAt: now,
+    };
+  }
+
+  if (state.deletedMessageIds?.[messageId]) {
+    return { ok: false, statusCode: 404, error: "Message has already been deleted." };
+  }
+
+  return { ok: false, statusCode: 404, error: "Message not found." };
 }
 
 export function listCommunityPosts(): CommunityPostRecord[] {

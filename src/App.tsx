@@ -22,6 +22,7 @@ import { Settings } from './components/Settings';
 import { BookDetail } from './components/BookDetail';
 import { Reader } from './components/Reader';
 import { LearningPath } from './components/LearningPath';
+import { EduLab } from './components/EduLab';
 import { Quizzes } from './components/Quizzes';
 import { Community } from './components/Community';
 import { Support } from './components/Support';
@@ -106,7 +107,7 @@ export interface SystemHealth {
 }
 
 const VALID_VIEWS: Set<ViewState> = new Set([
-  'dashboard', 'library', 'learning-path', 'ai-tutor', 'quizzes', 'community', 
+  'dashboard', 'library', 'learning-path', 'edulab', 'ai-tutor', 'quizzes', 'community', 
   'chat', 'users-portal', 'settings', 'support', 'developer', 'reader', 
   'profile', 'workspace', 'admin', 'progress', 'book-store', 'audiobooks', 'notifications'
 ]);
@@ -1697,6 +1698,13 @@ export default function App() {
                       />
                     )}
                     {currentView === 'learning-path' && <LearningPath user={session?.user} profile={profile} />}
+                    {currentView === 'edulab' && (
+                      <EduLab
+                        user={session?.user}
+                        profile={profile}
+                        onNavigate={(view) => changeView(view)}
+                      />
+                    )}
                     {currentView === 'ai-tutor' && (
                       <AiTutor 
                         user={session?.user}

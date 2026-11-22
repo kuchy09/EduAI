@@ -34,6 +34,7 @@ import {
   addGroupMemberAction,
   createCommunityPostAction,
   createGroupConversationAction,
+  deleteChatMessageAction,
   formatDirectoryUserForViewer,
   getBootstrapDataForUser,
   getConversationIfParticipant,
@@ -45,6 +46,7 @@ import {
   markConversationReadAction,
   matchesDirectorySearchQuery,
   openOrCreateDirectConversation,
+  persistSocialCloudState,
   registerSocialSupabaseClient,
   removeFriendshipAction,
   respondToFriendRequestAction,
@@ -767,12 +769,16 @@ function serverMergeById(listA: any[] = [], listB: any[] = [], keyFn?: (item: an
 
 function serverMergePeerMessages(
   mapA: Record<string, any[]> = {},
-  mapB: Record<string, any[]> = {}
+  mapB: Record<string, any[]> = {},
+  deletedPeerMessages?: Record<string, string>
 ): Record<string, any[]> {
   const result: Record<string, any[]> = {};
+  const delSet = deletedPeerMessages && typeof deletedPeerMessages === "object" ? deletedPeerMessages : {};
   const ids = new Set([...Object.keys(mapA || {}), ...Object.keys(mapB || {})]);
   for (const convId of ids) {
-    const merged = serverMergeById(mapA?.[convId] || [], mapB?.[convId] || []);
+    const merged = serverMergeById(mapA?.[convId] || [], mapB?.[convId] || []).filter(
+      (m) => m?.id && !delSet[m.id]
+    );
     merged.sort((a, b) => {
       const ta = a.createdAt ? Date.parse(a.createdAt) || 0 : 0;
       const tb = b.createdAt ? Date.parse(b.createdAt) || 0 : 0;
@@ -918,12 +924,15 @@ function mergeSyncSnapshots(snapshots: any[]): any {
   });
 
   let deletedAiSessions: Record<string, string> = {};
+  let deletedPeerMessages: Record<string, string> = {};
   for (const snap of ordered) {
     deletedAiSessions = mergeDeletedAiSessionsMap(deletedAiSessions, snap.deletedAiSessions);
+    deletedPeerMessages = mergeDeletedAiSessionsMap(deletedPeerMessages, snap.deletedPeerMessages);
   }
 
   const acc: any = {
     deletedAiSessions,
+    deletedPeerMessages,
     aiChatSessions: [],
     readerChats: {},
     peerConversations: [],
@@ -949,7 +958,7 @@ function mergeSyncSnapshots(snapshots: any[]): any {
       acc.peerConversations = serverMergeById(acc.peerConversations, snap.peerConversations);
     }
     if (snap.peerMessages && typeof snap.peerMessages === "object") {
-      acc.peerMessages = serverMergePeerMessages(acc.peerMessages, snap.peerMessages);
+      acc.peerMessages = serverMergePeerMessages(acc.peerMessages, snap.peerMessages, deletedPeerMessages);
     }
     if (Array.isArray(snap.unlockedBooks)) {
       acc.unlockedBooks = serverMergeById(acc.unlockedBooks, snap.unlockedBooks);
@@ -3294,14 +3303,16 @@ app.post("/api/social/conversations/direct", async (req, res) => {
   if (!auth) return;
   try {
     const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
     await syncUserProfileToStoreAndSupabase(auth.user, privSb);
     await hydrateDirectoryFromSupabase(privSb);
-    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb, { forceCloudRead: true });
     const partnerId = typeof req.body?.partnerId === "string" ? req.body.partnerId.trim() : "";
     const result = openOrCreateDirectConversation(auth.user.id, partnerId);
     if (!result.ok) {
       return res.status(400).json({ error: result.error || "Could not open direct chat." });
     }
+    await persistSocialCloudState(privSb);
     sendWsPayloadToUser(partnerId, {
       type: "chat:conversation",
       conversation: result.conversation,
@@ -3318,8 +3329,10 @@ app.post("/api/social/conversations/group", async (req, res) => {
   if (!auth) return;
   try {
     const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
     await syncUserProfileToStoreAndSupabase(auth.user, privSb);
     await hydrateDirectoryFromSupabase(privSb);
+    await hydrateSocialCloudState(privSb, { force: true });
     const result = createGroupConversationAction(auth.user.id, {
       name: req.body?.name,
       description: req.body?.description,
@@ -3330,6 +3343,7 @@ app.post("/api/social/conversations/group", async (req, res) => {
     if (!result.ok || !result.conversation) {
       return res.status(400).json({ error: result.error || "Could not create study group." });
     }
+    await persistSocialCloudState(privSb);
     broadcastSocialEventToUsers(result.conversation.participants || [], {
       type: "chat:conversation",
       conversation: result.conversation,
@@ -3346,13 +3360,16 @@ app.post("/api/social/conversations/:id/members", async (req, res) => {
   if (!auth) return;
   try {
     const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
     await hydrateDirectoryFromSupabase(privSb);
+    await hydrateSocialCloudState(privSb, { force: true });
     const convId = String(req.params.id || "").trim();
     const memberId = typeof req.body?.memberId === "string" ? req.body.memberId.trim() : "";
     const result = addGroupMemberAction(auth.user.id, convId, memberId);
     if (!result.ok || !result.conversation) {
       return res.status(400).json({ error: result.error || "Could not add member." });
     }
+    await persistSocialCloudState(privSb);
     broadcastSocialEventToUsers(result.conversation.participants || [], {
       type: "chat:conversation",
       conversation: result.conversation,
@@ -3367,12 +3384,20 @@ app.post("/api/social/conversations/:id/members", async (req, res) => {
 app.get("/api/social/conversations/:id/messages", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
-  const convId = String(req.params.id || "").trim();
-  const result = getMessagesForConversation(convId, auth.user.id);
-  if (!result.ok) {
-    return res.status(403).json({ error: result.error || "Forbidden" });
+  try {
+    const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
+    await hydrateSocialCloudState(privSb);
+    const convId = String(req.params.id || "").trim();
+    const result = getMessagesForConversation(convId, auth.user.id);
+    if (!result.ok) {
+      return res.status(403).json({ error: result.error || "Forbidden" });
+    }
+    return res.json(result);
+  } catch (err) {
+    console.error("[Social] GET /api/social/conversations/:id/messages error:", err);
+    return res.status(500).json({ error: "Failed to load conversation messages." });
   }
-  return res.json(result);
 });
 
 app.post("/api/social/messages", async (req, res) => {
@@ -3380,8 +3405,9 @@ app.post("/api/social/messages", async (req, res) => {
   if (!auth) return;
   try {
     const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
     await syncUserProfileToStoreAndSupabase(auth.user, privSb);
-    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb, { forceCloudRead: true });
     const result = sendChatMessageAction(
       auth.user.id,
       {
@@ -3397,6 +3423,8 @@ app.post("/api/social/messages", async (req, res) => {
     if (!result.ok || !result.message) {
       return res.status(400).json({ error: result.error || "Could not send message." });
     }
+
+    await persistSocialCloudState(privSb);
 
     if (!result.deduplicated) {
       broadcastSocialEventToUsers(result.participants || [], {
@@ -3415,12 +3443,15 @@ app.post("/api/social/messages", async (req, res) => {
 app.post("/api/social/conversations/:id/read", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
+  const privSb = getServerSupabase() || auth.sb;
+  registerSocialSupabaseClient(privSb);
   const convId = String(req.params.id || "").trim();
   const result = markConversationReadAction(auth.user.id, convId);
   if (!result.ok) {
     return res.status(403).json({ error: "Conversation access denied." });
   }
   if (result.updatedMessageIds.length > 0) {
+    void persistSocialCloudState(privSb);
     broadcastSocialEventToUsers(result.participants, {
       type: "chat:read",
       conversationId: convId,
@@ -3435,12 +3466,15 @@ app.post("/api/social/conversations/:id/read", async (req, res) => {
 app.post("/api/social/messages/:id/react", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
+  const privSb = getServerSupabase() || auth.sb;
+  registerSocialSupabaseClient(privSb);
   const msgId = String(req.params.id || "").trim();
   const emoji = String(req.body?.emoji || "").trim();
   const result = toggleMessageReactionAction(auth.user.id, msgId, emoji);
   if (!result.ok) {
     return res.status(400).json({ error: result.error || "Could not react to message." });
   }
+  await persistSocialCloudState(privSb);
   broadcastSocialEventToUsers(result.participants || [], {
     type: "chat:reaction",
     conversationId: result.conversationId,
@@ -3449,6 +3483,43 @@ app.post("/api/social/messages/:id/react", async (req, res) => {
   });
   return res.json({ ok: true, reactions: result.reactions });
 });
+
+async function handleDeleteChatMessage(req: express.Request, res: express.Response) {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
+    const msgId = String(req.params.id || "").trim();
+    if (!msgId) {
+      return res.status(400).json({ error: "Message ID is required." });
+    }
+    const result = await deleteChatMessageAction(auth.user.id, msgId, privSb);
+    if (!result.ok) {
+      return res.status(result.statusCode || 400).json({ error: result.error || "Could not delete message." });
+    }
+    broadcastSocialEventToUsers(result.participants || [], {
+      type: "chat:message-deleted",
+      conversationId: result.conversationId,
+      messageId: result.messageId,
+      lastMessage: result.lastMessage || null,
+      deletedAt: result.deletedAt,
+    });
+    return res.json({
+      ok: true,
+      conversationId: result.conversationId,
+      messageId: result.messageId,
+      lastMessage: result.lastMessage || null,
+      deletedAt: result.deletedAt,
+    });
+  } catch (err) {
+    console.error("[Social] deleteChatMessage error:", err);
+    return res.status(500).json({ error: "Failed to delete message." });
+  }
+}
+
+app.delete("/api/social/messages/:id", handleDeleteChatMessage);
+app.post("/api/social/messages/:id/delete", handleDeleteChatMessage);
 
 app.get("/api/social/community/posts", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
@@ -3615,7 +3686,7 @@ app.get("/api/books", async (req, res) => {
           cloudBooks = sbBooks
             .filter((b: any) => {
               if (isSystemBookConfigRow(b)) {
-                if (b?.description) {
+                if ((b.id === GLOBAL_BOOK_COVERS_ROW_ID || b.title === GLOBAL_BOOK_COVERS_ROW_TITLE) && b?.description) {
                   try {
                     const parsed = JSON.parse(b.description);
                     if (parsed && typeof parsed === "object") {
