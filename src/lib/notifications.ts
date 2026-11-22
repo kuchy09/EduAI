@@ -1,5 +1,6 @@
 import { ViewState } from '../types';
 import { safeStorage } from './safeStorage';
+import { getPersistedDeviceSession } from './supabase';
 
 export type NotificationType = 'platform' | 'teacher' | 'ai_study' | 'peer' | 'system_alert';
 export type NotificationPriority = 'urgent' | 'high' | 'normal' | 'low';
@@ -29,6 +30,7 @@ export interface AppNotification {
   };
   tags?: string[];
   pinned?: boolean;
+  systemWide?: boolean;
 }
 
 export const INITIAL_NOTIFICATIONS: AppNotification[] = [
@@ -197,31 +199,205 @@ export const INITIAL_NOTIFICATIONS: AppNotification[] = [
 ];
 
 const STORAGE_KEY = 'edu_ai_notifications_v3';
+const SYSTEM_CACHE_KEY = 'edu_system_notifications_cache_v1';
 
-export function getStoredNotifications(): AppNotification[] {
+interface UserNotificationStateMap {
+  readIds?: Record<string, boolean>;
+  pinnedIds?: Record<string, boolean>;
+  dismissedIds?: Record<string, boolean>;
+}
+
+function resolveUserId(explicitUserId?: string): string {
+  return explicitUserId || getPersistedDeviceSession()?.user?.id || 'guest';
+}
+
+function getUserNotifStorageKey(userId?: string): string {
+  const uid = resolveUserId(userId);
+  return uid === 'guest' ? STORAGE_KEY : `${STORAGE_KEY}_${uid}`;
+}
+
+function getUserNotifFlagsKey(userId?: string): string {
+  return `edu_notif_user_state_${resolveUserId(userId)}`;
+}
+
+function notifyListeners(): void {
+  if (typeof window === 'undefined') return;
+  queueMicrotask(() => {
+    window.dispatchEvent(new Event('notifications_updated'));
+  });
+}
+
+function applyUserStateFlags(
+  items: AppNotification[],
+  flags: UserNotificationStateMap
+): AppNotification[] {
+  const readIds = flags.readIds || {};
+  const pinnedIds = flags.pinnedIds || {};
+  const dismissedIds = flags.dismissedIds || {};
+
+  return items
+    .filter((n) => n && n.id && !dismissedIds[n.id])
+    .map((n) => ({
+      ...n,
+      isRead: readIds[n.id] !== undefined ? Boolean(readIds[n.id]) : Boolean(n.isRead),
+      pinned: pinnedIds[n.id] !== undefined ? Boolean(pinnedIds[n.id]) : Boolean(n.pinned),
+    }))
+    .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+
+export function getStoredNotifications(userId?: string): AppNotification[] {
   try {
-    const raw = safeStorage.getItem(STORAGE_KEY);
+    const key = getUserNotifStorageKey(userId);
+    const systemCached = safeStorage.getJSON<AppNotification[]>(SYSTEM_CACHE_KEY, []);
+    const flags = safeStorage.getJSON<UserNotificationStateMap>(getUserNotifFlagsKey(userId), {});
+    const raw = safeStorage.getItem(key);
+    let userList: AppNotification[] = [];
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        userList = parsed;
+      }
+    }
+    const base = userList.length > 0 ? userList : INITIAL_NOTIFICATIONS;
+    const byId = new Map<string, AppNotification>();
+    for (const item of [...base, ...(Array.isArray(systemCached) ? systemCached : [])]) {
+      if (!item?.id) continue;
+      const existing = byId.get(item.id);
+      if (!existing) {
+        byId.set(item.id, item);
+      } else {
+        byId.set(item.id, {
+          ...item,
+          ...existing,
+          isRead: existing.isRead,
+          pinned: existing.pinned,
+        });
+      }
+    }
+    const resolved = applyUserStateFlags(Array.from(byId.values()), flags);
     if (!raw) {
-      safeStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
-      return INITIAL_NOTIFICATIONS;
+      safeStorage.setItem(key, JSON.stringify(resolved));
     }
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      safeStorage.setItem(STORAGE_KEY, JSON.stringify(INITIAL_NOTIFICATIONS));
-      return INITIAL_NOTIFICATIONS;
-    }
-    return parsed;
+    return resolved;
   } catch (e) {
     return INITIAL_NOTIFICATIONS;
   }
 }
 
-export function saveStoredNotifications(notifs: AppNotification[]) {
+export function saveStoredNotifications(notifs: AppNotification[], userId?: string) {
   try {
-    safeStorage.setItem(STORAGE_KEY, JSON.stringify(notifs));
-    // Trigger custom event so header and other components update instantly
-    window.dispatchEvent(new Event('notifications_updated'));
+    const key = getUserNotifStorageKey(userId);
+    const flagsKey = getUserNotifFlagsKey(userId);
+    const prevFlags = safeStorage.getJSON<UserNotificationStateMap>(flagsKey, {});
+    const nextFlags: UserNotificationStateMap = {
+      readIds: { ...(prevFlags.readIds || {}) },
+      pinnedIds: { ...(prevFlags.pinnedIds || {}) },
+      dismissedIds: { ...(prevFlags.dismissedIds || {}) },
+    };
+
+    const currentIds = new Set(notifs.map((n) => n.id));
+    const prevStored = safeStorage.getJSON<AppNotification[]>(key, []);
+    for (const oldItem of prevStored) {
+      if (oldItem?.id && !currentIds.has(oldItem.id)) {
+        nextFlags.dismissedIds![oldItem.id] = true;
+      }
+    }
+    for (const n of notifs) {
+      if (!n?.id) continue;
+      nextFlags.readIds![n.id] = Boolean(n.isRead);
+      nextFlags.pinnedIds![n.id] = Boolean(n.pinned);
+      if (nextFlags.dismissedIds![n.id]) delete nextFlags.dismissedIds![n.id];
+    }
+
+    safeStorage.setJSON(flagsKey, nextFlags);
+    safeStorage.setItem(key, JSON.stringify(notifs));
+    notifyListeners();
   } catch (e) {
     console.error('Failed to save notifications', e);
+  }
+}
+
+export function mergeIncomingSystemNotification(
+  incoming: AppNotification,
+  userId?: string
+): AppNotification[] {
+  if (!incoming || !incoming.id) return getStoredNotifications(userId);
+  const sysCache = safeStorage.getJSON<AppNotification[]>(SYSTEM_CACHE_KEY, []);
+  const nextSysCache = [
+    { ...incoming, systemWide: true },
+    ...sysCache.filter((n) => n?.id !== incoming.id),
+  ].slice(0, 60);
+  safeStorage.setJSON(SYSTEM_CACHE_KEY, nextSysCache);
+
+  const current = getStoredNotifications(userId);
+  const flags = safeStorage.getJSON<UserNotificationStateMap>(getUserNotifFlagsKey(userId), {});
+  if (flags.dismissedIds?.[incoming.id]) {
+    return current;
+  }
+  const merged = applyUserStateFlags(
+    [
+      { ...incoming, systemWide: true },
+      ...current.filter((n) => n.id !== incoming.id),
+    ],
+    flags
+  ).slice(0, 60);
+  safeStorage.setItem(getUserNotifStorageKey(userId), JSON.stringify(merged));
+  notifyListeners();
+  return merged;
+}
+
+export async function syncSystemNotificationsFromServer(userId?: string): Promise<AppNotification[]> {
+  try {
+    const res = await fetch('/api/system/notifications', { headers: { 'Cache-Control': 'no-cache' } });
+    if (!res.ok) return getStoredNotifications(userId);
+    const data = await res.json().catch(() => ({}));
+    const serverList: AppNotification[] = Array.isArray(data?.notifications) ? data.notifications : [];
+    if (serverList.length > 0) {
+      safeStorage.setJSON(
+        SYSTEM_CACHE_KEY,
+        serverList.map((n) => ({ ...n, systemWide: true })).slice(0, 60)
+      );
+    }
+    const current = getStoredNotifications(userId);
+    const flags = safeStorage.getJSON<UserNotificationStateMap>(getUserNotifFlagsKey(userId), {});
+    const byId = new Map<string, AppNotification>();
+    for (const item of [...current, ...serverList.map((n) => ({ ...n, systemWide: true }))]) {
+      if (!item?.id) continue;
+      if (!byId.has(item.id)) {
+        byId.set(item.id, item);
+      }
+    }
+    const merged = applyUserStateFlags(Array.from(byId.values()), flags).slice(0, 60);
+    safeStorage.setItem(getUserNotifStorageKey(userId), JSON.stringify(merged));
+    notifyListeners();
+    return merged;
+  } catch {
+    return getStoredNotifications(userId);
+  }
+}
+
+export async function publishSystemNotificationToServer(
+  notif: AppNotification,
+  explicitToken?: string
+): Promise<AppNotification | null> {
+  const token = explicitToken || getPersistedDeviceSession()?.access_token;
+  if (!token || token === 'demo_token' || token === 'local_token') return null;
+  try {
+    const res = await fetch('/api/system/notifications', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(notif),
+    });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => ({}));
+    if (Array.isArray(data?.notifications)) {
+      safeStorage.setJSON(SYSTEM_CACHE_KEY, data.notifications.slice(0, 60));
+    }
+    return data?.notification || notif;
+  } catch {
+    return null;
   }
 }

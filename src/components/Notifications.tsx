@@ -36,7 +36,9 @@ import {
   NotificationType, 
   NotificationPriority,
   getStoredNotifications, 
-  saveStoredNotifications, 
+  saveStoredNotifications,
+  syncSystemNotificationsFromServer,
+  publishSystemNotificationToServer,
   INITIAL_NOTIFICATIONS 
 } from '../lib/notifications';
 import { ViewState } from '../types';
@@ -48,7 +50,7 @@ interface NotificationsProps {
 }
 
 export function Notifications({ onNavigate, user }: NotificationsProps) {
-  const [notifications, setNotifications] = useState<AppNotification[]>(() => getStoredNotifications());
+  const [notifications, setNotifications] = useState<AppNotification[]>(() => getStoredNotifications(user?.id));
   const [activeTab, setActiveTab] = useState<'all' | NotificationType>('all');
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [selectedPriority, setSelectedPriority] = useState<'all' | NotificationPriority>('all');
@@ -101,8 +103,9 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
 
   // Sync notifications on mount and window focus
   useEffect(() => {
+    void syncSystemNotificationsFromServer(user?.id);
     const handleUpdate = () => {
-      setNotifications(getStoredNotifications());
+      setNotifications(getStoredNotifications(user?.id));
     };
     window.addEventListener('notifications_updated', handleUpdate);
     window.addEventListener('storage', handleUpdate);
@@ -110,7 +113,7 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
       window.removeEventListener('notifications_updated', handleUpdate);
       window.removeEventListener('storage', handleUpdate);
     };
-  }, []);
+  }, [user?.id]);
 
   const triggerToast = (msg: string) => {
     setToastMessage(msg);
@@ -155,7 +158,7 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 520, volume: 0.15, hapticDuration: 8 });
     const updated = notifications.map(n => n.id === id ? { ...n, isRead: true } : n);
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
   };
 
   const handleToggleRead = (id: string, e?: React.MouseEvent) => {
@@ -163,7 +166,7 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 480, volume: 0.12, hapticDuration: 10 });
     const updated = notifications.map(n => n.id === id ? { ...n, isRead: !n.isRead } : n);
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
     triggerToast('Notice status updated');
   };
 
@@ -172,7 +175,7 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 600, volume: 0.15, hapticDuration: 12 });
     const updated = notifications.map(n => n.id === id ? { ...n, pinned: !n.pinned } : n);
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
     triggerToast('Pin status updated');
   };
 
@@ -181,7 +184,7 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 360, volume: 0.15, hapticDuration: 15 });
     const updated = notifications.filter(n => n.id !== id);
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
     triggerToast('Notification dismissed');
   };
 
@@ -189,7 +192,7 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 620, volume: 0.2, hapticDuration: 18 });
     const updated = notifications.map(n => ({ ...n, isRead: true }));
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
     triggerToast('All notifications marked as read');
   };
 
@@ -197,15 +200,16 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 420, volume: 0.15, hapticDuration: 14 });
     const updated = notifications.filter(n => !n.isRead);
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
     triggerToast('Cleared read notifications');
   };
 
   const handleResetDefaults = () => {
     if (soundEnabled) triggerCapsuleFeedback({ pitch: 540, volume: 0.15, hapticDuration: 12 });
     setNotifications(INITIAL_NOTIFICATIONS);
-    saveStoredNotifications(INITIAL_NOTIFICATIONS);
-    triggerToast('Restored default notification feed');
+    saveStoredNotifications(INITIAL_NOTIFICATIONS, user?.id);
+    void syncSystemNotificationsFromServer(user?.id);
+    triggerToast('Restored & synced notification feed');
   };
 
   const handleCopyNotice = (notif: AppNotification, e: React.MouseEvent) => {
@@ -221,8 +225,8 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
     }
   };
 
-  // Submit Broadcast Announcement
-  const handleCreateNotification = (e: React.FormEvent) => {
+  // Submit Broadcast Announcement (persisted system-wide for all existing & future accounts)
+  const handleCreateNotification = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim() || !newMessage.trim()) return;
 
@@ -251,17 +255,20 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
       actionView: newActionView || undefined,
       tags: tagList.length > 0 ? tagList : [newNotifType.toUpperCase(), 'Live Notice'],
       pinned: newNotifType === 'platform',
+      systemWide: true,
     };
 
     const updated = [newNotification, ...notifications];
     setNotifications(updated);
-    saveStoredNotifications(updated);
+    saveStoredNotifications(updated, user?.id);
 
     // Reset Form
     setNewTitle('');
     setNewMessage('');
     setShowComposer(false);
-    triggerToast('Broadcast announcement published to feed');
+    triggerToast('Broadcast announcement published to all accounts');
+
+    void publishSystemNotificationToServer(newNotification);
   };
 
   const getTypeIcon = (type: NotificationType) => {

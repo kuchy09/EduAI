@@ -62,11 +62,12 @@ export async function syncUserReadingProgressFromSupabase(userId: string): Promi
           const totalPages = row.total_pages;
           const scrollPct = row.scroll_pct;
 
-          // Merge if cloud has progress or higher/equal
-          progressMap[bookId] = progress;
+          // Merge keeping the highest recorded progress across devices
+          const mergedPct = Math.max(Number(progressMap[bookId] || 0), Number(progress || 0));
+          progressMap[bookId] = mergedPct;
 
           // Sync back into local IndexedDB
-          await saveReadingProgressLocal(bookId, progress, currentPage, totalPages, scrollPct);
+          await saveReadingProgressLocal(bookId, mergedPct, currentPage, totalPages, scrollPct);
         }
       }
     } catch (err) {
@@ -147,8 +148,8 @@ export async function syncUserDailyGoalFromSupabase(userId: string): Promise<Dai
         history: data.history || localGoal.history || {}
       };
 
-      // Save merged goal locally
-      saveDailyGoal(cloudGoal);
+      // Save merged goal locally without re-triggering a redundant cloud push
+      saveDailyGoal(cloudGoal, false);
       return cloudGoal;
     } else if (error && error.code === 'PGRST116') {
       // Record not found in cloud, seed it from local
@@ -332,7 +333,7 @@ export function setupHomeRealtimeSubscriptions(
           lastCompletedDate: raw.last_completed_date,
           history: raw.history || {}
         };
-        saveDailyGoal(updatedGoal);
+        saveDailyGoal(updatedGoal, false);
         callbacks.onGoalChange(updatedGoal);
       }
     }

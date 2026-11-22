@@ -18,6 +18,8 @@ import {
   COLLEGE_SUBJECTS_MAP,
   saveStoredAcademicPrefs,
 } from '../lib/bookPersonalization';
+import { pushAccountSyncPatch } from '../lib/accountSyncService';
+import { isAdminLoginEmail } from '../../shared/adminAuth';
 import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2, ShieldAlert, Eye, EyeOff, X, ShieldCheck, FileText, Scale } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -164,6 +166,22 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
 
         if (activeSession?.user?.id && activeSession?.access_token && onLoginSuccess) {
           authorizeInteractiveSession(activeSession.user.id, activeSession);
+          if (!fetchedProfile) {
+            try {
+              const syncRes = await fetch('/api/auth/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  access_token: activeSession.access_token,
+                  refresh_token: activeSession.refresh_token || '',
+                }),
+              });
+              const syncJson = await syncRes.json().catch(() => ({}));
+              if (syncRes.ok && syncJson?.profile) {
+                fetchedProfile = syncJson.profile;
+              }
+            } catch (_) {}
+          }
           onLoginSuccess(activeSession, fetchedProfile);
         }
       } catch (err: any) {
@@ -291,7 +309,22 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           if (error) throw error;
           if (signInData?.session?.user?.id && onLoginSuccess) {
             authorizeInteractiveSession(signInData.session.user.id, signInData.session);
-            onLoginSuccess(signInData.session);
+            let canonicalProfile: any = null;
+            try {
+              const syncRes = await fetch('/api/auth/session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  access_token: signInData.session.access_token,
+                  refresh_token: signInData.session.refresh_token || '',
+                }),
+              });
+              const syncJson = await syncRes.json().catch(() => ({}));
+              if (syncRes.ok && syncJson?.profile) {
+                canonicalProfile = syncJson.profile;
+              }
+            } catch (_) {}
+            onLoginSuccess(signInData.session, canonicalProfile);
           }
         } else {
           const res = await fetch('/api/auth/signin', {
@@ -340,13 +373,14 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
         }
 
         const subjectsJoined = subjects.join(', ');
+        const effectiveRole = isAdminLoginEmail(email) ? 'admin' : role;
         const metadata = {
           full_name: fullName.trim(),
           dob: dob,
           education_level: educationLevel,
           subjects: subjectsJoined,
           field_of_study: !isSchoolLevel ? fieldOfStudy : null,
-          role: role,
+          role: effectiveRole,
           country: country,
           curriculum: isSchoolLevel ? curriculum : null,
           join_date: new Date().toISOString(),
@@ -375,18 +409,39 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           }
           if (signUpData?.session?.user?.id) {
             authorizeInteractiveSession(signUpData.session.user.id, signUpData.session);
-            if (onLoginSuccess) {
-              onLoginSuccess(signUpData.session, {
-                id: createdUserId,
-                full_name: metadata.full_name,
-                email: email.trim(),
-                country: metadata.country,
-                education_level: metadata.education_level,
-                curriculum: metadata.curriculum,
-                field_of_study: metadata.field_of_study,
-                subjects: metadata.subjects,
-                role: metadata.role,
+            const richProfile = {
+              id: createdUserId,
+              full_name: metadata.full_name,
+              email: email.trim(),
+              dob: metadata.dob,
+              country: metadata.country,
+              education_level: metadata.education_level,
+              curriculum: metadata.curriculum,
+              field_of_study: metadata.field_of_study,
+              subjects: metadata.subjects,
+              role: metadata.role,
+              join_date: metadata.join_date,
+            };
+            try {
+              await fetch('/api/auth/preferences', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  Authorization: `Bearer ${signUpData.session.access_token}`,
+                },
+                body: JSON.stringify(richProfile),
               });
+            } catch (_) {}
+            if (createdUserId) {
+              pushAccountSyncPatch(
+                createdUserId,
+                { profileSnapshot: richProfile },
+                signUpData.session.access_token,
+                { immediate: true }
+              );
+            }
+            if (onLoginSuccess) {
+              onLoginSuccess(signUpData.session, richProfile);
             }
           } else {
             setInfoMessage('Account created! Please check your email inbox for a verification link, then sign in below.');
@@ -419,18 +474,30 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           }
           if (data?.session?.user?.id) {
             authorizeInteractiveSession(data.session.user.id, data.session);
+            const richProfile = {
+              ...(data?.profile || {}),
+              id: createdUserId,
+              full_name: metadata.full_name,
+              email: email.trim(),
+              dob: metadata.dob,
+              country: metadata.country,
+              education_level: metadata.education_level,
+              curriculum: metadata.curriculum,
+              field_of_study: metadata.field_of_study,
+              subjects: metadata.subjects,
+              role: metadata.role,
+              join_date: metadata.join_date,
+            };
+            if (createdUserId) {
+              pushAccountSyncPatch(
+                createdUserId,
+                { profileSnapshot: richProfile },
+                data.session.access_token,
+                { immediate: true }
+              );
+            }
             if (onLoginSuccess) {
-              onLoginSuccess(data.session, {
-                id: createdUserId,
-                full_name: metadata.full_name,
-                email: email.trim(),
-                country: metadata.country,
-                education_level: metadata.education_level,
-                curriculum: metadata.curriculum,
-                field_of_study: metadata.field_of_study,
-                subjects: metadata.subjects,
-                role: metadata.role,
-              });
+              onLoginSuccess(data.session, richProfile);
             }
           } else {
             setInfoMessage('Account created! Please check your email inbox for a verification link, then sign in below.');
@@ -493,7 +560,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           }
           authorizeInteractiveSession(data.session.user.id, data.session);
           if (onLoginSuccess) {
-            onLoginSuccess(data.session);
+            onLoginSuccess(data.session, data.profile || null);
           }
         }
       } else {

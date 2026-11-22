@@ -1,14 +1,21 @@
 import {
   Bell, MoreHorizontal, ArrowRight,
   BookmarkCheck, MessageCircle, Moon, Sun, User, Camera, Loader2,
-  MessageSquare, LogOut
+  MessageSquare, LogOut, Award
 } from 'lucide-react';
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { Book, ViewState } from '../types';
 import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
-import { useUserAvatar, saveUserAvatarLocally, uploadAndSyncUserAvatar } from '../lib/userAvatarService';
+import { useUserAvatar, saveUserAvatarLocally, uploadAndSyncUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
+import {
+  ACHIEVEMENT_BADGES,
+  ACHIEVEMENTS_UPDATED_EVENT,
+  getStoredAchievements,
+  UserAchievementState,
+} from '../lib/achievementsService';
+import { ACCOUNT_SYNC_EVENT, pushAccountSyncPatch } from '../lib/accountSyncService';
 
 interface HeaderProps {
   currentView?: ViewState;
@@ -99,7 +106,7 @@ export function Header({
   };
 
   const [unreadNotifCount, setUnreadNotifCount] = useState(() => {
-    return getStoredNotifications().filter(n => !n.isRead).length;
+    return getStoredNotifications(user?.id).filter(n => !n.isRead).length;
   });
   const [isDarkTheme, setIsDarkTheme] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -111,6 +118,24 @@ export function Header({
 
   const profileMenuRef = useRef<HTMLDivElement>(null);
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [achievements, setAchievements] = useState<UserAchievementState>(() =>
+    getStoredAchievements(user?.id)
+  );
+
+  useEffect(() => {
+    setAchievements(getStoredAchievements(user?.id));
+    const refreshAchievements = (e?: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.userId && user?.id && detail.userId !== user.id) return;
+      setAchievements(getStoredAchievements(user?.id));
+    };
+    window.addEventListener(ACHIEVEMENTS_UPDATED_EVENT, refreshAchievements);
+    window.addEventListener(ACCOUNT_SYNC_EVENT, refreshAchievements);
+    return () => {
+      window.removeEventListener(ACHIEVEMENTS_UPDATED_EVENT, refreshAchievements);
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, refreshAchievements);
+    };
+  }, [user?.id]);
 
   // Close profile menu on outside click
   useEffect(() => {
@@ -164,11 +189,20 @@ export function Header({
 
   const handleToggleTheme = () => {
     const nextIsDark = !isDarkTheme;
+    const nextTheme = nextIsDark ? 'dark' : 'light';
     setIsDarkTheme(nextIsDark);
-    safeStorage.setItem('theme', nextIsDark ? 'dark' : 'light');
+    safeStorage.setItem('theme', nextTheme);
     document.documentElement.classList.toggle('dark', nextIsDark);
     triggerCapsuleFeedback({ pitch: nextIsDark ? 480 : 720, volume: 0.16, hapticDuration: 12 });
     window.dispatchEvent(new Event('theme_changed'));
+    if (user?.id) {
+      pushAccountSyncPatch(user.id, {
+        userSettings: {
+          theme: nextTheme,
+          updatedAt: new Date().toISOString(),
+        },
+      });
+    }
   };
 
   useEffect(() => {
@@ -180,23 +214,25 @@ export function Header({
     return () => window.removeEventListener('theme_changed', handleThemeSync);
   }, []);
 
-  // Keep unread count in sync
+  // Keep unread count in sync per user
   useEffect(() => {
     const updateCount = () => {
-      const count = getStoredNotifications().filter(n => !n.isRead).length;
+      const count = getStoredNotifications(user?.id).filter(n => !n.isRead).length;
       setUnreadNotifCount(count);
     };
 
     updateCount();
     window.addEventListener('storage', updateCount);
     window.addEventListener('notifications_updated', updateCount);
+    window.addEventListener(ACCOUNT_SYNC_EVENT, updateCount);
     const interval = setInterval(updateCount, 3000);
     return () => {
       window.removeEventListener('storage', updateCount);
       window.removeEventListener('notifications_updated', updateCount);
+      window.removeEventListener(ACCOUNT_SYNC_EVENT, updateCount);
       clearInterval(interval);
     };
-  }, []);
+  }, [user?.id]);
 
   return (
     <header className="fixed top-0 inset-x-0 z-[100] pointer-events-none flex items-center justify-between gap-2 sm:gap-3 px-2.5 sm:px-5 md:px-7 pt-2.5 sm:pt-3.5 w-full max-w-full overflow-visible">
@@ -269,10 +305,8 @@ export function Header({
                   alt="Profile"
                   className="w-full h-full object-cover rounded-full"
                   onError={() => {
-                    const scopedDataKey = user?.id ? `user_avatar_data_url_${user.id}` : 'user_avatar_data_url';
-                    const fallbackData = safeStorage.getItem(scopedDataKey);
-                    if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
-                      saveUserAvatarLocally(fallbackData, fallbackData, user?.id);
+                    const nextCandidate = markAvatarUrlFailed(userAvatarUrl, user, profile);
+                    if (nextCandidate && nextCandidate !== userAvatarUrl) {
                       setAvatarImgFailed(false);
                     } else {
                       setAvatarImgFailed(true);
@@ -303,10 +337,8 @@ export function Header({
                       alt="Profile"
                       className="w-full h-full object-cover"
                       onError={() => {
-                        const scopedDataKey = user?.id ? `user_avatar_data_url_${user.id}` : 'user_avatar_data_url';
-                        const fallbackData = safeStorage.getItem(scopedDataKey);
-                        if (fallbackData && userAvatarUrl !== fallbackData && (fallbackData.startsWith('data:image') || fallbackData.startsWith('blob:'))) {
-                          saveUserAvatarLocally(fallbackData, fallbackData, user?.id);
+                        const nextCandidate = markAvatarUrlFailed(userAvatarUrl, user, profile);
+                        if (nextCandidate && nextCandidate !== userAvatarUrl) {
                           setAvatarImgFailed(false);
                         } else {
                           setAvatarImgFailed(true);
@@ -331,9 +363,13 @@ export function Header({
                   <p className="text-slate-500 dark:text-slate-400 text-xs truncate">
                     {user?.email || 'Active Account'}
                   </p>
-                  <div className="mt-1 flex items-center gap-1.5">
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/60 dark:border-indigo-800/60">
+                  <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                    <span className="font-semibold text-indigo-600 dark:text-indigo-400 truncate">
                       {user?.user_metadata?.field_of_study || 'Active Scholar'}
+                    </span>
+                    <span className="text-slate-300 dark:text-slate-600">•</span>
+                    <span className="font-bold text-amber-600 dark:text-amber-400 tabular-nums shrink-0">
+                      {achievements.totalEduPoints.toLocaleString()} EP
                     </span>
                   </div>
                 </div>
@@ -368,9 +404,15 @@ export function Header({
                 >
                   <div className="flex items-center gap-2.5">
                     <User className="w-4 h-4 text-indigo-500" />
-                    <span>View User Profile</span>
+                    <span>View Profile &amp; Badges</span>
                   </div>
-                  <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                    <Award className="w-3.5 h-3.5" />
+                    <span>
+                      {Object.keys(achievements.earnedBadges).length}/{ACHIEVEMENT_BADGES.length}
+                    </span>
+                    <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                  </div>
                 </button>
 
                 <button

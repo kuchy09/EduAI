@@ -1,4 +1,4 @@
-export type UserRole = 'teacher' | 'student' | 'educator';
+export type UserRole = 'teacher' | 'student' | 'educator' | 'admin';
 
 export type FriendStatus = 'friends' | 'pending_sent' | 'pending_received' | 'none';
 

@@ -13,7 +13,7 @@ import { HomeSearchBar } from './HomeSearchBar';
 import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
 import { fetchUserDashboardMetrics, UserStatsSummary } from '../lib/userHomeDataService';
 import { isAppOnline } from '../lib/offlineManager';
-import { useUserAvatar } from '../lib/userAvatarService';
+import { useUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
 import { platformBookStoreCatalog } from '../data';
 import {
@@ -314,7 +314,14 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
                   src={avatarUrl} 
                   alt={fullName} 
                   className="w-full h-full object-cover rounded-[10px] sm:rounded-[14px]" 
-                  onError={() => setAvatarFailed(true)}
+                  onError={() => {
+                    const nextCandidate = markAvatarUrlFailed(avatarUrl, user, profile);
+                    if (nextCandidate && nextCandidate !== avatarUrl) {
+                      setAvatarFailed(false);
+                    } else {
+                      setAvatarFailed(true);
+                    }
+                  }}
                 />
               ) : (
                 <div className="w-full h-full bg-gradient-to-tr from-brand-600 to-indigo-600 rounded-[10px] sm:rounded-[14px] flex items-center justify-center font-bold text-sm sm:text-base md:text-lg text-white">

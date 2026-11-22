@@ -486,7 +486,7 @@ AS $$
     SELECT 1 FROM public.profiles WHERE id = auth.uid() AND role = 'admin'
   )
   OR COALESCE((auth.jwt() -> 'user_metadata' ->> 'role') = 'admin', false)
-  OR COALESCE((auth.jwt() ->> 'email') IN ('dicksonskello09@gmail.com', 'wolter@admin.com'), false);
+  OR COALESCE((auth.jwt() ->> 'email') IN ('dicksonskello09@gmail.com', 'eduai.platform@admin.com'), false);
 $$;
 
 CREATE OR REPLACE FUNCTION public.check_tutor_quota(p_user_id uuid)
@@ -572,7 +572,7 @@ DECLARE
   v_avatar text;
 BEGIN
   v_role := COALESCE(NULLIF(NEW.raw_user_meta_data ->> 'role', ''), 'student');
-  IF NEW.email IN ('dicksonskello09@gmail.com', 'wolter@admin.com') THEN
+  IF NEW.email IN ('dicksonskello09@gmail.com', 'eduai.platform@admin.com') THEN
     v_role := 'admin';
   ELSIF v_role NOT IN ('student', 'teacher', 'educator', 'parent', 'admin') THEN
     v_role := 'student';
@@ -652,7 +652,7 @@ BEGIN
     END,
     avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url),
     role = CASE
-      WHEN EXCLUDED.email IN ('dicksonskello09@gmail.com', 'wolter@admin.com') THEN 'admin'
+      WHEN EXCLUDED.email IN ('dicksonskello09@gmail.com', 'eduai.platform@admin.com') THEN 'admin'
       ELSE COALESCE(public.profiles.role, EXCLUDED.role)
     END,
     country = COALESCE(EXCLUDED.country, public.profiles.country),

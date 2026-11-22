@@ -20,7 +20,7 @@ DECLARE
   v_avatar text;
 BEGIN
   v_role := COALESCE(NULLIF(NEW.raw_user_meta_data ->> 'role', ''), 'student');
-  IF NEW.email IN ('dicksonskello09@gmail.com', 'wolter@admin.com') THEN
+  IF NEW.email IN ('dicksonskello09@gmail.com', 'eduai.platform@admin.com') THEN
     v_role := 'admin';
   ELSIF v_role NOT IN ('student', 'teacher', 'educator', 'parent', 'admin') THEN
     v_role := 'student';
@@ -116,7 +116,7 @@ BEGIN
     END,
     avatar_url = COALESCE(EXCLUDED.avatar_url, public.profiles.avatar_url),
     role = CASE
-      WHEN EXCLUDED.email IN ('dicksonskello09@gmail.com', 'wolter@admin.com') THEN 'admin'
+      WHEN EXCLUDED.email IN ('dicksonskello09@gmail.com', 'eduai.platform@admin.com') THEN 'admin'
       ELSE COALESCE(public.profiles.role, EXCLUDED.role)
     END,
     country = COALESCE(EXCLUDED.country, public.profiles.country),

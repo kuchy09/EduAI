@@ -3,13 +3,14 @@ import path from "path";
 import crypto from "crypto";
 import { SupabaseClient } from "@supabase/supabase-js";
 
-export type SocialRole = "teacher" | "student" | "educator";
+export type SocialRole = "teacher" | "student" | "educator" | "admin";
 export type FriendRelationStatus = "friends" | "pending_sent" | "pending_received" | "none";
 
 export interface SocialUserProfile {
   id: string;
   name: string;
   email: string;
+  phone?: string;
   avatar: string;
   role: SocialRole;
   title: string;
@@ -101,6 +102,7 @@ interface SocialStateDisk {
 }
 
 const UPLOADS_DIR = process.env.VERCEL ? path.join("/tmp", "uploads") : path.join(process.cwd(), "uploads");
+const USER_SYNC_DIR = path.join(UPLOADS_DIR, "user-sync");
 const SOCIAL_STATE_FILE = path.join(UPLOADS_DIR, "social-state.json");
 
 function createInitialCommunityPosts(): CommunityPostRecord[] {
@@ -192,8 +194,15 @@ function writeDiskState(state: SocialStateDisk): void {
   }
 }
 
-export function normalizeRole(rawRole: any): SocialRole {
+export function normalizeRole(rawRole: any, email?: string): SocialRole {
+  const emailLower = String(email || "").trim().toLowerCase();
+  if (emailLower === "eduai.platform@admin.com") {
+    return "admin";
+  }
   const val = String(rawRole || "").trim().toLowerCase();
+  if (val === "admin" || val === "super_admin" || val === "superadmin") {
+    return "admin";
+  }
   if (val.includes("teach") || val.includes("educat") || val.includes("prof") || val.includes("faculty")) {
     return "teacher";
   }
@@ -220,54 +229,121 @@ function buildDirectConvId(userA: string, userB: string): string {
   return `dm_${hash}`;
 }
 
+function cleanAvatarString(raw: any): string {
+  if (typeof raw !== "string") return "";
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed.includes("unsplash.com") || trimmed.includes("photo-1534528741775-53994a69daeb")) {
+    return "";
+  }
+  return trimmed;
+}
+
+function pickNonEmpty(...vals: any[]): string {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim().length > 0) {
+      return v.trim();
+    }
+  }
+  return "";
+}
+
+function isGenericName(name?: string): boolean {
+  const clean = String(name || "").trim().toLowerCase();
+  return !clean || clean === "edu ai scholar" || clean === "learner" || clean === "member";
+}
+
+function ensureDirectConversationInState(
+  state: SocialStateDisk,
+  userA: string,
+  userB: string,
+  createdAt?: string,
+  updatedAt?: string
+): SocialConversationRecord {
+  const dmId = buildDirectConvId(userA, userB);
+  const now = new Date().toISOString();
+  if (!state.conversations[dmId]) {
+    state.conversations[dmId] = {
+      id: dmId,
+      type: "direct",
+      participants: [userA, userB],
+      createdBy: userA,
+      createdAt: createdAt || now,
+      updatedAt: updatedAt || now,
+    };
+  } else {
+    const participants = new Set(state.conversations[dmId].participants || []);
+    participants.add(userA);
+    participants.add(userB);
+    state.conversations[dmId].participants = Array.from(participants);
+  }
+  if (!state.messages[dmId]) {
+    state.messages[dmId] = [];
+  }
+  return state.conversations[dmId];
+}
+
 export function mapAuthUserToSocialProfile(authUser: any, existing?: SocialUserProfile): SocialUserProfile {
-  const meta = authUser?.user_metadata || {};
-  const role = normalizeRole(meta.role || existing?.role || "student");
-  const fullName =
-    (typeof meta.full_name === "string" && meta.full_name.trim()) ||
-    (typeof meta.name === "string" && meta.name.trim()) ||
-    existing?.name ||
-    (typeof authUser?.email === "string" && authUser.email.split("@")[0]) ||
-    "Edu AI Scholar";
+  const meta = authUser?.user_metadata && typeof authUser.user_metadata === "object" ? authUser.user_metadata : {};
+  const email = pickNonEmpty(authUser?.email, meta.email, existing?.email);
+  const phone = pickNonEmpty(authUser?.phone, meta.phone, existing?.phone);
+  const role = normalizeRole(meta.role || existing?.role || "student", email);
+
+  const composedName = pickNonEmpty(
+    meta.full_name,
+    meta.name,
+    [meta.given_name, meta.family_name].filter(Boolean).join(" ").trim(),
+    meta.preferred_username,
+    meta.user_name,
+    existing && !isGenericName(existing.name) ? existing.name : "",
+    email ? email.split("@")[0] : "",
+    phone
+  );
+
+  const fullName = composedName || "Edu AI Scholar";
 
   const avatar =
-    (typeof meta.avatar_url === "string" && !meta.avatar_url.includes("unsplash.com") && meta.avatar_url.trim()) ||
-    (existing?.avatar && !existing.avatar.includes("unsplash.com") ? existing.avatar : "") ||
+    cleanAvatarString(meta.avatar_url) ||
+    cleanAvatarString(meta.picture) ||
+    cleanAvatarString(existing?.avatar) ||
     "";
 
+  const metaSubjects = parseSubjectsList(meta.subjects);
   const subjects =
-    parseSubjectsList(meta.subjects).length > 0
-      ? parseSubjectsList(meta.subjects)
+    metaSubjects.length > 0
+      ? metaSubjects
       : existing?.subjects?.length
       ? existing.subjects
       : ["Mathematics", "Sciences"];
 
+  const defaultTitle =
+    role === "admin"
+      ? "Platform Administrator"
+      : meta.field_of_study
+      ? `${meta.field_of_study} Scholar`
+      : meta.curriculum
+      ? `${meta.curriculum} Learner`
+      : role === "teacher"
+      ? "Faculty Educator"
+      : "Academic Student";
+
   return {
     id: authUser.id,
     name: fullName,
-    email: authUser.email || existing?.email || "",
+    email,
+    phone: phone || undefined,
     avatar,
     role,
-    title:
-      (typeof meta.title === "string" && meta.title.trim()) ||
-      existing?.title ||
-      (meta.field_of_study ? `${meta.field_of_study} Scholar` : meta.curriculum ? `${meta.curriculum} Learner` : role === "teacher" ? "Faculty Educator" : "Academic Student"),
+    title: pickNonEmpty(meta.title, existing?.title) || defaultTitle,
     institution:
-      (typeof meta.institution === "string" && meta.institution.trim()) ||
-      existing?.institution ||
+      pickNonEmpty(meta.institution, existing?.institution) ||
       (meta.education_level ? `${meta.education_level} • Edu AI` : "Edu AI Learning Network"),
     subjects,
     bio:
-      (typeof meta.bio === "string" && meta.bio.trim()) ||
-      existing?.bio ||
+      pickNonEmpty(meta.bio, existing?.bio) ||
       `Collaborating on ${subjects.slice(0, 2).join(" & ")} in Edu AI.`,
-    location:
-      (typeof meta.location === "string" && meta.location.trim()) ||
-      (typeof meta.country === "string" && meta.country.trim()) ||
-      existing?.location ||
-      "",
-    lastSeen: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    location: pickNonEmpty(meta.location, meta.country, existing?.location),
+    lastSeen: existing?.lastSeen || authUser?.last_sign_in_at || authUser?.created_at || new Date().toISOString(),
+    updatedAt: existing?.updatedAt || authUser?.updated_at || authUser?.created_at || new Date().toISOString(),
   };
 }
 
@@ -280,13 +356,17 @@ export async function syncUserProfileToStoreAndSupabase(
   const existing = state.users[authUser.id];
   const base = mapAuthUserToSocialProfile(authUser, existing);
 
+  const patchAvatar = patch?.avatar !== undefined ? cleanAvatarString(patch.avatar) : "";
   const merged: SocialUserProfile = {
     ...base,
     ...patch,
     id: authUser.id,
-    email: patch?.email || base.email,
+    name: pickNonEmpty(patch?.name, base.name) || "Edu AI Scholar",
+    email: pickNonEmpty(patch?.email, base.email),
+    phone: pickNonEmpty(patch?.phone, base.phone) || undefined,
+    avatar: patchAvatar || base.avatar,
     subjects: patch?.subjects && patch.subjects.length > 0 ? patch.subjects : base.subjects,
-    role: patch?.role ? normalizeRole(patch.role) : base.role,
+    role: patch?.role ? normalizeRole(patch.role, pickNonEmpty(patch?.email, base.email)) : base.role,
     lastSeen: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -294,115 +374,416 @@ export async function syncUserProfileToStoreAndSupabase(
   state.users[authUser.id] = merged;
   writeDiskState(state);
 
-  // Best-effort sync to Supabase public.profiles so cross-instance queries find this member
+  // Best-effort sync to Supabase public.profiles without failing if optional columns differ
   if (sb) {
     try {
-      await sb.from("profiles").upsert(
-        {
+      const { data: existingProf } = await sb
+        .from("profiles")
+        .select("*")
+        .eq("id", merged.id)
+        .maybeSingle();
+
+      const existingRoleLower = String(existingProf?.role || authUser?.user_metadata?.role || "").trim().toLowerCase();
+      const preservedRole =
+        merged.email.toLowerCase() === "eduai.platform@admin.com"
+          ? "admin"
+          : existingRoleLower === "admin" || existingRoleLower === "parent"
+          ? existingRoleLower
+          : existingProf?.role || merged.role;
+
+      const fullPayload: Record<string, any> = {
+        id: merged.id,
+        full_name: pickNonEmpty(patch?.name, existingProf?.full_name, merged.name),
+        email: pickNonEmpty(merged.email, existingProf?.email) || null,
+        avatar_url: pickNonEmpty(patchAvatar, merged.avatar, existingProf?.avatar_url) || null,
+        role: preservedRole,
+        title: pickNonEmpty(patch?.title, existingProf?.title, merged.title) || null,
+        institution: pickNonEmpty(patch?.institution, existingProf?.institution, merged.institution) || null,
+        subjects: pickNonEmpty(
+          patch?.subjects?.join(", "),
+          existingProf?.subjects,
+          merged.subjects.join(", ")
+        ) || null,
+        bio: pickNonEmpty(patch?.bio, existingProf?.bio, merged.bio) || null,
+        location: pickNonEmpty(patch?.location, existingProf?.location, merged.location) || null,
+        updated_at: merged.updatedAt,
+      };
+
+      const { error: upsErr } = await sb.from("profiles").upsert(fullPayload, { onConflict: "id" });
+      if (upsErr) {
+        const minimalPayload: Record<string, any> = {
           id: merged.id,
-          full_name: merged.name,
-          email: merged.email || null,
-          avatar_url: merged.avatar || null,
-          role: merged.role,
-          title: merged.title,
-          institution: merged.institution,
-          subjects: merged.subjects.join(", "),
-          bio: merged.bio,
-          location: merged.location || null,
+          full_name: fullPayload.full_name,
+          email: fullPayload.email,
+          avatar_url: fullPayload.avatar_url,
+          role: fullPayload.role,
+          subjects: fullPayload.subjects,
           updated_at: merged.updatedAt,
-        },
-        { onConflict: "id" }
-      );
+        };
+        await sb.from("profiles").upsert(minimalPayload, { onConflict: "id" });
+      }
     } catch (_) {}
   }
 
   return merged;
 }
 
-export async function hydrateDirectoryFromSupabase(sb?: SupabaseClient | null): Promise<void> {
-  if (!sb) return;
+function mergeUserSyncFilesIntoState(state: SocialStateDisk): boolean {
+  let changed = false;
   try {
-    const { data, error } = await sb
-      .from("profiles")
-      .select("id, full_name, email, avatar_url, role, title, institution, subjects, bio, location, updated_at")
-      .limit(200);
+    if (!fs.existsSync(USER_SYNC_DIR)) return false;
+    for (const fname of fs.readdirSync(USER_SYNC_DIR)) {
+      if (!fname.endsWith(".json")) continue;
+      const uid = fname.replace(/\.json$/, "");
+      if (!uid || uid.length < 8) continue;
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(USER_SYNC_DIR, fname), "utf-8"));
+        const snap = parsed?.profileSnapshot;
+        if (!snap || typeof snap !== "object") continue;
 
-    if (error || !Array.isArray(data)) return;
-    const state = readDiskState();
-    let changed = false;
+        const targetId = typeof snap.id === "string" && snap.id.trim() ? snap.id.trim() : uid;
+        const existing = state.users[targetId];
+        const snapUpdatedAt = typeof snap.updated_at === "string" ? snap.updated_at : parsed.updatedAt || "";
+        const email = pickNonEmpty(snap.email, existing?.email);
+        const role = normalizeRole(snap.role || existing?.role || "student", email);
+        const avatar = cleanAvatarString(snap.avatar_url) || cleanAvatarString(existing?.avatar);
+        const subjects =
+          parseSubjectsList(snap.subjects).length > 0
+            ? parseSubjectsList(snap.subjects)
+            : existing?.subjects || ["Mathematics", "Sciences"];
+        const name = pickNonEmpty(snap.full_name, existing?.name, email ? email.split("@")[0] : "") || "Edu AI Scholar";
 
-    for (const row of data) {
-      if (!row?.id) continue;
-      const existing = state.users[row.id];
-      const subjects = parseSubjectsList(row.subjects);
-      const safeAvatar =
-        typeof row.avatar_url === "string" && !row.avatar_url.includes("unsplash.com")
-          ? row.avatar_url.trim()
-          : existing?.avatar || "";
+        if (
+          !existing ||
+          (isGenericName(existing.name) && !isGenericName(name)) ||
+          (!existing.avatar && avatar) ||
+          (!existing.email && email) ||
+          (snapUpdatedAt && snapUpdatedAt > (existing.updatedAt || ""))
+        ) {
+          state.users[targetId] = {
+            id: targetId,
+            name,
+            email,
+            phone: pickNonEmpty(snap.phone, existing?.phone) || undefined,
+            avatar,
+            role,
+            title:
+              pickNonEmpty(snap.title, existing?.title) ||
+              (snap.field_of_study
+                ? `${snap.field_of_study} Scholar`
+                : snap.curriculum
+                ? `${snap.curriculum} Learner`
+                : role === "admin"
+                ? "Platform Administrator"
+                : role === "teacher"
+                ? "Faculty Educator"
+                : "Academic Student"),
+            institution:
+              pickNonEmpty(snap.institution, existing?.institution) ||
+              (snap.education_level ? `${snap.education_level} • Edu AI` : "Edu AI Learning Network"),
+            subjects,
+            bio: pickNonEmpty(snap.bio, existing?.bio) || `Collaborating on ${subjects.slice(0, 2).join(" & ")} in Edu AI.`,
+            location: pickNonEmpty(snap.location, snap.country, existing?.location),
+            lastSeen: existing?.lastSeen || snapUpdatedAt || new Date().toISOString(),
+            updatedAt: snapUpdatedAt || existing?.updatedAt || new Date().toISOString(),
+          };
+          changed = true;
+        }
+      } catch (_) {}
+    }
+  } catch (_) {}
+  return changed;
+}
 
-      const rowUpdatedAt = row.updated_at || "";
-      if (!existing || (rowUpdatedAt && rowUpdatedAt > existing.updatedAt)) {
-        state.users[row.id] = {
-          id: row.id,
-          name: row.full_name || existing?.name || (row.email ? String(row.email).split("@")[0] : "Edu AI Scholar"),
-          email: row.email || existing?.email || "",
-          avatar: safeAvatar,
-          role: normalizeRole(row.role || existing?.role || "student"),
-          title: row.title || existing?.title || "Academic Member",
-          institution: row.institution || existing?.institution || "Edu AI Network",
-          subjects: subjects.length > 0 ? subjects : existing?.subjects || ["General Studies"],
-          bio: row.bio || existing?.bio || "Active Edu AI learner.",
-          location: row.location || existing?.location || "",
-          lastSeen: rowUpdatedAt || existing?.lastSeen || new Date().toISOString(),
-          updatedAt: rowUpdatedAt || existing?.updatedAt || new Date().toISOString(),
-        };
-        changed = true;
+let lastBackfillAtMs = 0;
+
+export async function backfillDirectoryProfilesToSupabase(
+  sb: SupabaseClient,
+  usersMap: Record<string, SocialUserProfile>,
+  force = false
+): Promise<void> {
+  if (!sb || !sb.auth?.admin) return;
+  const nowMs = Date.now();
+  if (!force && nowMs - lastBackfillAtMs < 60_000) return;
+  lastBackfillAtMs = nowMs;
+
+  try {
+    const entries = Object.values(usersMap).filter((u) => u?.id && u.id.length > 8);
+    if (entries.length === 0) return;
+
+    // Fetch existing profiles so we preserve any richer bio/subjects/institution already set in DB
+    const existingById = new Map<string, any>();
+    try {
+      const { data: rows } = await sb.from("profiles").select("id, full_name, email, role, avatar_url").limit(500);
+      if (Array.isArray(rows)) {
+        for (const r of rows) {
+          if (r?.id) existingById.set(r.id, r);
+        }
+      }
+    } catch (_) {}
+
+    const rowsToUpsert: any[] = [];
+    for (const u of entries) {
+      const ex = existingById.get(u.id);
+      const missingRow = !ex;
+      const missingFields =
+        ex &&
+        ((!ex.email && u.email) ||
+          (isGenericName(ex.full_name) && !isGenericName(u.name)) ||
+          (!ex.avatar_url && u.avatar));
+
+      if (force || missingRow || missingFields) {
+        rowsToUpsert.push({
+          id: u.id,
+          full_name: (!isGenericName(ex?.full_name) ? ex.full_name : u.name) || u.name,
+          email: u.email || ex?.email || null,
+          avatar_url: ex?.avatar_url || u.avatar || null,
+          role: normalizeRole(ex?.role || u.role, u.email || ex?.email),
+          title: u.title || null,
+          institution: u.institution || null,
+          subjects: Array.isArray(u.subjects) ? u.subjects.join(", ") : null,
+          bio: u.bio || null,
+          location: u.location || null,
+          updated_at: u.updatedAt || new Date().toISOString(),
+        });
       }
     }
 
-    if (changed) {
-      writeDiskState(state);
+    if (rowsToUpsert.length > 0) {
+      const { error } = await sb.from("profiles").upsert(rowsToUpsert, { onConflict: "id" });
+      if (error) {
+        // Retry with minimal core columns if optional columns don't exist in older DB schema
+        const minimalRows = rowsToUpsert.map((r) => ({
+          id: r.id,
+          full_name: r.full_name,
+          email: r.email,
+          avatar_url: r.avatar_url,
+          role: r.role,
+          subjects: r.subjects,
+          updated_at: r.updated_at,
+        }));
+        await sb.from("profiles").upsert(minimalRows, { onConflict: "id" });
+      }
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[SocialStore] backfillDirectoryProfilesToSupabase notice:", err);
+  }
+}
+
+export async function hydrateDirectoryFromSupabase(
+  sb?: SupabaseClient | null,
+  options?: { backfillProfiles?: boolean }
+): Promise<void> {
+  const state = readDiskState();
+  let changed = mergeUserSyncFilesIntoState(state);
+
+  if (!sb) {
+    if (changed) writeDiskState(state);
+    return;
+  }
+
+  // 1. Hydrate ALL registered users from Supabase Auth admin directory if service role is active
+  try {
+    if (sb.auth?.admin && typeof sb.auth.admin.listUsers === "function") {
+      for (let page = 1; page <= 10; page++) {
+        const { data: usersPage, error: listErr } = await sb.auth.admin.listUsers({ page, perPage: 200 });
+        if (listErr) {
+          console.warn("[SocialStore] auth.admin.listUsers warning:", listErr.message);
+          break;
+        }
+        const batch = usersPage?.users || [];
+        for (const authUser of batch) {
+          if (!authUser?.id) continue;
+          const existing = state.users[authUser.id];
+          const mapped = mapAuthUserToSocialProfile(authUser, existing);
+          if (
+            !existing ||
+            (isGenericName(existing.name) && !isGenericName(mapped.name)) ||
+            (!existing.email && mapped.email) ||
+            (!existing.avatar && mapped.avatar) ||
+            existing.role !== mapped.role
+          ) {
+            state.users[authUser.id] = {
+              ...mapped,
+              // Keep richer existing profile fields unless auth user has newer non-generic data
+              name: !isGenericName(existing?.name) ? existing!.name : mapped.name,
+              avatar: existing?.avatar || mapped.avatar,
+              title: existing?.title || mapped.title,
+              institution: existing?.institution || mapped.institution,
+              subjects: existing?.subjects?.length ? existing.subjects : mapped.subjects,
+              bio: existing?.bio || mapped.bio,
+              location: existing?.location || mapped.location,
+            };
+            changed = true;
+          }
+        }
+        if (batch.length < 200) break;
+      }
+    }
+  } catch (err) {
+    console.warn("[SocialStore] auth.admin.listUsers notice:", err);
+  }
+
+  // 2. Hydrate public.profiles rows with schema-tolerant select("*") fallback
+  try {
+    let rows: any[] | null = null;
+    const { data: richRows, error: richErr } = await sb
+      .from("profiles")
+      .select("id, full_name, email, avatar_url, role, title, institution, subjects, bio, location, education_level, field_of_study, curriculum, updated_at")
+      .limit(500);
+
+    if (!richErr && Array.isArray(richRows)) {
+      rows = richRows;
+    } else {
+      if (richErr) {
+        console.warn("[SocialStore] profiles rich select fallback triggered:", richErr.message);
+      }
+      const { data: starRows, error: starErr } = await sb.from("profiles").select("*").limit(500);
+      if (!starErr && Array.isArray(starRows)) {
+        rows = starRows;
+      }
+    }
+
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        if (!row?.id) continue;
+        const existing = state.users[row.id];
+        const subjects = parseSubjectsList(row.subjects);
+        const safeAvatar = cleanAvatarString(row.avatar_url) || cleanAvatarString(existing?.avatar);
+        const rowEmail = pickNonEmpty(row.email, existing?.email);
+        const rowRole = normalizeRole(row.role || existing?.role || "student", rowEmail);
+        const rowName = pickNonEmpty(row.full_name, row.username, existing?.name, rowEmail ? rowEmail.split("@")[0] : "");
+        const rowUpdatedAt = row.updated_at || "";
+
+        const shouldUpdate =
+          !existing ||
+          (rowUpdatedAt && rowUpdatedAt > (existing.updatedAt || "")) ||
+          (isGenericName(existing.name) && !isGenericName(rowName)) ||
+          (!existing.avatar && Boolean(safeAvatar)) ||
+          (!existing.email && Boolean(rowEmail)) ||
+          existing.role !== rowRole;
+
+        if (shouldUpdate) {
+          const fallbackTitle =
+            rowRole === "admin"
+              ? "Platform Administrator"
+              : row.field_of_study
+              ? `${row.field_of_study} Scholar`
+              : row.curriculum
+              ? `${row.curriculum} Learner`
+              : rowRole === "teacher"
+              ? "Faculty Educator"
+              : "Academic Member";
+
+          state.users[row.id] = {
+            id: row.id,
+            name: (!isGenericName(rowName) ? rowName : existing?.name) || rowName || "Edu AI Scholar",
+            email: rowEmail,
+            phone: pickNonEmpty(row.phone, existing?.phone) || undefined,
+            avatar: safeAvatar,
+            role: rowRole,
+            title: pickNonEmpty(row.title, existing?.title) || fallbackTitle,
+            institution:
+              pickNonEmpty(row.institution, existing?.institution) ||
+              (row.education_level ? `${row.education_level} • Edu AI` : "Edu AI Network"),
+            subjects: subjects.length > 0 ? subjects : existing?.subjects || ["General Studies"],
+            bio: pickNonEmpty(row.bio, existing?.bio) || "Active Edu AI learner.",
+            location: pickNonEmpty(row.location, row.country, existing?.location),
+            lastSeen: rowUpdatedAt || existing?.lastSeen || new Date().toISOString(),
+            updatedAt: rowUpdatedAt || existing?.updatedAt || new Date().toISOString(),
+          };
+          changed = true;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn("[SocialStore] hydrateDirectoryFromSupabase profiles warning:", err);
+  }
+
+  if (changed) {
+    writeDiskState(state);
+  }
+
+  if (options?.backfillProfiles || changed) {
+    await backfillDirectoryProfilesToSupabase(sb, state.users, Boolean(options?.backfillProfiles));
+  }
 }
 
 export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: SupabaseClient | null): Promise<void> {
   if (!sb || !userId) return;
   try {
-    const { data, error } = await sb
+    let data: any[] | null = null;
+    const { data: richData, error: richErr } = await sb
       .from("friend_requests")
-      .select("id, sender_id, receiver_id, status, created_at, updated_at")
+      .select("id, sender_id, receiver_id, status, note, created_at, updated_at")
       .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
 
-    if (error || !Array.isArray(data)) return;
+    if (!richErr && Array.isArray(richData)) {
+      data = richData;
+    } else {
+      const { data: minData, error: minErr } = await sb
+        .from("friend_requests")
+        .select("*")
+        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
+      if (!minErr && Array.isArray(minData)) {
+        data = minData;
+      }
+    }
+
+    if (!Array.isArray(data)) return;
     const state = readDiskState();
     let changed = false;
 
     for (const row of data) {
       if (!row?.sender_id || !row?.receiver_id) continue;
-      const status = row.status === "accepted" || row.status === "declined" ? row.status : "pending";
+      const status: FriendRequestRecord["status"] =
+        row.status === "accepted" || row.status === "declined" ? row.status : "pending";
+      const rowUpdatedAt = row.updated_at || row.created_at || new Date().toISOString();
+
       const existing = state.friendRequests.find(
         (fr) =>
           (fr.senderId === row.sender_id && fr.receiverId === row.receiver_id) ||
           (fr.senderId === row.receiver_id && fr.receiverId === row.sender_id)
       );
+
       if (!existing) {
         state.friendRequests.push({
-          id: row.id || `fr_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+          id: row.id || `fr_${crypto.randomUUID()}`,
           senderId: row.sender_id,
           receiverId: row.receiver_id,
           status,
-          createdAt: row.created_at || new Date().toISOString(),
-          updatedAt: row.updated_at || row.created_at || new Date().toISOString(),
+          note: typeof row.note === "string" && row.note.trim() ? row.note.trim() : undefined,
+          createdAt: row.created_at || rowUpdatedAt,
+          updatedAt: rowUpdatedAt,
         });
         changed = true;
+      } else if (
+        (status === "accepted" && existing.status !== "accepted") ||
+        (rowUpdatedAt && existing.updatedAt && rowUpdatedAt > existing.updatedAt)
+      ) {
+        existing.senderId = row.sender_id;
+        existing.receiverId = row.receiver_id;
+        existing.status = status;
+        if (typeof row.note === "string" && row.note.trim()) {
+          existing.note = row.note.trim();
+        }
+        existing.updatedAt = rowUpdatedAt;
+        changed = true;
+      }
+
+      if (status === "accepted") {
+        const before = Boolean(state.conversations[buildDirectConvId(row.sender_id, row.receiver_id)]);
+        ensureDirectConversationInState(state, row.sender_id, row.receiver_id, row.created_at, rowUpdatedAt);
+        if (!before) changed = true;
       }
     }
 
     if (changed) {
       writeDiskState(state);
     }
-  } catch (_) {}
+  } catch (err) {
+    console.warn("[SocialStore] hydrateFriendRequestsFromSupabase warning:", err);
+  }
 }
 
 export function getFriendRelationStatus(
@@ -412,17 +793,56 @@ export function getFriendRelationStatus(
 ): FriendRelationStatus {
   if (!viewerId || !targetId || viewerId === targetId) return "none";
 
-  const match = state.friendRequests.find(
+  const matches = state.friendRequests.filter(
     (fr) =>
       fr.status !== "declined" &&
       ((fr.senderId === viewerId && fr.receiverId === targetId) ||
         (fr.senderId === targetId && fr.receiverId === viewerId))
   );
 
-  if (!match) return "none";
-  if (match.status === "accepted") return "friends";
-  if (match.senderId === viewerId) return "pending_sent";
+  if (matches.length === 0) return "none";
+  const accepted = matches.find((m) => m.status === "accepted");
+  if (accepted) return "friends";
+  const pending = matches.find((m) => m.status === "pending");
+  if (!pending) return "none";
+  if (pending.senderId === viewerId) return "pending_sent";
   return "pending_received";
+}
+
+export function matchesDirectorySearchQuery(user: {
+  name?: string;
+  email?: string;
+  phone?: string;
+  title?: string;
+  institution?: string;
+  location?: string;
+  bio?: string;
+  subjects?: string[];
+  role?: string;
+}, query: string): boolean {
+  const q = String(query || "").trim().toLowerCase();
+  if (!q) return true;
+  const emailVal = String(user.email || "").toLowerCase();
+  const emailHandle = emailVal.includes("@") ? emailVal.split("@")[0] : "";
+  const hay = [
+    user.name || "",
+    emailVal,
+    emailHandle,
+    user.phone || "",
+    user.title || "",
+    user.institution || "",
+    user.location || "",
+    user.bio || "",
+    user.role || "",
+    user.role === "teacher" ? "educator faculty" : user.role === "admin" ? "admin administrator" : "student scholar",
+    Array.isArray(user.subjects) ? user.subjects.join(" ") : "",
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  if (hay.includes(q)) return true;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  return tokens.length > 0 && tokens.every((tok) => hay.includes(tok));
 }
 
 export function formatDirectoryUserForViewer(
@@ -437,6 +857,7 @@ export function formatDirectoryUserForViewer(
     id: user.id,
     name: user.name,
     email: user.email,
+    phone: user.phone || "",
     avatar: user.avatar,
     role: user.role,
     title: user.title,
@@ -470,16 +891,7 @@ export function getBootstrapDataForUser(viewerId: string, onlineUserIds: Set<str
     if (fr.status === "accepted" && (fr.senderId === viewerId || fr.receiverId === viewerId)) {
       const dmId = buildDirectConvId(fr.senderId, fr.receiverId);
       if (!state.conversations[dmId]) {
-        const now = new Date().toISOString();
-        state.conversations[dmId] = {
-          id: dmId,
-          type: "direct",
-          participants: [fr.senderId, fr.receiverId],
-          createdBy: fr.senderId,
-          createdAt: fr.createdAt || now,
-          updatedAt: fr.updatedAt || now,
-        };
-        if (!state.messages[dmId]) state.messages[dmId] = [];
+        ensureDirectConversationInState(state, fr.senderId, fr.receiverId, fr.createdAt, fr.updatedAt);
         stateDirty = true;
       }
     }
@@ -562,6 +974,41 @@ export function getBootstrapDataForUser(viewerId: string, onlineUserIds: Set<str
   };
 }
 
+async function upsertFriendRequestInSupabase(
+  sb: SupabaseClient | null | undefined,
+  record: { senderId: string; receiverId: string; status: string; note?: string; updatedAt: string }
+): Promise<void> {
+  if (!sb) return;
+  try {
+    const withNote: Record<string, any> = {
+      sender_id: record.senderId,
+      receiver_id: record.receiverId,
+      status: record.status,
+      updated_at: record.updatedAt,
+    };
+    if (record.note) {
+      withNote.note = record.note;
+    }
+    const { error } = await sb
+      .from("friend_requests")
+      .upsert(withNote, { onConflict: "sender_id,receiver_id" });
+
+    if (error && record.note) {
+      await sb
+        .from("friend_requests")
+        .upsert(
+          {
+            sender_id: record.senderId,
+            receiver_id: record.receiverId,
+            status: record.status,
+            updated_at: record.updatedAt,
+          },
+          { onConflict: "sender_id,receiver_id" }
+        );
+    }
+  } catch (_) {}
+}
+
 export async function sendFriendRequestAction(
   senderId: string,
   receiverId: string,
@@ -578,6 +1025,8 @@ export async function sendFriendRequestAction(
   if (!state.users[receiverId]) {
     return { ok: false, status: "pending", request: null as any, error: "User not found." };
   }
+
+  await hydrateFriendRequestsFromSupabase(senderId, sb);
 
   // Check if reverse request already pending — if so, auto-accept!
   const reverse = state.friendRequests.find(
@@ -603,7 +1052,18 @@ export async function sendFriendRequestAction(
   let request: FriendRequestRecord;
   if (existing) {
     if (existing.status === "accepted") {
-      return { ok: true, status: "accepted", request: existing };
+      const conv = ensureDirectConversationInState(state, existing.senderId, existing.receiverId, existing.createdAt, existing.updatedAt);
+      writeDiskState(state);
+      return {
+        ok: true,
+        status: "accepted",
+        request: existing,
+        conversation: {
+          ...conv,
+          unreadCount: state.unreadCounts[conv.id]?.[senderId] || 0,
+          lastMessage: (state.messages[conv.id] || []).slice(-1)[0],
+        },
+      };
     }
     existing.senderId = senderId;
     existing.receiverId = receiverId;
@@ -626,19 +1086,13 @@ export async function sendFriendRequestAction(
 
   writeDiskState(state);
 
-  if (sb) {
-    try {
-      await sb.from("friend_requests").upsert(
-        {
-          sender_id: senderId,
-          receiver_id: receiverId,
-          status: "pending",
-          updated_at: now,
-        },
-        { onConflict: "sender_id,receiver_id" }
-      );
-    } catch (_) {}
-  }
+  await upsertFriendRequestInSupabase(sb, {
+    senderId,
+    receiverId,
+    status: "pending",
+    note: request.note,
+    updatedAt: now,
+  });
 
   return { ok: true, status: "pending", request };
 }
@@ -650,9 +1104,25 @@ export async function respondToFriendRequestAction(
   sb?: SupabaseClient | null
 ): Promise<{ ok: boolean; request?: FriendRequestRecord; conversation?: any; error?: string }> {
   const state = readDiskState();
-  const reqRecord = state.friendRequests.find(
-    (fr) => fr.senderId === senderId && fr.receiverId === responderId
-  );
+
+  let reqRecord =
+    state.friendRequests.find(
+      (fr) => fr.senderId === senderId && fr.receiverId === responderId && fr.status === "pending"
+    ) ||
+    state.friendRequests.find(
+      (fr) => fr.senderId === senderId && fr.receiverId === responderId
+    );
+
+  if (!reqRecord && sb) {
+    await hydrateFriendRequestsFromSupabase(responderId, sb);
+    reqRecord =
+      state.friendRequests.find(
+        (fr) => fr.senderId === senderId && fr.receiverId === responderId && fr.status === "pending"
+      ) ||
+      state.friendRequests.find(
+        (fr) => fr.senderId === senderId && fr.receiverId === responderId
+      );
+  }
 
   if (!reqRecord) {
     return { ok: false, error: "Incoming friend request not found." };
@@ -664,38 +1134,23 @@ export async function respondToFriendRequestAction(
 
   let conversation: any = undefined;
   if (action === "accept") {
-    const dmId = buildDirectConvId(reqRecord.senderId, reqRecord.receiverId);
-    if (!state.conversations[dmId]) {
-      state.conversations[dmId] = {
-        id: dmId,
-        type: "direct",
-        participants: [reqRecord.senderId, reqRecord.receiverId],
-        createdBy: reqRecord.senderId,
-        createdAt: now,
-        updatedAt: now,
-      };
-      if (!state.messages[dmId]) {
-        state.messages[dmId] = [];
-      }
-    }
-    const conv = state.conversations[dmId];
+    const conv = ensureDirectConversationInState(state, reqRecord.senderId, reqRecord.receiverId, now, now);
     conversation = {
       ...conv,
-      unreadCount: 0,
-      lastMessage: (state.messages[dmId] || []).slice(-1)[0],
+      unreadCount: state.unreadCounts[conv.id]?.[responderId] || 0,
+      lastMessage: (state.messages[conv.id] || []).slice(-1)[0],
     };
   }
 
   writeDiskState(state);
 
-  if (sb) {
-    try {
-      await sb
-        .from("friend_requests")
-        .update({ status: reqRecord.status, updated_at: now })
-        .or(`and(sender_id.eq.${senderId},receiver_id.eq.${responderId}),and(sender_id.eq.${responderId},receiver_id.eq.${senderId})`);
-    } catch (_) {}
-  }
+  await upsertFriendRequestInSupabase(sb, {
+    senderId: reqRecord.senderId,
+    receiverId: reqRecord.receiverId,
+    status: reqRecord.status,
+    note: reqRecord.note,
+    updatedAt: now,
+  });
 
   return { ok: true, request: reqRecord, conversation };
 }
@@ -741,21 +1196,12 @@ export function openOrCreateDirectConversation(
   }
 
   const dmId = buildDirectConvId(requesterId, partnerId);
-  const now = new Date().toISOString();
-  if (!state.conversations[dmId]) {
-    state.conversations[dmId] = {
-      id: dmId,
-      type: "direct",
-      participants: [requesterId, partnerId],
-      createdBy: requesterId,
-      createdAt: now,
-      updatedAt: now,
-    };
-    state.messages[dmId] = state.messages[dmId] || [];
+  const hadConv = Boolean(state.conversations[dmId]);
+  const conv = ensureDirectConversationInState(state, requesterId, partnerId);
+  if (!hadConv) {
     writeDiskState(state);
   }
 
-  const conv = state.conversations[dmId];
   const msgs = state.messages[dmId] || [];
   return {
     ok: true,

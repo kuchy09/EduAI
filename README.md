@@ -4,9 +4,9 @@ AI-powered study app for Kenyan students (KCSE / CBC curriculum).
 
 | Path | What |
 | --- | --- |
-| `mobile/` | Flutter app (sign-in + streaming AI tutor chat) |
+| `mobile/` | Flutter app (EPUB `epub_view` + PDF `pdfx` readers, AES-256 offline vault, AI tutor) |
 | `supabase/` | Postgres migrations and Edge Functions (`ai-tutor`) |
-| `src/`, `server.ts`, `api/` | Legacy React/Express web prototype (reference only, to be retired) |
+| `src/`, `server.ts`, `api/` | React/Express web app (reflowable EPUB/PDF reader, publisher uploads, Flutter manifest) |
 | `docs/` | Design notes |
 
 ## Run the mobile app
@@ -17,7 +17,8 @@ flutter create --project-name eduai --org <your.reverse.domain> --platforms=andr
 flutter pub get
 flutter run \
   --dart-define=SUPABASE_URL=https://YOUR_REF.supabase.co \
-  --dart-define=SUPABASE_ANON_KEY=YOUR_ANON_KEY
+  --dart-define=SUPABASE_ANON_KEY=YOUR_ANON_KEY \
+  --dart-define=API_BASE_URL=https://your-eduai-server.example
 ```
 
 ## Deploy the backend

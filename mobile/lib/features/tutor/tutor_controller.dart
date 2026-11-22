@@ -12,24 +12,31 @@ class TutorState {
   const TutorState({
     this.messages = const [],
     this.subject = KcseSubject.general,
+    this.activeBookContext,
     this.isStreaming = false,
     this.error,
   });
 
   final List<TutorMessage> messages;
   final KcseSubject subject;
+  final String? activeBookContext;
   final bool isStreaming;
   final String? error;
 
   TutorState copyWith({
     List<TutorMessage>? messages,
     KcseSubject? subject,
+    String? activeBookContext,
+    bool clearBookContext = false,
     bool? isStreaming,
     String? error,
     bool clearError = false,
   }) => TutorState(
     messages: messages ?? this.messages,
     subject: subject ?? this.subject,
+    activeBookContext: clearBookContext
+        ? null
+        : (activeBookContext ?? this.activeBookContext),
     isStreaming: isStreaming ?? this.isStreaming,
     error: clearError ? null : (error ?? this.error),
   );
@@ -43,9 +50,19 @@ class TutorController extends Notifier<TutorState> {
     state = state.copyWith(subject: subject);
   }
 
+  void setActiveBookContext(String? contextLabel) {
+    state = state.copyWith(
+      activeBookContext: contextLabel,
+      clearBookContext: contextLabel == null,
+    );
+  }
+
   void clear() {
     if (state.isStreaming) return;
-    state = TutorState(subject: state.subject);
+    state = TutorState(
+      subject: state.subject,
+      activeBookContext: state.activeBookContext,
+    );
   }
 
   Future<void> send(String text) async {
@@ -71,11 +88,14 @@ class TutorController extends Notifier<TutorState> {
     try {
       final user = ref.read(supabaseProvider).auth.currentUser;
       final name = user?.userMetadata?['full_name'];
+      final contextualPrompt = state.activeBookContext != null
+          ? '[Context: ${state.activeBookContext}]\n\n$prompt'
+          : prompt;
 
       final stream = ref
           .read(tutorServiceProvider)
           .sendMessage(
-            prompt: prompt,
+            prompt: contextualPrompt,
             history: history,
             subject: state.subject,
             studentName: name is String ? name : null,

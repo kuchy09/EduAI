@@ -9,12 +9,26 @@ import {
   saveGlobalBookCover,
   BookCoverOverride,
 } from './globalBookCoversService';
+import {
+  UserAchievementState,
+  createEmptyAchievementState,
+  getAchievementsStorageKey,
+  mergeAchievementStates,
+} from './achievementsService';
 
 export const ACCOUNT_SYNC_EVENT = 'edu-account-sync-updated';
 export const SYNC_WORKSPACE_FILE_NAME = '__edu_account_sync__.json';
 export const SYNC_WORKSPACE_FILE_TYPE = 'application/vnd.eduai.sync+json';
 
 export type { BookCoverOverride };
+
+export interface UserSettingsSync {
+  theme?: string;
+  fontSize?: string;
+  notifyPrefs?: Record<string, boolean>;
+  privacyPrefs?: Record<string, boolean>;
+  updatedAt?: string;
+}
 
 export interface AccountSyncPayload {
   aiChatSessions?: any[];
@@ -29,6 +43,10 @@ export interface AccountSyncPayload {
   profileSnapshot?: Record<string, any>;
   readingProgress?: Record<string, number>;
   dailyGoal?: DailyReadingGoal;
+  achievements?: UserAchievementState;
+  learningPathSteps?: any[];
+  generatedQuizzes?: any[];
+  userSettings?: UserSettingsSync;
   updatedAt?: string;
 }
 
@@ -92,6 +110,101 @@ export function getBookCoverOverridesStorageKey(userId?: string): string {
 
 export function getBookmarksStorageKey(userId?: string): string {
   return userId ? `edu_bookmarks_${userId}` : 'edu_bookmarks_active';
+}
+
+export function getReadingProgressMapStorageKey(userId?: string): string {
+  return userId ? `edu_reading_progress_${userId}` : 'edu_reading_progress_guest';
+}
+
+export function getGeneratedQuizzesStorageKey(userId?: string): string {
+  return userId ? `generated_quizzes_${userId}` : 'generated_quizzes';
+}
+
+export function getUserSettingsStorageKey(userId?: string): string {
+  return userId ? `edu_user_settings_${userId}` : 'edu_user_settings_guest';
+}
+
+export function mergeReadingProgressMaps(
+  mapA?: Record<string, number>,
+  mapB?: Record<string, number>
+): Record<string, number> {
+  const result: Record<string, number> = {};
+  for (const src of [mapA, mapB]) {
+    if (!src || typeof src !== 'object') continue;
+    for (const [bookId, raw] of Object.entries(src)) {
+      const val = Number(raw);
+      if (!bookId || !Number.isFinite(val)) continue;
+      result[bookId] = Math.max(Number(result[bookId] || 0), Math.min(100, Math.round(val)));
+    }
+  }
+  return result;
+}
+
+export function mergeQuizzesLists(listA: any[] = [], listB: any[] = []): any[] {
+  const byId = new Map<string, any>();
+  for (const q of [...(Array.isArray(listA) ? listA : []), ...(Array.isArray(listB) ? listB : [])]) {
+    if (!q || typeof q !== 'object' || !q.id) continue;
+    const prev = byId.get(q.id);
+    if (!prev) {
+      byId.set(q.id, q);
+      continue;
+    }
+    const prevDone = prev.status === 'completed';
+    const nextDone = q.status === 'completed';
+    if (nextDone && !prevDone) {
+      byId.set(q.id, { ...prev, ...q });
+    } else if (prevDone && !nextDone) {
+      byId.set(q.id, prev);
+    } else if (prevDone && nextDone) {
+      const prevScore = Number(prev.score ?? -1);
+      const nextScore = Number(q.score ?? -1);
+      byId.set(q.id, nextScore >= prevScore ? { ...prev, ...q } : { ...q, ...prev });
+    } else {
+      byId.set(q.id, { ...prev, ...q });
+    }
+  }
+  return Array.from(byId.values());
+}
+
+export function applySyncedUserSettingsToBrowser(settings?: UserSettingsSync): void {
+  if (typeof window === 'undefined' || !settings || typeof settings !== 'object') return;
+  try {
+    if (settings.theme) {
+      localStorage.setItem('theme', settings.theme);
+      document.documentElement.classList.toggle(
+        'dark',
+        settings.theme === 'dark' ||
+          (settings.theme === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+      );
+      queueMicrotask(() => window.dispatchEvent(new Event('theme_changed')));
+    }
+    if (settings.fontSize) {
+      localStorage.setItem('fontSize', settings.fontSize);
+      document.documentElement.setAttribute('data-font-size', settings.fontSize.toLowerCase());
+    }
+    if (settings.notifyPrefs && typeof settings.notifyPrefs === 'object') {
+      if (typeof settings.notifyPrefs.study === 'boolean') {
+        localStorage.setItem('notify_study', JSON.stringify(settings.notifyPrefs.study));
+      }
+      if (typeof settings.notifyPrefs.mentions === 'boolean') {
+        localStorage.setItem('notify_mentions', JSON.stringify(settings.notifyPrefs.mentions));
+      }
+      if (typeof settings.notifyPrefs.recs === 'boolean') {
+        localStorage.setItem('notify_recs', JSON.stringify(settings.notifyPrefs.recs));
+      }
+      if (typeof settings.notifyPrefs.progress === 'boolean') {
+        localStorage.setItem('notify_progress', JSON.stringify(settings.notifyPrefs.progress));
+      }
+    }
+    if (settings.privacyPrefs && typeof settings.privacyPrefs === 'object') {
+      if (typeof settings.privacyPrefs.public === 'boolean') {
+        localStorage.setItem('privacy_public', JSON.stringify(settings.privacyPrefs.public));
+      }
+      if (typeof settings.privacyPrefs.data === 'boolean') {
+        localStorage.setItem('privacy_data', JSON.stringify(settings.privacyPrefs.data));
+      }
+    }
+  } catch (_) {}
 }
 
 function isDefaultGreetingSession(session: any): boolean {
@@ -503,9 +616,26 @@ function mergeSyncPayloads(candidates: AccountSyncPayload[]): AccountSyncPayload
       acc.profileSnapshot = { ...(acc.profileSnapshot || {}), ...c.profileSnapshot };
     }
     if (c.readingProgress && typeof c.readingProgress === 'object') {
-      acc.readingProgress = { ...(acc.readingProgress || {}), ...c.readingProgress };
+      acc.readingProgress = mergeReadingProgressMaps(acc.readingProgress, c.readingProgress);
     }
     if (c.dailyGoal) acc.dailyGoal = c.dailyGoal;
+    if (c.achievements && typeof c.achievements === 'object') {
+      acc.achievements = mergeAchievementStates(acc.achievements, c.achievements);
+    }
+    if (Array.isArray(c.learningPathSteps) && c.learningPathSteps.length > 0) {
+      acc.learningPathSteps = c.learningPathSteps;
+    }
+    if (Array.isArray(c.generatedQuizzes) && c.generatedQuizzes.length > 0) {
+      acc.generatedQuizzes = mergeQuizzesLists(acc.generatedQuizzes || [], c.generatedQuizzes);
+    }
+    if (c.userSettings && typeof c.userSettings === 'object') {
+      const prevTs = acc.userSettings?.updatedAt ? Date.parse(acc.userSettings.updatedAt) || 0 : 0;
+      const nextTs = c.userSettings.updatedAt ? Date.parse(c.userSettings.updatedAt) || 0 : 0;
+      acc.userSettings =
+        nextTs >= prevTs
+          ? { ...(acc.userSettings || {}), ...c.userSettings }
+          : { ...c.userSettings, ...(acc.userSettings || {}) };
+    }
     if (c.updatedAt) acc.updatedAt = c.updatedAt;
   }
 
@@ -563,6 +693,29 @@ function combinePendingPatches(a: AccountSyncPayload, b: AccountSyncPayload): Ac
     ...(a.bookmarks || b.bookmarks
       ? {
           bookmarks: mergeBookmarksLists(a.bookmarks || [], b.bookmarks || []),
+        }
+      : {}),
+    ...(a.readingProgress || b.readingProgress
+      ? {
+          readingProgress: mergeReadingProgressMaps(a.readingProgress, b.readingProgress),
+        }
+      : {}),
+    ...(a.achievements || b.achievements
+      ? {
+          achievements: mergeAchievementStates(a.achievements, b.achievements),
+        }
+      : {}),
+    ...(a.generatedQuizzes || b.generatedQuizzes
+      ? {
+          generatedQuizzes: mergeQuizzesLists(a.generatedQuizzes || [], b.generatedQuizzes || []),
+        }
+      : {}),
+    ...(a.userSettings || b.userSettings
+      ? {
+          userSettings: {
+            ...(a.userSettings || {}),
+            ...(b.userSettings || {}),
+          },
         }
       : {}),
   };
@@ -1126,6 +1279,76 @@ export async function hydrateAccountSync(
       });
     }
 
+    // 8b. Hydrate Achievements (Edu Points & Badges) & Learning Path Steps
+    const localAchievements = safeStorage.getJSON<UserAchievementState>(
+      getAchievementsStorageKey(userId),
+      createEmptyAchievementState()
+    );
+    const mergedAchievements = mergeAchievementStates(localAchievements, cloudSync.achievements);
+    if (
+      mergedAchievements.totalEduPoints > 0 ||
+      Object.keys(mergedAchievements.earnedBadges).length > 0 ||
+      mergedAchievements.completedBookIds.length > 0 ||
+      Object.keys(mergedAchievements.completedQuizIds).length > 0 ||
+      mergedAchievements.completedPathSteps.length > 0
+    ) {
+      safeStorage.setJSON(getAchievementsStorageKey(userId), mergedAchievements);
+    }
+
+    const learningPathStorageKey = `edu_learning_path_steps_${userId}`;
+    const localLearningSteps = safeStorage.getJSON<any[]>(learningPathStorageKey, []);
+    const cloudLearningSteps = Array.isArray(cloudSync.learningPathSteps) ? cloudSync.learningPathSteps : [];
+    const mergedLearningSteps =
+      cloudLearningSteps.length > 0 && localLearningSteps.length === 0
+        ? cloudLearningSteps
+        : localLearningSteps.length > 0
+        ? localLearningSteps
+        : cloudLearningSteps;
+    if (mergedLearningSteps.length > 0) {
+      safeStorage.setJSON(learningPathStorageKey, mergedLearningSteps);
+    }
+
+    // 8c. Hydrate Reading Progress map
+    const localProgressMap = safeStorage.getJSON<Record<string, number>>(
+      getReadingProgressMapStorageKey(userId),
+      {}
+    );
+    const mergedProgressMap = mergeReadingProgressMaps(localProgressMap, cloudSync.readingProgress || {});
+    if (Object.keys(mergedProgressMap).length > 0) {
+      safeStorage.setJSON(getReadingProgressMapStorageKey(userId), mergedProgressMap);
+      for (const [bookId, pct] of Object.entries(mergedProgressMap)) {
+        safeStorage.setItem(`book_progress_${bookId}`, String(pct));
+      }
+    }
+
+    // 8d. Hydrate Generated Quizzes
+    const quizStorageKey = getGeneratedQuizzesStorageKey(userId);
+    const localQuizzes = safeStorage.getJSON<any[]>(quizStorageKey, []);
+    const cloudQuizzes = Array.isArray(cloudSync.generatedQuizzes) ? cloudSync.generatedQuizzes : [];
+    const mergedQuizzes = mergeQuizzesLists(localQuizzes, cloudQuizzes);
+    if (mergedQuizzes.length > 0) {
+      safeStorage.setJSON(quizStorageKey, mergedQuizzes);
+    }
+
+    // 8e. Hydrate & Apply User Settings (theme, fontSize, notifications, privacy)
+    const settingsStorageKey = getUserSettingsStorageKey(userId);
+    const localSettings = safeStorage.getJSON<UserSettingsSync | null>(settingsStorageKey, null);
+    const cloudSettings = cloudSync.userSettings || null;
+    let resolvedSettings: UserSettingsSync | undefined = undefined;
+    if (cloudSettings && localSettings) {
+      const cTs = cloudSettings.updatedAt ? Date.parse(cloudSettings.updatedAt) || 0 : 0;
+      const lTs = localSettings.updatedAt ? Date.parse(localSettings.updatedAt) || 0 : 0;
+      resolvedSettings = cTs >= lTs ? { ...localSettings, ...cloudSettings } : { ...cloudSettings, ...localSettings };
+    } else if (cloudSettings) {
+      resolvedSettings = cloudSettings;
+    } else if (localSettings) {
+      resolvedSettings = localSettings;
+    }
+    if (resolvedSettings) {
+      safeStorage.setJSON(settingsStorageKey, resolvedSettings);
+      applySyncedUserSettingsToBrowser(resolvedSettings);
+    }
+
     const mergedSync: AccountSyncPayload = {
       ...cloudSync,
       deletedAiSessions: mergedDeletedAi,
@@ -1137,10 +1360,15 @@ export async function hydrateAccountSync(
       unlockedBooks: mergedUnlocked,
       bookCoverOverrides: mergedCoverOverrides,
       bookmarks: mergedBookmarks,
+      readingProgress: mergedProgressMap,
+      achievements: mergedAchievements,
+      learningPathSteps: mergedLearningSteps,
+      generatedQuizzes: mergedQuizzes,
+      userSettings: resolvedSettings,
       profileSnapshot: serverProfile || cloudSync.profileSnapshot,
     };
 
-    // 9. Backfill to cloud if local device had Sage AI chats, reader chats, peer chats, books, covers, or bookmarks missing from cloud
+    // 9. Backfill to cloud if local device had Sage AI chats, reader chats, peer chats, books, covers, bookmarks, progress, quizzes, or achievements missing from cloud
     const cloudAiDigest = computeAiSyncDigest(
       cloudSync.aiChatSessions,
       cloudSync.deletedAiSessions,
@@ -1163,13 +1391,24 @@ export async function hydrateAccountSync(
       );
     const booksNeedBackfill = mergedUnlocked.length > (cloudSync.unlockedBooks || []).length;
     const bookmarksNeedBackfill = mergedBookmarks.length > cloudBookmarks.length;
+    const achievementsNeedBackfill =
+      mergedAchievements.totalEduPoints > (cloudSync.achievements?.totalEduPoints || 0) ||
+      Object.keys(mergedAchievements.earnedBadges).length >
+        Object.keys(cloudSync.achievements?.earnedBadges || {}).length;
+    const progressNeedsBackfill = Object.entries(mergedProgressMap).some(
+      ([bid, pct]) => pct > Number(cloudSync.readingProgress?.[bid] || 0)
+    );
+    const quizzesNeedBackfill = mergedQuizzes.length > cloudQuizzes.length;
 
     if (
       aiNeedsBackfill ||
       readerNeedsBackfill ||
       peerNeedsBackfill ||
       booksNeedBackfill ||
-      bookmarksNeedBackfill
+      bookmarksNeedBackfill ||
+      achievementsNeedBackfill ||
+      progressNeedsBackfill ||
+      quizzesNeedBackfill
     ) {
       pushAccountSyncPatch(
         userId,
@@ -1187,19 +1426,24 @@ export async function hydrateAccountSync(
             : {}),
           ...(booksNeedBackfill ? { unlockedBooks: mergedUnlocked } : {}),
           ...(bookmarksNeedBackfill ? { bookmarks: mergedBookmarks } : {}),
+          ...(achievementsNeedBackfill ? { achievements: mergedAchievements } : {}),
+          ...(progressNeedsBackfill ? { readingProgress: mergedProgressMap } : {}),
+          ...(quizzesNeedBackfill ? { generatedQuizzes: mergedQuizzes } : {}),
         },
         explicitToken,
         { immediate: true }
       );
     }
 
-    // 10. Notify mounted components to refresh from synced state
+    // 10. Notify mounted components to refresh from synced state (deferred cleanly)
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent(ACCOUNT_SYNC_EVENT, {
-          detail: { userId, sync: mergedSync, profile: serverProfile },
-        })
-      );
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new CustomEvent(ACCOUNT_SYNC_EVENT, {
+            detail: { userId, sync: mergedSync, profile: serverProfile },
+          })
+        );
+      });
     }
 
     return {
@@ -1267,6 +1511,10 @@ export function clearAccountLocalCaches(userId?: string): void {
       'edu_ai_book_cover_overrides',
       'workspace_files_local',
       'workspace_folders_local',
+      'generated_quizzes',
+      'edu_bookmarks_active',
+      'edu_reading_progress_guest',
+      'edu_learning_path_steps_guest',
     ];
     sharedKeys.forEach((k) => safeStorage.removeItem(k));
 
@@ -1274,16 +1522,18 @@ export function clearAccountLocalCaches(userId?: string): void {
       const ls = window.localStorage;
       for (let i = ls.length - 1; i >= 0; i--) {
         const k = ls.key(i);
-        if (k && k.startsWith('book_cover_override_')) {
+        if (
+          k &&
+          (k.startsWith('book_cover_override_') ||
+            k.startsWith('book_progress_') ||
+            k.startsWith('book_page_'))
+        ) {
           ls.removeItem(k);
         }
       }
     }
 
-    if (userId) {
-      safeStorage.removeItem(`user_avatar_data_url_${userId}`);
-      safeStorage.removeItem(`user_custom_avatar_${userId}`);
-      safeStorage.removeItem(`user_profile_avatar_key_${userId}`);
-    }
+    // Keep user-scoped avatar caches (user_avatar_data_url_${userId}, etc.) intact
+    // across sign-outs so returning users retain offline/fallback profile photos.
   } catch (_) {}
 }

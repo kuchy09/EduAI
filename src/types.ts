@@ -10,6 +10,15 @@ export interface CustomCoverConfig {
   pattern?: 'grid' | 'dots' | 'geometric' | 'clean';
 }
 
+export type BookFormat = 'epub' | 'pdf';
+
+export interface PublisherSecurityPolicy {
+  requireEncryptedOffline?: boolean;
+  watermarkUser?: boolean;
+  allowRawExport?: boolean;
+  offlineLeaseDays?: number;
+}
+
 export interface Book {
   id: string;
   title: string;
@@ -25,6 +34,8 @@ export interface Book {
   subjects?: string[];
   country?: string[];
   fileUrl?: string; // added backblaze URL
+  format?: BookFormat;
+  securityPolicy?: PublisherSecurityPolicy;
   customCover?: CustomCoverConfig;
   coverMode?: 'auto' | 'image' | 'visual' | 'pdf';
   pdfCoverPage?: number;

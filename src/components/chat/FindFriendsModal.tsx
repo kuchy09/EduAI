@@ -9,6 +9,7 @@ import {
   Send,
   UserMinus,
   Loader2,
+  RefreshCw,
 } from 'lucide-react';
 import { ChatUser } from './types';
 import { AvatarBadge } from './AvatarBadge';
@@ -23,7 +24,9 @@ interface FindFriendsModalProps {
   onDeclineRequest: (userId: string) => Promise<void> | void;
   onCancelRequest: (userId: string) => Promise<void> | void;
   onStartChat: (userId: string) => Promise<void> | void;
+  onRefresh?: () => Promise<void> | void;
   isLoading?: boolean;
+  error?: string | null;
 }
 
 export const FindFriendsModal: React.FC<FindFriendsModalProps> = ({
@@ -36,13 +39,16 @@ export const FindFriendsModal: React.FC<FindFriendsModalProps> = ({
   onDeclineRequest,
   onCancelRequest,
   onStartChat,
+  onRefresh,
   isLoading = false,
+  error = null,
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [roleFilter, setRoleFilter] = useState<'all' | 'teacher' | 'student' | 'friends' | 'pending'>('all');
   const [noteTarget, setNoteTarget] = useState<ChatUser | null>(null);
   const [noteText, setNoteText] = useState('');
   const [busyUserId, setBusyUserId] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const otherUsers = useMemo(
     () => users.filter((u) => u.id !== currentUser.id),
@@ -56,16 +62,25 @@ export const FindFriendsModal: React.FC<FindFriendsModalProps> = ({
 
   const filteredUsers = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
+    const qTokens = q ? q.split(/\s+/).filter(Boolean) : [];
     return otherUsers.filter((u) => {
-      if (roleFilter === 'teacher' && u.role !== 'teacher') return false;
+      if (roleFilter === 'teacher' && u.role !== 'teacher' && u.role !== 'educator') return false;
       if (roleFilter === 'student' && u.role !== 'student') return false;
       if (roleFilter === 'friends' && u.friendStatus !== 'friends') return false;
       if (roleFilter === 'pending' && u.friendStatus !== 'pending_received' && u.friendStatus !== 'pending_sent') {
         return false;
       }
       if (!q) return true;
-      const hay = `${u.name} ${u.email} ${u.institution} ${u.title} ${u.bio} ${(u.subjects || []).join(' ')}`.toLowerCase();
-      return hay.includes(q);
+      const emailLower = (u.email || '').toLowerCase();
+      const emailHandle = emailLower.includes('@') ? emailLower.split('@')[0] : '';
+      const roleKeywords =
+        u.role === 'teacher' || u.role === 'educator'
+          ? 'teacher educator faculty'
+          : u.role === 'admin'
+          ? 'admin administrator'
+          : 'student scholar learner';
+      const hay = `${u.name} ${emailLower} ${emailHandle} ${u.phone || ''} ${u.institution} ${u.title} ${u.bio} ${u.location || ''} ${roleKeywords} ${(u.subjects || []).join(' ')}`.toLowerCase();
+      return hay.includes(q) || (qTokens.length > 0 && qTokens.every((tok) => hay.includes(tok)));
     });
   }, [otherUsers, roleFilter, searchQuery]);
 
@@ -95,14 +110,35 @@ export const FindFriendsModal: React.FC<FindFriendsModalProps> = ({
               Send friend requests to unlock direct chats and study groups
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close directory modal"
-            className="w-10 h-10 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors cursor-pointer shrink-0"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    setIsRefreshing(true);
+                    await onRefresh();
+                  } finally {
+                    setIsRefreshing(false);
+                  }
+                }}
+                disabled={isRefreshing}
+                aria-label="Refresh directory"
+                title="Refresh registered members"
+                className="w-10 h-10 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close directory modal"
+              className="w-10 h-10 rounded-full hover:bg-slate-100 dark:hover:bg-slate-800 flex items-center justify-center text-slate-500 dark:text-slate-400 transition-colors cursor-pointer shrink-0"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Search & Tabs */}
@@ -206,14 +242,59 @@ export const FindFriendsModal: React.FC<FindFriendsModalProps> = ({
               <Loader2 className="w-6 h-6 text-indigo-600 animate-spin mx-auto" />
               <p className="text-xs text-slate-500 dark:text-slate-400">Loading academic directory...</p>
             </div>
-          ) : filteredUsers.length === 0 ? (
-            <div className="py-12 text-center space-y-2">
-              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                No matching accounts found
+          ) : error && otherUsers.length === 0 ? (
+            <div className="py-12 text-center space-y-3">
+              <p className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                Unable to load directory right now
               </p>
               <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                Registered classmates and educators appear here automatically once they sign in. Try clearing your filter.
+                {error}
               </p>
+              {onRefresh && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setIsRefreshing(true);
+                      await onRefresh();
+                    } finally {
+                      setIsRefreshing(false);
+                    }
+                  }}
+                  className="h-9 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span>Retry Sync</span>
+                </button>
+              )}
+            </div>
+          ) : filteredUsers.length === 0 ? (
+            <div className="py-12 text-center space-y-3">
+              <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+                {otherUsers.length === 0 ? 'No other members loaded yet' : 'No matching accounts found'}
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
+                {otherUsers.length === 0
+                  ? 'Click Refresh to load registered classmates and educators from the server directory.'
+                  : 'Try adjusting your search query or clearing your active role filter.'}
+              </p>
+              {onRefresh && otherUsers.length === 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      setIsRefreshing(true);
+                      await onRefresh();
+                    } finally {
+                      setIsRefreshing(false);
+                    }
+                  }}
+                  className="h-9 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                  <span>Refresh Directory</span>
+                </button>
+              )}
             </div>
           ) : (
             filteredUsers.map((user) => {
@@ -237,7 +318,7 @@ export const FindFriendsModal: React.FC<FindFriendsModalProps> = ({
                           {user.name}
                         </p>
                         <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400">
-                          · {user.role === 'teacher' ? 'Educator' : 'Student'}
+                          · {user.role === 'admin' ? 'Platform Admin' : user.role === 'teacher' || user.role === 'educator' ? 'Educator' : 'Student'}
                         </span>
                       </div>
                       <p className="text-xs text-slate-600 dark:text-slate-300 truncate mt-0.5">

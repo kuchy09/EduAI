@@ -89,7 +89,7 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
         {!isGroup && partner && (
           <>
             <p className="mt-1 text-xs font-medium text-slate-500 dark:text-slate-400">
-              {partner.role === 'teacher' ? 'Faculty Educator' : 'Student'} · Verified
+              {partner.role === 'admin' ? 'Platform Admin' : partner.role === 'teacher' || partner.role === 'educator' ? 'Faculty Educator' : 'Student'} · Verified
             </p>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 max-w-[220px]">
               {partner.title}
@@ -153,7 +153,7 @@ export const ChatInfoDrawer: React.FC<ChatInfoDrawerProps> = ({
                   <div className="min-w-0 flex-1">
                     <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">{memberName}</p>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                      {member?.role === 'teacher' ? 'Educator' : 'Student'}
+                      {member?.role === 'admin' ? 'Platform Admin' : member?.role === 'teacher' || member?.role === 'educator' ? 'Educator' : 'Student'}
                     </p>
                   </div>
                 </div>

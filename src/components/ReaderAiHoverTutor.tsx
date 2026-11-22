@@ -434,7 +434,7 @@ export function ReaderAiHoverTutor({
           {
             id: Date.now().toString() + '_err',
             role: 'assistant',
-            content: errorData.error || `I analyzed page ${pageNumber} of ${book.title}. Notice how the core principles and formulas apply directly here. Please let me know if you would like me to explain any specific term in simpler terms.`,
+            content: errorData.error || `Could not complete AI request (HTTP ${response.status}). Please retry.`,
           },
         ]);
       }
@@ -447,7 +447,7 @@ export function ReaderAiHoverTutor({
         {
           id: Date.now().toString() + '_net_err',
           role: 'assistant',
-          content: `Here is a study hint for **${book.title} (Page ${pageNumber})**:\n\n* **Core Focus:** This section builds upon previous foundational definitions.\n* **Study Advice:** Connect the theoretical formulas to real-world applications to solidify your understanding.`,
+          content: 'Could not reach the AI Tutor service. Please check your connection and retry.',
         },
       ]);
     } finally {

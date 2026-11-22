@@ -3,8 +3,9 @@ import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, Use
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
-import { useUserAvatar } from '../lib/userAvatarService';
+import { useUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
+import { isAdminLoginEmail } from '../../shared/adminAuth';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -107,7 +108,7 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
     },
   ];
 
-  if (user?.email?.toLowerCase().endsWith('@admin.com')) {
+  if (isAdminLoginEmail(user?.email)) {
     navItems.push({ id: 'admin', label: 'Admin Platform', icon: <Code className="w-5 h-5" /> });
   }
 
@@ -240,7 +241,14 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
                     src={avatarUrl} 
                     alt="Profile" 
                     className="w-full h-full object-cover" 
-                    onError={() => setAvatarFailed(true)}
+                    onError={() => {
+                      const nextCandidate = markAvatarUrlFailed(avatarUrl, user, profile);
+                      if (nextCandidate && nextCandidate !== avatarUrl) {
+                        setAvatarFailed(false);
+                      } else {
+                        setAvatarFailed(true);
+                      }
+                    }}
                   />
                 ) : user?.email ? (
                   user.email.charAt(0).toUpperCase()

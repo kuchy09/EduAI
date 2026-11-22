@@ -2,7 +2,7 @@ import { Book } from '../types';
 import {
   X, Play, MessageSquare, Star, Clock, BookOpen, Sparkles,
   Download, CheckCircle2, Loader2, Info, FileText, Calendar,
-  ChevronLeft, ChevronRight
+  ChevronLeft, ChevronRight, Headphones
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -19,6 +19,8 @@ interface BookDetailProps {
   onClose: () => void;
   onDiscuss: () => void;
   onRead: () => void;
+  onListen?: () => void;
+  onMarkCompleted?: (book: Book) => void;
   allBooks?: Book[];
   onSelectBook?: (book: Book) => void;
 }
@@ -51,7 +53,7 @@ function getBookPublishYear(book: Book): number {
   return 2018 + (seed % 8);
 }
 
-export function BookDetail({ book, onClose, onDiscuss, onRead, allBooks, onSelectBook }: BookDetailProps) {
+export function BookDetail({ book, onClose, onDiscuss, onRead, onListen, onMarkCompleted, allBooks, onSelectBook }: BookDetailProps) {
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadComplete, setDownloadComplete] = useState(false);
   const [showExtraInfo, setShowExtraInfo] = useState(false);
@@ -168,58 +170,84 @@ export function BookDetail({ book, onClose, onDiscuss, onRead, allBooks, onSelec
           animate={{ x: 0 }}
           exit={{ x: '100%' }}
           transition={{ type: 'spring', damping: 25, stiffness: 200 }}
-          className="w-full max-w-md h-full bg-white shadow-2xl relative flex flex-col"
+          className="w-full max-w-md h-full bg-white dark:bg-[#161616] text-slate-900 dark:text-[#EDEDED] shadow-2xl relative flex flex-col border-l border-slate-200/80 dark:border-white/10"
           onClick={e => e.stopPropagation()}
         >
           <div ref={drawerScrollRef} className="flex-1 overflow-y-auto p-6 pb-28">
             <button 
               onClick={onClose}
-              className="absolute top-4 right-4 p-2 bg-slate-100 hover:bg-slate-200 rounded-full text-slate-500 transition-colors z-10 cursor-pointer"
+              className="absolute top-4 right-4 p-2 bg-slate-100 dark:bg-[#242424] hover:bg-slate-200 dark:hover:bg-[#2e2e2e] rounded-full text-slate-500 dark:text-slate-300 transition-colors z-10 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
             
             <div className="flex flex-col items-center text-center mt-8 mb-6">
-              <div className="w-40 h-56 rounded-xl overflow-hidden shadow-lg shadow-slate-200/50 mb-6 border border-slate-100 flex relative">
+              <div className="w-40 h-56 rounded-xl overflow-hidden shadow-lg shadow-slate-200/50 dark:shadow-black/50 mb-6 border border-slate-100 dark:border-white/10 flex relative">
                 <BookCoverVisual book={displayBook} className="w-full h-full absolute inset-0" />
               </div>
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-brand-50 text-brand-700 rounded-full text-xs font-semibold mb-3">
+              <div className="text-xs font-semibold text-brand-700 dark:text-[#a690ee] uppercase tracking-wider mb-2">
                 {displayBook.category}
               </div>
-              <h2 className="text-2xl font-bold font-display text-slate-900 mb-2 leading-tight px-4">{displayBook.title}</h2>
-              <p className="text-slate-500 font-medium">{displayBook.author}</p>
+              <h2 className="text-2xl font-bold font-display text-slate-900 dark:text-[#EDEDED] mb-2 leading-tight px-4">{displayBook.title}</h2>
+              <p className="text-slate-500 dark:text-[#A0A0A0] font-medium">{displayBook.author}</p>
             </div>
 
-            <div className="flex items-center justify-center gap-6 mb-8 py-4 border-y border-slate-100">
+            <div className="flex items-center justify-center gap-6 mb-5 py-4 border-y border-slate-100 dark:border-white/10">
                <div className="flex flex-col items-center gap-1">
-                 <div className="flex items-center text-slate-900 font-semibold text-sm">
+                 <div className="flex items-center text-slate-900 dark:text-[#EDEDED] font-semibold text-sm tabular-nums">
                    <Star className="w-4 h-4 fill-amber-400 text-amber-400 mr-1" />
                    {book.rating}
                  </div>
-                 <span className="text-xs text-slate-500 font-medium">Rating</span>
+                 <span className="text-xs text-slate-500 dark:text-[#A0A0A0] font-medium">Rating</span>
                </div>
-               <div className="w-px h-8 bg-slate-100"></div>
+               <div className="w-px h-8 bg-slate-100 dark:bg-white/10"></div>
                <div className="flex flex-col items-center gap-1">
-                 <div className="flex items-center text-slate-900 font-semibold text-sm gap-1.5">
-                   <BookOpen className="w-4 h-4 text-brand-500" />
-                   {book.readProgress ? 'Reading' : 'Unread'}
+                 <div className="flex items-center text-slate-900 dark:text-[#EDEDED] font-semibold text-sm gap-1.5">
+                   <BookOpen className="w-4 h-4 text-brand-500 dark:text-[#8a70d6]" />
+                   {(book.readProgress || 0) >= 100 ? 'Completed' : book.readProgress ? 'Reading' : 'Unread'}
                  </div>
-                 <span className="text-xs text-slate-500 font-medium">{book.readProgress || 0}% Done</span>
+                 <span className="text-xs text-slate-500 dark:text-[#A0A0A0] font-medium tabular-nums">{book.readProgress || 0}% Done</span>
                </div>
-               <div className="w-px h-8 bg-slate-100"></div>
+               <div className="w-px h-8 bg-slate-100 dark:bg-white/10"></div>
                <div className="flex flex-col items-center gap-1">
-                 <div className="flex items-center text-slate-900 font-semibold text-sm gap-1.5">
+                 <div className="flex items-center text-slate-900 dark:text-[#EDEDED] font-semibold text-sm gap-1.5 tabular-nums">
                    <Clock className="w-4 h-4 text-emerald-500" />
                    12h
                  </div>
-                 <span className="text-xs text-slate-500 font-medium">Est. Time</span>
+                 <span className="text-xs text-slate-500 dark:text-[#A0A0A0] font-medium">Est. Time</span>
                </div>
             </div>
 
+            {onMarkCompleted && (
+              <div className="mb-6">
+                {(book.readProgress || 0) >= 100 ? (
+                  <div className="w-full px-4 py-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-emerald-700 dark:text-emerald-300 text-xs font-semibold flex items-center justify-between">
+                    <span className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      Book Completed
+                    </span>
+                    <span className="tabular-nums">+100 Edu Points Earned</span>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => onMarkCompleted(book)}
+                    className="w-full px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-[#222222] hover:bg-emerald-50 dark:hover:bg-emerald-950/30 border border-slate-200/80 dark:border-white/10 hover:border-emerald-300 dark:hover:border-emerald-700/50 text-slate-700 dark:text-[#EDEDED] hover:text-emerald-700 dark:hover:text-emerald-300 text-xs font-semibold flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
+                      Mark Book as Completed
+                    </span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-bold tabular-nums">+100 EP</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             <div className="space-y-6">
               <div>
-                <h3 className="text-lg font-bold text-slate-900 mb-2 font-display">About this book</h3>
-                <p className="text-slate-600 leading-relaxed text-[15px]">
+                <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mb-2 font-display">About this book</h3>
+                <p className="text-slate-600 dark:text-[#B5B5B5] leading-relaxed text-[15px]">
                   {book.description}
                 </p>
 
@@ -346,7 +374,7 @@ export function BookDetail({ book, onClose, onDiscuss, onRead, allBooks, onSelec
             </div>
           </div>
           
-          <div className="absolute bottom-0 left-0 w-full px-4 py-3 bg-white/90 backdrop-blur-md border-t border-slate-100 flex items-center gap-2">
+          <div className="absolute bottom-0 left-0 w-full px-4 py-3 bg-white/95 dark:bg-[#161616]/95 backdrop-blur-md border-t border-slate-100 dark:border-white/10 flex items-center gap-2">
             <button
               onClick={onRead}
               className="flex-1 min-w-0 h-10 sm:h-11 bg-brand-600 hover:bg-brand-700 text-white px-3 sm:px-4 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 transition-all shadow-sm shadow-brand-200 cursor-pointer whitespace-nowrap"
@@ -377,6 +405,18 @@ export function BookDetail({ book, onClose, onDiscuss, onRead, allBooks, onSelec
                     <span>Download</span>
                   </>
                 )}
+              </button>
+            )}
+            {onListen && (
+              <button
+                type="button"
+                onClick={onListen}
+                className="h-10 sm:h-11 px-3 shrink-0 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 rounded-xl text-xs sm:text-sm font-medium flex items-center justify-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap"
+                title="Listen as AI Audiobook"
+                aria-label="Listen as AI Audiobook"
+              >
+                <Headphones className="w-4 h-4 shrink-0" />
+                <span>Listen</span>
               </button>
             )}
             <button

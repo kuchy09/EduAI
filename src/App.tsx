@@ -11,6 +11,7 @@ import {
   hasValidOAuthRedirectPending,
   getPersistedDeviceSession,
 } from './lib/supabase';
+import { setActiveSocialTokens, SOCIAL_SESSION_REFRESHED_EVENT } from './lib/socialChatClient';
 import { Auth } from './components/Auth';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
@@ -39,7 +40,7 @@ import {
   Sparkles, ShoppingBag, Users, BookOpen, 
   Activity, CheckCircle2, AlertCircle, RefreshCw, 
   Wifi, WifiOff, Server, Database, ShieldCheck, 
-  Home, ArrowRight, X, Wrench, AlertTriangle, Check
+  Home, ArrowRight, X, Wrench, AlertTriangle, Check, Trophy
 } from 'lucide-react';
 import { mockBooks, categories as initialCategories } from './data';
 import { ViewState, Book, Bookmark } from './types';
@@ -51,6 +52,7 @@ import { getAllReadingProgressLocal } from './lib/offlineManager';
 import { 
   syncUserReadingProgressFromSupabase, 
   syncUserDailyGoalFromSupabase, 
+  saveUserReadingProgressToSupabase,
   setupHomeRealtimeSubscriptions 
 } from './lib/userHomeDataService';
 import { AcademicPreferencesModal } from './components/AcademicPreferencesModal';
@@ -63,9 +65,15 @@ import {
   clearAccountLocalCaches,
   getUnlockedBooksStorageKey,
   getBookmarksStorageKey,
+  getReadingProgressMapStorageKey,
   mergeBooksLists,
   mergeBookmarksLists,
+  mergeReadingProgressMaps,
 } from './lib/accountSyncService';
+import {
+  mergeIncomingSystemNotification,
+  syncSystemNotificationsFromServer,
+} from './lib/notifications';
 import {
   GLOBAL_BOOK_COVERS_EVENT,
   applyGlobalCoverToBook,
@@ -76,6 +84,12 @@ import {
 } from './lib/globalBookCoversService';
 import { isSystemBookConfigRow } from '../shared/canonicalBookCovers';
 import { socialWsClient } from './lib/socialChatClient';
+import {
+  AchievementBadgeDefinition,
+  EDU_POINTS_AWARDED_EVENT,
+  reconcileAchievementsSnapshot,
+  recordBookCompleted,
+} from './lib/achievementsService';
 
 export interface SystemHealth {
   status: 'checking' | 'healthy' | 'degraded' | 'offline';
@@ -131,6 +145,12 @@ export default function App() {
     message: string;
     type: 'info' | 'success' | 'warning';
   }>({ show: false, message: '', type: 'info' });
+  const [rewardBanner, setRewardBanner] = useState<{
+    pointsGained: number;
+    totalEduPoints: number;
+    reason: string;
+    newlyUnlockedBadges: AchievementBadgeDefinition[];
+  } | null>(null);
 
   const [currentView, setCurrentView] = useState<ViewState>(() => {
     if (typeof window !== 'undefined') {
@@ -156,6 +176,8 @@ export default function App() {
     } catch (_) {}
     return null;
   });
+
+  const [audiobookTargetBookId, setAudiobookTargetBookId] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -189,6 +211,15 @@ export default function App() {
     }
   }, []);
 
+  const handleListenBook = useCallback(
+    (book: Book) => {
+      setActiveBook(null);
+      setAudiobookTargetBookId(book.id);
+      changeView('audiobooks');
+    },
+    [changeView]
+  );
+
   useEffect(() => {
     safeSessionStorage.setItem('edu_ai_current_view', currentView);
   }, [currentView]);
@@ -204,24 +235,54 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSageSidebarOpen, setIsSageSidebarOpen] = useState(false);
-  const getPersistedBooks = useCallback((baseBooks: Book[], _userIdOverride?: string): Book[] => {
+  const getPersistedBooks = useCallback((baseBooks: Book[], userIdOverride?: string): Book[] => {
+    const uid = userIdOverride || getPersistedDeviceSession()?.user?.id;
+    const scopedProgress = uid
+      ? safeStorage.getJSON<Record<string, number>>(getReadingProgressMapStorageKey(uid), {})
+      : {};
     const withGlobalCovers = applyGlobalCoversToBooks(baseBooks);
     return withGlobalCovers.map(bookWithCover => {
-      const saved = safeStorage.getItem(`book_progress_${bookWithCover.id}`);
-      if (saved !== null) {
-        return { ...bookWithCover, readProgress: parseInt(saved, 10) };
+      if (uid && typeof scopedProgress[bookWithCover.id] === 'number') {
+        return { ...bookWithCover, readProgress: scopedProgress[bookWithCover.id] };
+      }
+      if (!uid) {
+        const saved = safeStorage.getItem(`book_progress_${bookWithCover.id}`);
+        if (saved !== null) {
+          return { ...bookWithCover, readProgress: parseInt(saved, 10) };
+        }
       }
       return bookWithCover;
     });
   }, []);
 
   const [books, setBooks] = useState<Book[]>(() => getPersistedBooks(mockBooks));
+  const booksRef = useRef<Book[]>(books);
+  useEffect(() => {
+    booksRef.current = books;
+  }, [books]);
   const [categories, setCategories] = useState<string[]>(initialCategories);
 
   const handleUpdateProgress = useCallback((bookId: string, progress: number) => {
-    setBooks(prev => prev.map(b => b.id === bookId ? { ...b, readProgress: progress } : b));
-    setActiveBook(prev => prev && prev.id === bookId ? { ...prev, readProgress: progress } : prev);
-  }, []);
+    const bounded = Math.max(0, Math.min(100, Math.round(progress)));
+    setBooks(prev => prev.map(b => b.id === bookId ? { ...b, readProgress: bounded } : b));
+    setActiveBook(prev => prev && prev.id === bookId ? { ...prev, readProgress: bounded } : prev);
+    const uid = session?.user?.id;
+    if (uid) {
+      const progressKey = getReadingProgressMapStorageKey(uid);
+      const prevMap = safeStorage.getJSON<Record<string, number>>(progressKey, {});
+      const nextMap = { ...prevMap, [bookId]: Math.max(Number(prevMap[bookId] || 0), bounded) };
+      safeStorage.setJSON(progressKey, nextMap);
+      pushAccountSyncPatch(uid, { readingProgress: nextMap }, session?.access_token);
+    }
+    if (bounded >= 100 && uid) {
+      const matched = booksRef.current.find(b => b.id === bookId);
+      recordBookCompleted(
+        uid,
+        { id: bookId, title: matched?.title || 'Curriculum Textbook' },
+        { accessToken: session.access_token }
+      );
+    }
+  }, [session?.user?.id, session?.access_token]);
 
   // Hydrate reading progress from IndexedDB on startup & listen for live storage sync
   useEffect(() => {
@@ -258,6 +319,35 @@ export default function App() {
       window.removeEventListener('edu-ai-progress-updated', handleProgressEvent);
     };
   }, [handleUpdateProgress]);
+
+  // Listen for live Edu Points & Badge unlock events to show celebration banner
+  useEffect(() => {
+    let dismissTimer: ReturnType<typeof setTimeout> | null = null;
+    const handlePointsAwarded = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (!detail) return;
+      if (detail.userId && session?.user?.id && detail.userId !== session.user.id) return;
+      if (!detail.pointsGained && (!detail.newlyUnlockedBadges || detail.newlyUnlockedBadges.length === 0)) {
+        return;
+      }
+      setRewardBanner({
+        pointsGained: detail.pointsGained || 0,
+        totalEduPoints: detail.totalEduPoints || 0,
+        reason: detail.reason || 'Achievement progress updated',
+        newlyUnlockedBadges: Array.isArray(detail.newlyUnlockedBadges)
+          ? detail.newlyUnlockedBadges
+          : [],
+      });
+      if (dismissTimer) clearTimeout(dismissTimer);
+      dismissTimer = setTimeout(() => setRewardBanner(null), 6500);
+    };
+
+    window.addEventListener(EDU_POINTS_AWARDED_EVENT, handlePointsAwarded);
+    return () => {
+      window.removeEventListener(EDU_POINTS_AWARDED_EVENT, handlePointsAwarded);
+      if (dismissTimer) clearTimeout(dismissTimer);
+    };
+  }, [session?.user?.id]);
 
   // Comprehensive System Health Check
   const checkSystemHealth = useCallback(async (isInitial = false) => {
@@ -852,14 +942,28 @@ export default function App() {
             if (isMounted) setSession(savedDeviceSession);
 
             try {
-              const checkRes = await fetch('/api/auth/user', {
-                headers: {
-                  Authorization: `Bearer ${savedDeviceSession.access_token}`,
-                  ...(savedDeviceSession.refresh_token
-                    ? { 'x-refresh-token': savedDeviceSession.refresh_token }
-                    : {}),
-                },
-              });
+              const savedAccess = String(savedDeviceSession.access_token || '');
+              let checkRes: Response | null = null;
+              if (savedAccess.length <= 3500) {
+                checkRes = await fetch('/api/auth/user', {
+                  headers: {
+                    Authorization: `Bearer ${savedAccess}`,
+                    ...(savedDeviceSession.refresh_token
+                      ? { 'x-refresh-token': savedDeviceSession.refresh_token }
+                      : {}),
+                  },
+                }).catch(() => null);
+              }
+              if (!checkRes || checkRes.status === 400 || checkRes.status === 431) {
+                checkRes = await fetch('/api/auth/user', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    access_token: savedAccess,
+                    refresh_token: savedDeviceSession.refresh_token || undefined,
+                  }),
+                });
+              }
               if (checkRes.ok) {
                 const checkJson = await checkRes.json().catch(() => ({}));
                 const updatedSession =
@@ -908,6 +1012,34 @@ export default function App() {
     };
   }, [loadUnifiedCatalog]);
 
+  // Keep in-memory social auth tokens synced with active React session and listen for background refreshes
+  useEffect(() => {
+    if (session?.access_token && session?.user?.id) {
+      setActiveSocialTokens({
+        accessToken: session.access_token,
+        refreshToken: session.refresh_token || '',
+        userId: session.user.id,
+      });
+    } else if (!session) {
+      setActiveSocialTokens(null);
+    }
+  }, [session?.access_token, session?.refresh_token, session?.user?.id]);
+
+  useEffect(() => {
+    const onRefreshed = (ev: any) => {
+      const nextSess = ev?.detail?.session;
+      if (nextSess?.access_token && nextSess?.user?.id) {
+        setSession((prev: any) => ({
+          ...(prev || {}),
+          ...nextSess,
+          user: nextSess.user?.email ? nextSess.user : prev?.user || nextSess.user,
+        }));
+      }
+    };
+    window.addEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onRefreshed);
+    return () => window.removeEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onRefreshed);
+  }, []);
+
   // Prompt newly signed-in OAuth / Phone users to select their Country, Curriculum, Level & Subjects if not configured yet
   useEffect(() => {
     const authed = Boolean(
@@ -954,12 +1086,21 @@ export default function App() {
           hydrateAccountSync(session.user, session.access_token),
           syncUserDailyGoalFromSupabase(userId),
           fetchGlobalBookCoversFromServer(),
+          syncSystemNotificationsFromServer(userId),
         ]);
 
         if (!isMounted) return;
 
         if (hydrated?.profile) {
           setProfile((prev: any) => ({ ...(prev || {}), ...hydrated.profile }));
+        }
+
+        const syncedProgress = mergeReadingProgressMaps(
+          safeStorage.getJSON<Record<string, number>>(getReadingProgressMapStorageKey(userId), {}),
+          mergeReadingProgressMaps(hydrated?.sync?.readingProgress, progressMap)
+        );
+        if (Object.keys(syncedProgress).length > 0) {
+          safeStorage.setJSON(getReadingProgressMapStorageKey(userId), syncedProgress);
         }
 
         const localSavedBookmarks = safeStorage.getJSON<Bookmark[]>(getBookmarksStorageKey(userId), []);
@@ -975,8 +1116,8 @@ export default function App() {
               : prev;
           const withCovers = getPersistedBooks(withUnlocked, userId);
           return withCovers.map(book =>
-            progressMap[book.id] !== undefined
-              ? { ...book, readProgress: progressMap[book.id] }
+            syncedProgress[book.id] !== undefined
+              ? { ...book, readProgress: syncedProgress[book.id] }
               : book
           );
         });
@@ -991,6 +1132,9 @@ export default function App() {
     const handleAccountSyncEvent = (e: Event) => {
       const detail = (e as CustomEvent)?.detail;
       if (detail?.userId && detail.userId !== userId) return;
+      if (detail?.profile) {
+        setProfile((prev: any) => ({ ...(prev || {}), ...detail.profile }));
+      }
       setBooks(prev => getPersistedBooks(prev, userId));
       setActiveBook(prev => (prev ? getPersistedBooks([prev], userId)[0] : prev));
     };
@@ -1003,31 +1147,62 @@ export default function App() {
 
     // Re-hydrate on tab focus or returning from background (throttled >= 8s) so PC and Phone stay in live sync
     let lastRefreshAt = Date.now();
-    const refreshOnResume = () => {
+    const refreshOnResume = (minIntervalMs = 8000) => {
       const now = Date.now();
-      if (now - lastRefreshAt < 8000) return;
+      if (now - lastRefreshAt < minIntervalMs) return;
       lastRefreshAt = now;
       void syncUserData();
     };
+    const handleFocusRefresh = () => refreshOnResume(8000);
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        refreshOnResume();
+        refreshOnResume(8000);
       }
     };
-    window.addEventListener('focus', refreshOnResume);
+    window.addEventListener('focus', handleFocusRefresh);
     document.addEventListener('visibilitychange', handleVisibility);
+
+    // Live WebSocket sync across all connected clients (per-user & system-wide updates)
+    socialWsClient.start();
+    const unsubSocialWs = socialWsClient.subscribe((ev) => {
+      if (!isMounted) return;
+      if (ev.type === 'system:books-updated') {
+        void loadUnifiedCatalog();
+      } else if (ev.type === 'system:covers-updated' && ev.covers && typeof ev.covers === 'object') {
+        setGlobalBookCovers(ev.covers, { notify: true });
+      } else if (ev.type === 'system:notification' && ev.notification) {
+        mergeIncomingSystemNotification(ev.notification, userId);
+      } else if (ev.type === 'account:sync-updated') {
+        if (!ev.userId || ev.userId === userId) {
+          refreshOnResume(1000);
+        }
+      }
+    });
 
     // 2. Realtime WebSocket subscriptions via Supabase Channels
     const cleanupSubscriptions = setupHomeRealtimeSubscriptions(userId, {
       onProgressChange: (bookId, progress) => {
+        const progressKey = getReadingProgressMapStorageKey(userId);
+        const prevMap = safeStorage.getJSON<Record<string, number>>(progressKey, {});
+        const nextMap = { ...prevMap, [bookId]: Math.max(Number(prevMap[bookId] || 0), progress) };
+        safeStorage.setJSON(progressKey, nextMap);
+
         setBooks(prev =>
           prev.map(book => {
             if (book.id === bookId) {
-              return { ...book, readProgress: progress };
+              return { ...book, readProgress: nextMap[bookId] };
             }
             return book;
           })
         );
+        if (progress >= 100) {
+          const matched = booksRef.current.find(b => b.id === bookId);
+          recordBookCompleted(
+            userId,
+            { id: bookId, title: matched?.title || 'Curriculum Textbook' },
+            { accessToken: session.access_token, silentToast: true }
+          );
+        }
       },
       onProfileChange: (newProfile) => {
         setProfile((prev: any) => ({ ...(prev || {}), ...newProfile }));
@@ -1050,11 +1225,24 @@ export default function App() {
       isMounted = false;
       window.removeEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
       window.removeEventListener(GLOBAL_BOOK_COVERS_EVENT, handleGlobalCoversEvent);
-      window.removeEventListener('focus', refreshOnResume);
+      window.removeEventListener('focus', handleFocusRefresh);
       document.removeEventListener('visibilitychange', handleVisibility);
+      unsubSocialWs();
       cleanupSubscriptions();
     };
   }, [session?.user?.id, session?.access_token, loadUnifiedCatalog, getPersistedBooks]);
+
+  // Silently reconcile any 100%-completed books into the achievements ledger after state commits
+  useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    if (!books.some(b => (b.readProgress || 0) >= 100)) return;
+    reconcileAchievementsSnapshot(
+      userId,
+      { books },
+      { accessToken: session?.access_token, silentToast: true }
+    );
+  }, [books, session?.user?.id, session?.access_token]);
 
   const handleAddBookmark = useCallback((bookmark: Bookmark) => {
     setBookmarks(prev => {
@@ -1368,7 +1556,13 @@ export default function App() {
                         onAddBookToLibrary={handleAddBookToLibrary}
                       />
                     )}
-                    {currentView === 'progress' && <Progress books={books} user={session?.user} />}
+                    {currentView === 'progress' && (
+                      <Progress
+                        books={books}
+                        user={session?.user}
+                        onNavigate={(view) => changeView(view)}
+                      />
+                    )}
                     {currentView === 'notifications' && (
                       <Notifications 
                         onNavigate={(view) => changeView(view)} 
@@ -1380,6 +1574,7 @@ export default function App() {
                         books={books} 
                         categories={categories} 
                         onBookSelect={(book) => { setActiveBook(book); }} 
+                        onListenBook={handleListenBook}
                         bookmarks={bookmarks} 
                         user={session?.user} 
                         profile={profile} 
@@ -1427,6 +1622,7 @@ export default function App() {
                     {currentView === 'admin' && (
                       <Admin 
                         appBooks={books} 
+                        user={session?.user}
                         onUpdateBook={(updatedBook) => {
                           if (
                             updatedBook.coverMode ||
@@ -1479,7 +1675,22 @@ export default function App() {
                     {currentView === 'audiobooks' && (
                       <Audiobooks 
                         books={books} 
+                        bookmarks={bookmarks}
+                        initialBookId={audiobookTargetBookId}
+                        onConsumeInitialBook={() => setAudiobookTargetBookId(null)}
                         onBookSelect={(book) => { setActiveBook(book); }} 
+                        onOpenInReader={(book) => {
+                          setActiveBook(book);
+                          changeView('reader');
+                        }}
+                        onUpdateProgress={handleUpdateProgress}
+                        onAddBookmark={handleAddBookmark}
+                        onAskAiAboutBook={(_book, topicPrompt) => {
+                          if (topicPrompt) {
+                            safeStorage.setItem('ai_tutor_prefill', topicPrompt);
+                          }
+                          changeView('ai-tutor');
+                        }}
                         user={session?.user} 
                         profile={profile} 
                         onOpenAcademicPrefs={() => setIsAcademicModalOpen(true)}
@@ -1507,6 +1718,11 @@ export default function App() {
                 }}
                 onRead={() => {
                   changeView('reader');
+                }}
+                onListen={() => handleListenBook(activeBook)}
+                onMarkCompleted={(completedBook) => {
+                  void saveUserReadingProgressToSupabase(session?.user?.id, completedBook.id, 100);
+                  handleUpdateProgress(completedBook.id, 100);
                 }}
               />
             )}
@@ -1541,6 +1757,59 @@ export default function App() {
           </button>
         </div>
       )}
+
+      {/* Edu Points & Badge Celebration Toast */}
+      <AnimatePresence>
+        {rewardBanner && (
+          <motion.div
+            initial={{ opacity: 0, y: 20, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 20, scale: 0.95 }}
+            className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 max-w-md w-[92%] bg-slate-900 dark:bg-[#191919] text-white p-4 rounded-2xl shadow-2xl border border-amber-400/40 backdrop-blur-md flex items-center justify-between gap-3"
+          >
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-10 h-10 rounded-xl bg-amber-500/20 border border-amber-400/40 flex items-center justify-center text-amber-400 shrink-0">
+                <Trophy className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 text-xs font-bold text-amber-300 tabular-nums">
+                  <span>+{rewardBanner.pointsGained} Edu Points</span>
+                  <span className="text-slate-400 font-normal">
+                    ({rewardBanner.totalEduPoints.toLocaleString()} EP total)
+                  </span>
+                </div>
+                <p className="text-xs text-slate-200 truncate mt-0.5">{rewardBanner.reason}</p>
+                {rewardBanner.newlyUnlockedBadges.length > 0 && (
+                  <p className="text-[11px] font-semibold text-emerald-300 truncate mt-0.5">
+                    Unlocked:{' '}
+                    {rewardBanner.newlyUnlockedBadges.map((b) => b.title).join(', ')}
+                  </p>
+                )}
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <button
+                type="button"
+                onClick={() => {
+                  setRewardBanner(null);
+                  changeView('profile');
+                }}
+                className="px-2.5 py-1.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-[11px] transition-colors cursor-pointer whitespace-nowrap"
+              >
+                View Badges
+              </button>
+              <button
+                type="button"
+                onClick={() => setRewardBanner(null)}
+                aria-label="Dismiss reward notification"
+                className="text-slate-400 hover:text-white p-1 rounded-md cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Automatic Recovery Toast Notification */}
       <AnimatePresence>
@@ -1692,6 +1961,14 @@ export default function App() {
         accessToken={session?.access_token}
         onSaved={(updatedProfile, updatedMeta) => {
           setProfile(updatedProfile);
+          if (session?.user?.id && updatedProfile) {
+            pushAccountSyncPatch(
+              session.user.id,
+              { profileSnapshot: updatedProfile },
+              session?.access_token,
+              { immediate: true }
+            );
+          }
           if (updatedMeta) {
             setSession((prev: any) => {
               if (!prev?.user) return prev;

@@ -22,6 +22,7 @@ import { QuoteCardModal } from './QuoteCardModal';
 import { QuickDictionaryPopover } from './QuickDictionaryPopover';
 import { ReaderAiHoverTutor } from './ReaderAiHoverTutor';
 import { FloatingEditorToolbar, TextStylePreset, TextAlignment } from './FloatingEditorToolbar';
+import { EpubReader } from './EpubReader';
 import 'react-pdf/dist/Page/AnnotationLayer.css';
 import 'react-pdf/dist/Page/TextLayer.css';
 import '../lib/pdfWorker';
@@ -92,6 +93,21 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
   const [toastMessage, setToastMessage] = useState('Bookmark saved');
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const isNativeEpub =
+    book.format === 'epub' ||
+    String(book.fileUrl || '').toLowerCase().split('?')[0].endsWith('.epub');
+  const [activeFormat, setActiveFormat] = useState<'epub' | 'pdf'>(
+    isNativeEpub ? 'epub' : 'pdf'
+  );
+
+  useEffect(() => {
+    setActiveFormat(
+      book.format === 'epub' ||
+        String(book.fileUrl || '').toLowerCase().split('?')[0].endsWith('.epub')
+        ? 'epub'
+        : 'pdf'
+    );
+  }, [book.id, book.format, book.fileUrl]);
 
   // Offline Engine & Cached Blob State
   const { isOnline, isBookCached, downloadBook, isDownloading, downloadProgress } = useOffline();
@@ -900,7 +916,9 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           <div>
             <h1 className="text-sm font-semibold truncate max-w-[150px] md:max-w-md opacity-95">{book.title}</h1>
             <p className="text-[11px] opacity-60">
-              {numPages ? `Page ${pageNumber} of ${numPages}` : (book.author || 'Academic Reader')}
+              {activeFormat === 'epub'
+                ? (numPages ? `Chapter ${pageNumber} of ${numPages} · Reflowable EPUB` : 'Reflowable EPUB')
+                : (numPages ? `Page ${pageNumber} of ${numPages}` : (book.author || 'Academic Reader'))}
             </p>
           </div>
         </div>
@@ -981,6 +999,27 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                   </button>
                 </div>
                 
+                {/* Reader Format Engine */}
+                <div>
+                  <div className="text-xs font-medium opacity-60 mb-2">Document Engine</div>
+                  <div className="flex items-center bg-black/5 dark:bg-white/5 p-1 rounded-xl">
+                    <button
+                      type="button"
+                      onClick={() => setActiveFormat('epub')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${activeFormat === 'epub' ? 'bg-white dark:bg-stone-800 shadow-sm text-brand-600 dark:text-brand-400' : 'opacity-70'}`}
+                    >
+                      EPUB Reflow
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setActiveFormat('pdf')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${activeFormat === 'pdf' ? 'bg-white dark:bg-stone-800 shadow-sm text-brand-600 dark:text-brand-400' : 'opacity-70'}`}
+                    >
+                      PDF Pages
+                    </button>
+                  </div>
+                </div>
+
                 {/* View Mode */}
                 <div className="flex items-center bg-black/5 dark:bg-white/5 p-1 rounded-xl">
                   <button
@@ -1081,7 +1120,30 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
             theme === 'dark' ? 'bg-[#1C1C1E]' : theme === 'amoled' ? 'bg-black' : 'bg-[#F4ECD8]'
           }`}
         >
-          {book ? (
+          {book && activeFormat === 'epub' ? (
+            <EpubReader
+              book={book}
+              sourceUrl={
+                (isNativeEpub && cachedBlobUrl) ||
+                (book.fileUrl && book.fileUrl.startsWith('http') && isNativeEpub
+                  ? book.fileUrl
+                  : `/api/download?key=${encodeURIComponent(book.fileUrl || book.id)}&format=epub`)
+              }
+              theme={theme}
+              fontSize={fontSize}
+              fontFamily={fontFamily}
+              isCachedLocally={isCachedLocally}
+              renderTextWithHighlights={renderTextWithHighlights}
+              onChapterProgress={(idx, total) => {
+                setPageNumber(idx + 1);
+                setNumPages(total);
+                if (total > 0 && onUpdateProgress) {
+                  const pct = Math.min(100, Math.round(((idx + 1) / total) * 100));
+                  onUpdateProgress(book.id, pct);
+                }
+              }}
+            />
+          ) : book ? (
             <div 
               ref={pdfContainerRef} 
               className={`flex-1 h-full overflow-y-auto flex justify-center pb-28 pt-2 transition-colors duration-250 ${

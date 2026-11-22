@@ -67,14 +67,34 @@ Run the function tests: `cd supabase/functions/ai-tutor && deno test --allow-env
 3. In **Authentication -> URL Configuration -> Redirect URLs**, add `io.supabase.eduai://login-callback` for mobile deep links.
 4. After generating `android/` and `ios/` in `mobile/`, register the custom URL scheme `io.supabase.eduai` (`host="login-callback"` in `android/app/src/main/AndroidManifest.xml`, and `CFBundleURLSchemes = ["io.supabase.eduai"]` in `ios/Runner/Info.plist`).
 
-## 4. Flutter app
+## 4. Flutter app (EPUB + PDF + Encrypted Offline Vault + AI Tutor)
 
 The app lives in `mobile/`. Key files:
 
+- `lib/core/models/book.dart` — `MobileBook`, `BookFormat` (`epub` / `pdf`), `PublisherSecurityPolicy`, and `OfflineVaultEntry`
+- `lib/core/services/offline_vault_service.dart` — AES-256-CBC + SHA-256 encrypted offline book storage backed by `flutter_secure_storage` (iOS Keychain / Android Keystore) and user-bound key derivation
+- `lib/core/services/books_repository.dart` — syncs unified catalog (`books`, `curriculum_books`, `/api/books`) and reading progress
+- `lib/features/library/` — Material 3 bookshelf filtering All, EPUB Reflowable, PDF, and Offline Vault books
+- `lib/features/reader/epub_reader_screen.dart` — reflowable EPUB reader (`epub_view`) loading decrypted in-memory bytes, ToC drawer, Paper/Sepia/Dark/AMOLED themes, CFI resume, and contextual "Ask Sage AI" jump
+- `lib/features/reader/pdf_reader_screen.dart` — native PDF reader (`pdfx`) loading decrypted in-memory bytes, page scrubber, night invert, and "Ask Sage AI" jump
+- `lib/features/reader/reader_router_screen.dart` — unlocks offline vault first or downloads & encrypts on demand before routing to EPUB or PDF reader
 - `lib/core/services/sse_parser.dart` — turns the SSE bytes into events (pure Dart, unit-tested)
 - `lib/core/services/tutor_service.dart` — calls the Edge Function, maps failures to student-friendly messages
-- `lib/features/tutor/` — Riverpod controller and chat screen
+- `lib/features/tutor/` — Riverpod controller and chat screen with active textbook context banner
 - `lib/features/auth/auth_screen.dart` — Google, Apple, GitHub OAuth + email/password sign-in and sign-up
-- `lib/app.dart` — go_router with sign-in redirect
+- `lib/app.dart` — `go_router` with sign-in redirect and `/library`, `/reader/:bookId`, and `/tutor` routes
 
-Setup is in the [README](README.md). Known gap: the tutor answers with LaTeX (`$$...$$`); `flutter_markdown` shows it as plain text until a math renderer (for example `flutter_math_fork`) is added.
+Run with optional `API_BASE_URL` so Flutter syncs directly with the backend `/api/books`, `/api/book-covers`, and `/api/download` endpoints:
+
+```bash
+cd mobile
+flutter pub get
+flutter test
+flutter run \
+  --dart-define=SUPABASE_URL=https://YOUR_REF.supabase.co \
+  --dart-define=SUPABASE_ANON_KEY=YOUR_ANON_KEY \
+  --dart-define=API_BASE_URL=https://your-eduai-server.example
+```
+
+Known gap: the tutor answers with LaTeX (`$$...$$`); `flutter_markdown` shows it as plain text until a math renderer (for example `flutter_math_fork`) is added.
+

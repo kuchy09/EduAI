@@ -1,12 +1,19 @@
-import { User, Bell, Shield, Moon, Smartphone, Type, Monitor, LogOut, HardDrive, Wifi, WifiOff, RefreshCw, Trash2, CheckCircle2, BookOpen, Bookmark, Highlighter, Database, Layers, Sparkles, LifeBuoy, Code, HelpCircle } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { User, Bell, Shield, Moon, Smartphone, Type, Monitor, LogOut, HardDrive, Wifi, WifiOff, RefreshCw, Trash2, CheckCircle2, BookOpen, Bookmark, Highlighter, Database, Layers, Sparkles, LifeBuoy, Code, HelpCircle, Lock, Copy } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { useOffline } from '../lib/useOffline';
 import { getAllCachedBooks, CachedBookMeta } from '../lib/offlineManager';
+import {
+  ACCOUNT_SYNC_EVENT,
+  getUserSettingsStorageKey,
+  pushAccountSyncPatch,
+  UserSettingsSync,
+} from '../lib/accountSyncService';
+import { safeStorage } from '../lib/safeStorage';
 import { Support } from './Support';
 import { Developer } from './Developer';
 
-export type SettingsTab = 'appearance' | 'notifications' | 'privacy' | 'offline' | 'support' | 'developer';
+export type SettingsTab = 'appearance' | 'notifications' | 'privacy' | 'offline' | 'flutter' | 'support' | 'developer';
 
 export interface SettingsProps {
   initialTab?: SettingsTab;
@@ -30,6 +37,9 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
   const [syncToast, setSyncToast] = useState(false);
   const [cachedBooksList, setCachedBooksList] = useState<CachedBookMeta[]>([]);
   const [isLoadingBooks, setIsLoadingBooks] = useState(false);
+  const [flutterManifest, setFlutterManifest] = useState<any>(null);
+  const [loadingFlutterManifest, setLoadingFlutterManifest] = useState(false);
+  const [copiedFlutterCmd, setCopiedFlutterCmd] = useState(false);
 
   useEffect(() => {
     if (activeTab === 'offline') {
@@ -40,20 +50,84 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
       }).catch(() => {
         setIsLoadingBooks(false);
       });
+    } else if (activeTab === 'flutter') {
+      setLoadingFlutterManifest(true);
+      fetch('/api/flutter/manifest')
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          setFlutterManifest(data);
+          setLoadingFlutterManifest(false);
+        })
+        .catch(() => setLoadingFlutterManifest(false));
     }
   }, [activeTab, storageStats.count]);
   
-  const [notifications, setNotifications] = useState({
-    study: JSON.parse(((() => { try { return localStorage.getItem('notify_study'); } catch (e) { return null; } })()) ?? 'true'),
-    mentions: JSON.parse(((() => { try { return localStorage.getItem('notify_mentions'); } catch (e) { return null; } })()) ?? 'true'),
-    recs: JSON.parse(((() => { try { return localStorage.getItem('notify_recs'); } catch (e) { return null; } })()) ?? 'false'),
-    progress: JSON.parse(((() => { try { return localStorage.getItem('notify_progress'); } catch (e) { return null; } })()) ?? 'false'),
+  const isUserInteractionRef = useRef(false);
+  const [notifications, setNotifications] = useState(() => {
+    const scoped = safeStorage.getJSON<UserSettingsSync | null>(getUserSettingsStorageKey(user?.id), null)?.notifyPrefs;
+    return {
+      study: scoped?.study ?? JSON.parse(((() => { try { return localStorage.getItem('notify_study'); } catch (e) { return null; } })()) ?? 'true'),
+      mentions: scoped?.mentions ?? JSON.parse(((() => { try { return localStorage.getItem('notify_mentions'); } catch (e) { return null; } })()) ?? 'true'),
+      recs: scoped?.recs ?? JSON.parse(((() => { try { return localStorage.getItem('notify_recs'); } catch (e) { return null; } })()) ?? 'false'),
+      progress: scoped?.progress ?? JSON.parse(((() => { try { return localStorage.getItem('notify_progress'); } catch (e) { return null; } })()) ?? 'false'),
+    };
   });
 
-  const [privacy, setPrivacy] = useState({
-    public: JSON.parse(((() => { try { return localStorage.getItem('privacy_public'); } catch (e) { return null; } })()) ?? 'true'),
-    data: JSON.parse(((() => { try { return localStorage.getItem('privacy_data'); } catch (e) { return null; } })()) ?? 'true'),
+  const [privacy, setPrivacy] = useState(() => {
+    const scoped = safeStorage.getJSON<UserSettingsSync | null>(getUserSettingsStorageKey(user?.id), null)?.privacyPrefs;
+    return {
+      public: scoped?.public ?? JSON.parse(((() => { try { return localStorage.getItem('privacy_public'); } catch (e) { return null; } })()) ?? 'true'),
+      data: scoped?.data ?? JSON.parse(((() => { try { return localStorage.getItem('privacy_data'); } catch (e) { return null; } })()) ?? 'true'),
+    };
   });
+
+  useEffect(() => {
+    const handleSync = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail?.userId && user?.id && detail.userId !== user.id) return;
+      const s: UserSettingsSync | undefined =
+        detail?.sync?.userSettings ||
+        safeStorage.getJSON<UserSettingsSync | null>(getUserSettingsStorageKey(user?.id), null) ||
+        undefined;
+      if (!s) return;
+      isUserInteractionRef.current = false;
+      if (s.theme) setTheme(s.theme);
+      if (s.fontSize) setFontSize(s.fontSize);
+      if (s.notifyPrefs) {
+        setNotifications((prev) => ({
+          ...prev,
+          ...(typeof s.notifyPrefs?.study === 'boolean' ? { study: s.notifyPrefs.study } : {}),
+          ...(typeof s.notifyPrefs?.mentions === 'boolean' ? { mentions: s.notifyPrefs.mentions } : {}),
+          ...(typeof s.notifyPrefs?.recs === 'boolean' ? { recs: s.notifyPrefs.recs } : {}),
+          ...(typeof s.notifyPrefs?.progress === 'boolean' ? { progress: s.notifyPrefs.progress } : {}),
+        }));
+      }
+      if (s.privacyPrefs) {
+        setPrivacy((prev) => ({
+          ...prev,
+          ...(typeof s.privacyPrefs?.public === 'boolean' ? { public: s.privacyPrefs.public } : {}),
+          ...(typeof s.privacyPrefs?.data === 'boolean' ? { data: s.privacyPrefs.data } : {}),
+        }));
+      }
+    };
+    window.addEventListener(ACCOUNT_SYNC_EVENT, handleSync);
+    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSync);
+  }, [user?.id]);
+
+  const persistAndSyncSettings = (next: Partial<UserSettingsSync>) => {
+    const payload: UserSettingsSync = {
+      theme,
+      fontSize,
+      notifyPrefs: notifications,
+      privacyPrefs: privacy,
+      ...next,
+      updatedAt: new Date().toISOString(),
+    };
+    safeStorage.setJSON(getUserSettingsStorageKey(user?.id), payload);
+    if (user?.id) {
+      pushAccountSyncPatch(user.id, { userSettings: payload });
+    }
+  };
 
   useEffect(() => {
     localStorage.setItem('theme', theme);
@@ -81,12 +155,30 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
     localStorage.setItem('privacy_data', JSON.stringify(privacy.data));
   }, [privacy]);
 
+  const selectTheme = (nextTheme: string) => {
+    setTheme(nextTheme);
+    persistAndSyncSettings({ theme: nextTheme });
+  };
+
+  const selectFontSize = (nextSize: string) => {
+    setFontSize(nextSize);
+    persistAndSyncSettings({ fontSize: nextSize });
+  };
+
   const toggleNotification = (key: keyof typeof notifications) => {
-    setNotifications(prev => ({ ...prev, [key]: !prev[key] }));
+    setNotifications(prev => {
+      const updated = { ...prev, [key]: !prev[key] };
+      persistAndSyncSettings({ notifyPrefs: updated });
+      return updated;
+    });
   };
 
   const togglePrivacy = (key: keyof typeof privacy) => {
-    setPrivacy(prev => ({ ...prev, [key]: !prev[key] }));
+    setPrivacy(prev => {
+      const updated = { ...prev, [key]: !prev[key] };
+      persistAndSyncSettings({ privacyPrefs: updated });
+      return updated;
+    });
   };
 
   const handleSignOut = async () => {
@@ -159,6 +251,16 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
             >
               <HardDrive className="w-4 h-4" /> Offline & Sync
             </button>
+            <button 
+              onClick={() => setActiveTab('flutter')}
+              className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl text-sm font-medium transition-colors ${activeTab === 'flutter' ? 'bg-slate-100 dark:bg-indigo-500/15 text-slate-900 dark:text-[#EDEDED] dark:border dark:border-indigo-500/30 font-semibold' : 'text-slate-600 dark:text-[#A0A0A0] hover:bg-slate-50 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-[#EDEDED]'}`}
+            >
+              <div className="flex items-center gap-3">
+                <Smartphone className="w-4 h-4" />
+                <span>Flutter & EPUB</span>
+              </div>
+              <span className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400">Mobile</span>
+            </button>
           </div>
 
           <div className="space-y-1 pt-3 border-t border-slate-200 dark:border-white/10">
@@ -186,45 +288,45 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
               <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] settings-overlay-card">
                  <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mb-2">Theme & Appearance</h3>
                  <p className="text-xs text-slate-500 dark:text-[#A0A0A0] mb-4">Choose your preferred reading and interface mode. Dark theme uses obsidian deep gray #121212 canvas with semi-transparent overlay panes.</p>
-                 <div className="grid grid-cols-3 gap-4">
-                   <button 
-                     onClick={() => setTheme('light')}
-                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'light' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
-                   >
-                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'light' ? 'bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300' : 'bg-slate-100 dark:bg-[#282828] text-slate-600 dark:text-[#A0A0A0]'}`}><User className="w-4 h-4" /></div>
-                     <span className={`text-sm font-medium ${theme === 'light' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>Light</span>
-                   </button>
-                   <button 
-                     onClick={() => setTheme('dark')}
-                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'dark' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
-                   >
-                     <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-slate-800 text-white'}`}><Moon className="w-4 h-4" /></div>
-                     <span className={`text-sm font-medium ${theme === 'dark' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>Deep Gray #121212</span>
-                   </button>
-                   <button 
-                     onClick={() => setTheme('system')}
-                     className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'system' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
-                   >
-                     <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-[#282828] flex items-center justify-center text-slate-600 dark:text-[#A0A0A0] shrink-0"><Smartphone className="w-4 h-4" /></div>
-                     <span className={`text-sm font-medium ${theme === 'system' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>System</span>
-                   </button>
-                 </div>
-              </div>
+                  <div className="grid grid-cols-3 gap-4">
+                    <button 
+                      onClick={() => selectTheme('light')}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'light' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
+                    >
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'light' ? 'bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300' : 'bg-slate-100 dark:bg-[#282828] text-slate-600 dark:text-[#A0A0A0]'}`}><User className="w-4 h-4" /></div>
+                      <span className={`text-sm font-medium ${theme === 'light' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>Light</span>
+                    </button>
+                    <button 
+                      onClick={() => selectTheme('dark')}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'dark' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
+                    >
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-slate-800 text-white'}`}><Moon className="w-4 h-4" /></div>
+                      <span className={`text-sm font-medium ${theme === 'dark' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>Deep Gray #121212</span>
+                    </button>
+                    <button 
+                      onClick={() => selectTheme('system')}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'system' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
+                    >
+                      <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-[#282828] flex items-center justify-center text-slate-600 dark:text-[#A0A0A0] shrink-0"><Smartphone className="w-4 h-4" /></div>
+                      <span className={`text-sm font-medium ${theme === 'system' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>System</span>
+                    </button>
+                  </div>
+               </div>
 
-              <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] settings-overlay-card">
-                 <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mb-4">Reading Preferences</h3>
-                 <div className="space-y-4">
-                   <div className="flex items-center justify-between p-4 border border-slate-100 dark:border-white/10 rounded-xl bg-slate-50/50 dark:bg-white/5">
-                      <div className="flex items-center gap-3">
-                        <Type className="w-5 h-5 text-slate-400 dark:text-[#8E8E93]" />
-                        <div>
-                          <div className="font-medium text-slate-900 dark:text-[#EDEDED]">Font Size</div>
-                          <div className="text-sm text-slate-500 dark:text-[#A0A0A0]">Adjust the default text size for the reader</div>
-                        </div>
-                      </div>
-                      <select 
-                        value={fontSize} 
-                        onChange={(e) => setFontSize(e.target.value)}
+               <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] settings-overlay-card">
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mb-4">Reading Preferences</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 border border-slate-100 dark:border-white/10 rounded-xl bg-slate-50/50 dark:bg-white/5">
+                       <div className="flex items-center gap-3">
+                         <Type className="w-5 h-5 text-slate-400 dark:text-[#8E8E93]" />
+                         <div>
+                           <div className="font-medium text-slate-900 dark:text-[#EDEDED]">Font Size</div>
+                           <div className="text-sm text-slate-500 dark:text-[#A0A0A0]">Adjust the default text size for the reader</div>
+                         </div>
+                       </div>
+                       <select 
+                         value={fontSize} 
+                         onChange={(e) => selectFontSize(e.target.value)}
                         className="bg-slate-50 dark:bg-[#202020] border border-slate-200 dark:border-white/10 rounded-lg px-3 py-1.5 text-sm font-medium text-slate-700 dark:text-[#EDEDED] outline-none focus:border-brand-500"
                       >
                         <option>Small</option>
@@ -569,6 +671,104 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
             </div>
           )}
 
+          {/* Flutter Mobile & Publisher EPUB Tab */}
+          {activeTab === 'flutter' && (
+            <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] space-y-6 settings-overlay-card">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] flex items-center gap-2">
+                    <Smartphone className="w-5 h-5 text-indigo-500" />
+                    Flutter Mobile Reader &amp; Publisher EPUB Pipeline
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-[#A0A0A0] mt-1">
+                    Reflowable EPUB, native PDF, and hardware-backed AES-256 offline storage synced across mobile and web.
+                  </p>
+                </div>
+                <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 whitespace-nowrap shrink-0">
+                  {flutterManifest?.minSdk || 'Flutter >= 3.3.0'}
+                </span>
+              </div>
+
+              {loadingFlutterManifest ? (
+                <div className="py-8 text-center text-xs text-slate-500 dark:text-[#A0A0A0]">
+                  Loading Flutter integration manifest...
+                </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/5">
+                      <div className="text-xs font-medium text-slate-500 dark:text-[#A0A0A0]">EPUB Reader Engine</div>
+                      <div className="text-sm font-bold text-slate-900 dark:text-[#EDEDED] mt-1 font-mono">
+                        {flutterManifest?.readerEngines?.epub?.package || 'epub_view: ^3.2.0'}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-[#A0A0A0] mt-1">
+                        Reflowable chapters · ToC · CFI resume
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/5">
+                      <div className="text-xs font-medium text-slate-500 dark:text-[#A0A0A0]">PDF Reader Engine</div>
+                      <div className="text-sm font-bold text-slate-900 dark:text-[#EDEDED] mt-1 font-mono">
+                        {flutterManifest?.readerEngines?.pdf?.package || 'pdfx: ^2.6.0'}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-[#A0A0A0] mt-1">
+                        Pinch zoom · Page jump · Night mode
+                      </div>
+                    </div>
+
+                    <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 bg-slate-50/70 dark:bg-white/5">
+                      <div className="text-xs font-medium text-slate-500 dark:text-[#A0A0A0] flex items-center gap-1">
+                        <Lock className="w-3.5 h-3.5 text-emerald-500" />
+                        Offline Encryption
+                      </div>
+                      <div className="text-sm font-bold text-slate-900 dark:text-[#EDEDED] mt-1 font-mono">
+                        {flutterManifest?.readerEngines?.offlineSecurity?.cipher || 'AES-256-CBC + SHA-256'}
+                      </div>
+                      <div className="text-xs text-slate-500 dark:text-[#A0A0A0] mt-1">
+                        {flutterManifest?.readerEngines?.offlineSecurity?.keyStorage || 'Keychain / Android Keystore'}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-[#EDEDED]">
+                        Run Flutter App Connected to This Backend
+                      </span>
+                      <span className="text-xs text-slate-500 dark:text-[#A0A0A0] tabular-nums">
+                        {flutterManifest?.catalogStats?.epubBooks ?? 0} EPUB · {flutterManifest?.catalogStats?.pdfBooks ?? 0} PDF uploaded
+                      </span>
+                    </div>
+                    <pre className="p-3 rounded-lg bg-slate-900 text-slate-100 text-xs font-mono overflow-x-auto">
+{`cd mobile && flutter pub get && flutter run \\
+  --dart-define=SUPABASE_URL=<YOUR_SUPABASE_URL> \\
+  --dart-define=SUPABASE_ANON_KEY=<YOUR_ANON_KEY> \\
+  --dart-define=API_BASE_URL=${flutterManifest?.apiBaseUrl || window.location.origin}`}
+                    </pre>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                      <span className="text-xs text-slate-500 dark:text-[#A0A0A0]">
+                        Publishers upload EPUB or PDF textbooks via Admin Platform; mobile &amp; web share identical canonical covers.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const cmd = `cd mobile && flutter pub get && flutter run --dart-define=API_BASE_URL=${flutterManifest?.apiBaseUrl || window.location.origin}`;
+                          navigator.clipboard?.writeText(cmd);
+                          setCopiedFlutterCmd(true);
+                          setTimeout(() => setCopiedFlutterCmd(false), 2500);
+                        }}
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                        {copiedFlutterCmd ? 'Copied Command' : 'Copy Launch Command'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Support Tab View */}
           {activeTab === 'support' && (
             <Support embedded onNavigate={onNavigate} />
@@ -580,7 +780,7 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
           )}
 
           {/* Helpful Navigation Footer for preferences */}
-          {['appearance', 'notifications', 'privacy', 'offline'].includes(activeTab) && (
+          {['appearance', 'notifications', 'privacy', 'offline', 'flutter'].includes(activeTab) && (
             <div className="p-4 rounded-2xl bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl border border-slate-200 dark:border-white/10 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs shadow-2xs settings-overlay-card">
               <div className="text-slate-500 dark:text-[#A0A0A0] text-center sm:text-left">
                 Need assistance with your account or curious about the project architect?

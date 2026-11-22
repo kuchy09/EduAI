@@ -11,16 +11,24 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import PDFDocument from "pdfkit";
 import { generateKLBPhysicsPdf } from "./server/klbPhysicsPdf";
+import { generateEducationalEpub } from "./server/epubBuilder";
+import {
+  generateAudiobookChapterScript,
+  synthesizeAudiobookSpeech,
+} from "./server/audiobookEngine";
 import {
   BookCoverOverride,
   CANONICAL_BOOK_COVERS,
   GLOBAL_BOOK_COVERS_ROW_ID,
   GLOBAL_BOOK_COVERS_ROW_TITLE,
+  SYSTEM_NOTIFICATIONS_ROW_ID,
+  SYSTEM_NOTIFICATIONS_ROW_TITLE,
   applyGlobalBookCover,
   isSystemBookConfigRow,
   mergeGlobalBookCoversMaps,
   normalizeBookCoverTitleKey,
 } from "./shared/canonicalBookCovers";
+import { ADMIN_EMAILS, isAuthorizedAdminEmail } from "./shared/adminAuth";
 import {
   addCommunityReplyAction,
   addGroupMemberAction,
@@ -34,6 +42,7 @@ import {
   hydrateFriendRequestsFromSupabase,
   listCommunityPosts,
   markConversationReadAction,
+  matchesDirectorySearchQuery,
   openOrCreateDirectConversation,
   removeFriendshipAction,
   respondToFriendRequestAction,
@@ -54,6 +63,7 @@ if (!fs.existsSync(UPLOADS_DIR)) {
 const BOOKS_CATALOG_FILE = path.join(UPLOADS_DIR, "books-catalog.json");
 const DELETED_BOOKS_FILE = path.join(UPLOADS_DIR, "deleted-books.json");
 const GLOBAL_BOOK_COVERS_FILE = path.join(UPLOADS_DIR, "global-book-covers.json");
+const SYSTEM_NOTIFICATIONS_FILE = path.join(UPLOADS_DIR, "system-notifications.json");
 
 function readLocalBooksCatalog(): any[] {
   try {
@@ -240,6 +250,101 @@ async function persistGlobalBookCoverUpdate(
   return next;
 }
 
+function mergeSystemNotificationsLists(...lists: Array<any[] | undefined | null>): any[] {
+  const byId = new Map<string, any>();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const item of list) {
+      if (!item || typeof item !== "object" || !item.id || !item.title) continue;
+      const prev = byId.get(String(item.id));
+      if (!prev) {
+        byId.set(String(item.id), { ...item });
+      } else {
+        const prevTs = Number(prev.createdAt) || 0;
+        const nextTs = Number(item.createdAt) || 0;
+        byId.set(String(item.id), nextTs >= prevTs ? { ...prev, ...item } : { ...item, ...prev });
+      }
+    }
+  }
+  return Array.from(byId.values())
+    .sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0))
+    .slice(0, 60);
+}
+
+function readSystemNotificationsFromDisk(): any[] {
+  try {
+    if (fs.existsSync(SYSTEM_NOTIFICATIONS_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(SYSTEM_NOTIFICATIONS_FILE, "utf-8"));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch (err) {
+    console.warn("[SystemNotifications] Failed reading disk file:", err);
+  }
+  return [];
+}
+
+function writeSystemNotificationsToDisk(notifs: any[]): void {
+  try {
+    if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+    const tmp = `${SYSTEM_NOTIFICATIONS_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(notifs, null, 2), "utf-8");
+    fs.renameSync(tmp, SYSTEM_NOTIFICATIONS_FILE);
+  } catch (err) {
+    console.warn("[SystemNotifications] Failed writing disk file:", err);
+  }
+}
+
+async function readSystemNotifications(sb?: SupabaseClient | null): Promise<any[]> {
+  const local = readSystemNotificationsFromDisk();
+  if (!sb) return local;
+  let cloud: any[] = [];
+  try {
+    const { data, error } = await sb
+      .from("books")
+      .select("id, description")
+      .eq("id", SYSTEM_NOTIFICATIONS_ROW_ID)
+      .maybeSingle();
+    if (!error && data?.description) {
+      const parsed = JSON.parse(data.description);
+      if (Array.isArray(parsed)) cloud = parsed;
+    }
+  } catch (_) {}
+
+  const merged = mergeSystemNotificationsLists(local, cloud);
+  if (merged.length !== local.length || JSON.stringify(merged) !== JSON.stringify(local)) {
+    writeSystemNotificationsToDisk(merged);
+  }
+  return merged;
+}
+
+async function persistSystemNotification(
+  notification: any,
+  sb?: SupabaseClient | null
+): Promise<any[]> {
+  const existing = await readSystemNotifications(sb);
+  const next = mergeSystemNotificationsLists([notification], existing);
+  writeSystemNotificationsToDisk(next);
+
+  const writeSb = getServerSupabase() || sb;
+  if (writeSb) {
+    try {
+      await writeSb.from("books").upsert(
+        {
+          id: SYSTEM_NOTIFICATIONS_ROW_ID,
+          title: SYSTEM_NOTIFICATIONS_ROW_TITLE,
+          author: "Edu AI System",
+          category: "__SYSTEM_CONFIG__",
+          description: JSON.stringify(next),
+          cover_image: "",
+        },
+        { onConflict: "id" }
+      );
+    } catch (_) {}
+  }
+
+  return next;
+}
+
 function isRealUrlEnv(val?: string): val is string {
   if (!val) return false;
   const trimmed = val.trim();
@@ -368,6 +473,26 @@ function computeServerSyncDigest(snap: any): string {
     .filter((k) => k !== "updated_at")
     .sort()
     .map((k) => [k, snap.profileSnapshot[k]]);
+  const ach = snap.achievements && typeof snap.achievements === "object" ? snap.achievements : null;
+  const achDigest = ach
+    ? [
+        Number(ach.totalEduPoints || 0),
+        Object.keys(ach.earnedBadges || {}).sort().length,
+        Array.isArray(ach.completedBookIds) ? ach.completedBookIds.length : 0,
+        Object.keys(ach.completedQuizIds || {}).sort().length,
+        Array.isArray(ach.completedPathSteps) ? ach.completedPathSteps.length : 0,
+      ]
+    : null;
+  const lpCount = Array.isArray(snap.learningPathSteps)
+    ? snap.learningPathSteps.map((s: any) => `${s?.id || s?.title || ""}:${s?.status || ""}`)
+    : [];
+  const quizDigest = Array.isArray(snap.generatedQuizzes)
+    ? snap.generatedQuizzes.map((q: any) => `${q?.id || ""}:${q?.status || ""}:${q?.score ?? ""}`)
+    : [];
+  const settingsDigest = snap.userSettings || null;
+  const progressKeys = Object.keys(snap.readingProgress || {})
+    .sort()
+    .map((k) => [k, snap.readingProgress[k]]);
   return JSON.stringify({
     s: safeSessions,
     d: delKeys,
@@ -379,7 +504,12 @@ function computeServerSyncDigest(snap: any): string {
     bc: coverKeys,
     bm: bmKeys,
     pr: profKeys,
+    rp: progressKeys,
     dg: snap.dailyGoal || null,
+    ac: achDigest,
+    lp: lpCount,
+    qz: quizDigest,
+    st: settingsDigest,
   });
 }
 
@@ -397,8 +527,31 @@ function hasMeaningfulSyncState(snap: any): boolean {
   const hasBookmarks = Array.isArray(snap.bookmarks) && snap.bookmarks.length > 0;
   const hasProfile = snap.profileSnapshot && Object.keys(snap.profileSnapshot).length > 0;
   const hasGoal = Boolean(snap.dailyGoal);
+  const hasProgress = snap.readingProgress && Object.keys(snap.readingProgress).length > 0;
+  const hasAchievements =
+    snap.achievements &&
+    typeof snap.achievements === "object" &&
+    (Number(snap.achievements.totalEduPoints || 0) > 0 ||
+      Object.keys(snap.achievements.earnedBadges || {}).length > 0 ||
+      (Array.isArray(snap.achievements.completedBookIds) && snap.achievements.completedBookIds.length > 0));
+  const hasLearningPath = Array.isArray(snap.learningPathSteps) && snap.learningPathSteps.length > 0;
+  const hasQuizzes = Array.isArray(snap.generatedQuizzes) && snap.generatedQuizzes.length > 0;
+  const hasSettings = Boolean(snap.userSettings && typeof snap.userSettings === "object");
   return Boolean(
-    aiMeaningful || hasDeleted || hasReader || hasPeer || hasBooks || hasCoverOverrides || hasBookmarks || hasProfile || hasGoal
+    aiMeaningful ||
+      hasDeleted ||
+      hasReader ||
+      hasPeer ||
+      hasBooks ||
+      hasCoverOverrides ||
+      hasBookmarks ||
+      hasProfile ||
+      hasGoal ||
+      hasProgress ||
+      hasAchievements ||
+      hasLearningPath ||
+      hasQuizzes ||
+      hasSettings
   );
 }
 
@@ -649,6 +802,107 @@ function serverMergeBookCoverOverrides(
   return result;
 }
 
+function serverMergeAchievements(a?: any, b?: any): any {
+  const safeA = a && typeof a === "object" ? a : {};
+  const safeB = b && typeof b === "object" ? b : {};
+  if (!Object.keys(safeA).length && !Object.keys(safeB).length) return undefined;
+
+  const earnedBadges: Record<string, any> = { ...(safeA.earnedBadges || {}) };
+  for (const [badgeId, unlock] of Object.entries(safeB.earnedBadges || {})) {
+    if (!unlock || typeof unlock !== "object") continue;
+    const prev = earnedBadges[badgeId];
+    if (!prev || String((unlock as any).unlockedAt || "") < String(prev.unlockedAt || "")) {
+      earnedBadges[badgeId] = unlock;
+    }
+  }
+
+  const completedBookIds = Array.from(
+    new Set([
+      ...(Array.isArray(safeA.completedBookIds) ? safeA.completedBookIds : []),
+      ...(Array.isArray(safeB.completedBookIds) ? safeB.completedBookIds : []),
+    ])
+  );
+
+  const completedQuizIds: Record<string, any> = { ...(safeA.completedQuizIds || {}) };
+  for (const [qId, rec] of Object.entries(safeB.completedQuizIds || {})) {
+    if (!rec || typeof rec !== "object") continue;
+    const prev = completedQuizIds[qId];
+    if (!prev) {
+      completedQuizIds[qId] = rec;
+    } else {
+      completedQuizIds[qId] = {
+        bestScore: Math.max(Number(prev.bestScore || 0), Number((rec as any).bestScore || 0)),
+        completedAt: prev.completedAt || (rec as any).completedAt || new Date().toISOString(),
+        pointsAwarded: Math.max(Number(prev.pointsAwarded || 0), Number((rec as any).pointsAwarded || 0)),
+      };
+    }
+  }
+
+  const completedPathSteps = Array.from(
+    new Set([
+      ...(Array.isArray(safeA.completedPathSteps) ? safeA.completedPathSteps : []),
+      ...(Array.isArray(safeB.completedPathSteps) ? safeB.completedPathSteps : []),
+    ])
+  );
+
+  const ledgerMap = new Map<string, any>();
+  for (const ev of [
+    ...(Array.isArray(safeA.rewardHistory) ? safeA.rewardHistory : []),
+    ...(Array.isArray(safeB.rewardHistory) ? safeB.rewardHistory : []),
+  ]) {
+    if (!ev || !ev.id) continue;
+    if (!ledgerMap.has(ev.id)) ledgerMap.set(ev.id, ev);
+  }
+  const rewardHistory = Array.from(ledgerMap.values())
+    .sort((x, y) => String(y.timestamp || "").localeCompare(String(x.timestamp || "")))
+    .slice(0, 60);
+
+  const ledgerSum = Array.from(ledgerMap.values()).reduce((sum, ev) => sum + Number(ev.points || 0), 0);
+  const totalEduPoints = Math.max(
+    Number(safeA.totalEduPoints || 0),
+    Number(safeB.totalEduPoints || 0),
+    ledgerSum
+  );
+
+  const updA = String(safeA.updatedAt || "");
+  const updB = String(safeB.updatedAt || "");
+  return {
+    totalEduPoints,
+    earnedBadges,
+    completedBookIds,
+    completedQuizIds,
+    completedPathSteps,
+    rewardHistory,
+    updatedAt: updB >= updA ? updB || updA || new Date().toISOString() : updA,
+  };
+}
+
+function serverMergeQuizzes(listA: any[] = [], listB: any[] = []): any[] {
+  const byId = new Map<string, any>();
+  for (const q of [...(Array.isArray(listA) ? listA : []), ...(Array.isArray(listB) ? listB : [])]) {
+    if (!q || typeof q !== "object" || !q.id) continue;
+    const prev = byId.get(q.id);
+    if (!prev) {
+      byId.set(q.id, q);
+      continue;
+    }
+    const prevDone = prev.status === "completed";
+    const nextDone = q.status === "completed";
+    if (nextDone && !prevDone) {
+      byId.set(q.id, { ...prev, ...q });
+    } else if (prevDone && !nextDone) {
+      byId.set(q.id, prev);
+    } else if (prevDone && nextDone) {
+      const prevScore = Number(prev.score ?? -1);
+      const nextScore = Number(q.score ?? -1);
+      byId.set(q.id, nextScore >= prevScore ? { ...prev, ...q } : { ...q, ...prev });
+    } else {
+      byId.set(q.id, { ...prev, ...q });
+    }
+  }
+  return Array.from(byId.values());
+}
+
 function mergeSyncSnapshots(snapshots: any[]): any {
   const valid = snapshots.filter((c) => c && typeof c === "object");
   if (valid.length === 0) return {};
@@ -720,6 +974,23 @@ function mergeSyncSnapshots(snapshots: any[]): any {
     }
     if (snap.dailyGoal && typeof snap.dailyGoal === "object") {
       acc.dailyGoal = snap.dailyGoal;
+    }
+    if (snap.achievements && typeof snap.achievements === "object") {
+      acc.achievements = serverMergeAchievements(acc.achievements, snap.achievements);
+    }
+    if (Array.isArray(snap.learningPathSteps) && snap.learningPathSteps.length > 0) {
+      acc.learningPathSteps = snap.learningPathSteps;
+    }
+    if (Array.isArray(snap.generatedQuizzes) && snap.generatedQuizzes.length > 0) {
+      acc.generatedQuizzes = serverMergeQuizzes(acc.generatedQuizzes || [], snap.generatedQuizzes);
+    }
+    if (snap.userSettings && typeof snap.userSettings === "object") {
+      const prevTs = acc.userSettings?.updatedAt ? Date.parse(acc.userSettings.updatedAt) || 0 : 0;
+      const nextTs = snap.userSettings.updatedAt ? Date.parse(snap.userSettings.updatedAt) || 0 : 0;
+      acc.userSettings =
+        nextTs >= prevTs
+          ? { ...(acc.userSettings || {}), ...snap.userSettings }
+          : { ...snap.userSettings, ...(acc.userSettings || {}) };
     }
     if (snap.updatedAt) {
       acc.updatedAt = snap.updatedAt;
@@ -953,6 +1224,326 @@ async function writeServerUserSync(userId: string, patch: any, sb?: SupabaseClie
   }
 
   return nextState;
+}
+
+const ADMIN_EMAIL_SET = new Set(ADMIN_EMAILS.map((e) => e.toLowerCase()));
+
+function normalizeCanonicalProfileRole(rawRole: any, email?: string): string {
+  const emailLower = String(email || "").trim().toLowerCase();
+  if (emailLower && (ADMIN_EMAIL_SET.has(emailLower) || isAuthorizedAdminEmail(emailLower))) return "admin";
+  const val = String(rawRole || "").trim().toLowerCase();
+  if (val === "admin" || val === "teacher" || val === "educator" || val === "parent" || val === "student") {
+    return val;
+  }
+  return "student";
+}
+
+function firstNonEmptyString(...vals: any[]): string | null {
+  for (const v of vals) {
+    if (typeof v === "string" && v.trim().length > 0) {
+      return v.trim();
+    }
+  }
+  return null;
+}
+
+async function ensureCanonicalUserProfile(
+  authUser: any,
+  sb?: SupabaseClient | null,
+  options?: { extraPatch?: Record<string, any>; existingSync?: any }
+): Promise<any> {
+  if (!authUser?.id) return null;
+  const userId = authUser.id;
+  const meta = authUser.user_metadata && typeof authUser.user_metadata === "object" ? authUser.user_metadata : {};
+  const extra = options?.extraPatch && typeof options.extraPatch === "object" ? options.extraPatch : {};
+  const privSb = getServerSupabase() || sb || null;
+
+  let existingProf: any = null;
+  if (privSb) {
+    try {
+      const { data } = await privSb.from("profiles").select("*").eq("id", userId).maybeSingle();
+      if (data) existingProf = data;
+    } catch (_) {}
+  }
+
+  let syncState = options?.existingSync;
+  if (!syncState) {
+    try {
+      syncState = await readServerUserSync(userId, sb || privSb);
+    } catch (_) {
+      syncState = {};
+    }
+  }
+  const snap = syncState?.profileSnapshot && typeof syncState.profileSnapshot === "object" ? syncState.profileSnapshot : {};
+
+  const email = firstNonEmptyString(extra.email, existingProf?.email, snap.email, authUser.email, meta.email);
+  const phone = firstNonEmptyString(extra.phone, existingProf?.phone, snap.phone, authUser.phone);
+
+  const metaComposedName = firstNonEmptyString(
+    meta.full_name,
+    meta.name,
+    [meta.given_name, meta.family_name].filter(Boolean).join(" ").trim(),
+    meta.preferred_username,
+    meta.user_name
+  );
+  const fullName =
+    firstNonEmptyString(
+      extra.full_name,
+      existingProf?.full_name,
+      snap.full_name,
+      metaComposedName,
+      email ? email.split("@")[0] : null,
+      phone
+    ) || "Edu AI Scholar";
+
+  const isRelativeUploadKey = (val: string) =>
+    !val.startsWith("http://") &&
+    !val.startsWith("https://") &&
+    !val.startsWith("data:") &&
+    !val.startsWith("blob:") &&
+    !val.startsWith("/api/");
+
+  const avatarCandidates = [
+    extra.avatar_url,
+    existingProf?.avatar_url,
+    snap.avatar_url,
+    meta.avatar_url,
+    meta.picture,
+  ]
+    .filter((v): v is string => typeof v === "string" && v.trim().length > 0 && !v.includes("unsplash.com") && !v.includes("photo-1534528741775-53994a69daeb"))
+    .map((v) => v.trim());
+
+  let avatarUrl: string | null = extra.avatar_url ? avatarCandidates[0] || null : null;
+  if (!avatarUrl && avatarCandidates.length > 0) {
+    // Prefer direct portable URLs (https://, data:image/...) if a candidate is a missing local upload key
+    for (const cand of avatarCandidates) {
+      if (!isRelativeUploadKey(cand)) {
+        avatarUrl = cand;
+        break;
+      }
+      const cleanRel = cand.replace(/^\/+/, "").replace(/^uploads\/+/, "");
+      const existsOnDisk =
+        fs.existsSync(path.join(UPLOADS_DIR, cand)) ||
+        fs.existsSync(path.join(UPLOADS_DIR, cleanRel));
+      if (existsOnDisk) {
+        avatarUrl = cand;
+        break;
+      }
+      // Check Supabase Storage if available before skipping relative key
+      let existsInSupabase = false;
+      if (privSb) {
+        const cleanVariants = Array.from(new Set([cand.replace(/^\/+/, ""), cleanRel]));
+        for (const bucket of ["avatars", "workspace-files", "uploads"]) {
+          for (const pathKey of cleanVariants) {
+            try {
+              const { data: dl } = await privSb.storage.from(bucket).download(pathKey);
+              if (dl) {
+                existsInSupabase = true;
+                break;
+              }
+            } catch (_) {}
+          }
+          if (existsInSupabase) break;
+        }
+      }
+      if (existsInSupabase) {
+        avatarUrl = cand;
+        break;
+      }
+    }
+    if (!avatarUrl) {
+      avatarUrl = avatarCandidates[0] || null;
+    }
+  }
+
+  const role = normalizeCanonicalProfileRole(
+    extra.role || existingProf?.role || snap.role || meta.role,
+    email || undefined
+  );
+
+  const country = firstNonEmptyString(extra.country, existingProf?.country, snap.country, meta.country, existingProf?.location, snap.location, meta.location);
+  const location = firstNonEmptyString(extra.location, existingProf?.location, snap.location, meta.location, country);
+  const educationLevel = firstNonEmptyString(
+    extra.education_level,
+    existingProf?.education_level,
+    snap.education_level,
+    meta.education_level
+  );
+  const curriculum = firstNonEmptyString(extra.curriculum, existingProf?.curriculum, snap.curriculum, meta.curriculum);
+  const fieldOfStudy = firstNonEmptyString(
+    extra.field_of_study,
+    existingProf?.field_of_study,
+    snap.field_of_study,
+    meta.field_of_study
+  );
+  const rawSubjects =
+    extra.subjects !== undefined
+      ? Array.isArray(extra.subjects)
+        ? extra.subjects.map((s: any) => String(s).trim()).filter(Boolean).join(", ")
+        : extra.subjects
+      : existingProf?.subjects || snap.subjects || meta.subjects;
+  const subjects = typeof rawSubjects === "string" && rawSubjects.trim() ? rawSubjects.trim() : null;
+  const dob = firstNonEmptyString(extra.dob, existingProf?.dob, snap.dob, meta.dob);
+  const title = firstNonEmptyString(
+    extra.title,
+    existingProf?.title,
+    snap.title,
+    meta.title,
+    fieldOfStudy ? `${fieldOfStudy} Scholar` : curriculum ? `${curriculum} Learner` : role === "teacher" ? "Faculty Educator" : null
+  );
+  const institution = firstNonEmptyString(
+    extra.institution,
+    existingProf?.institution,
+    snap.institution,
+    meta.institution,
+    educationLevel ? `${educationLevel} • Edu AI` : null
+  );
+  const bio = firstNonEmptyString(extra.bio, existingProf?.bio, snap.bio, meta.bio);
+  const username =
+    firstNonEmptyString(existingProf?.username, snap.username, meta.user_name, meta.preferred_username) ||
+    `${fullName.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "learner"}_${String(userId).slice(0, 6)}`;
+
+  const nowIso = new Date().toISOString();
+  const canonical: Record<string, any> = {
+    id: userId,
+    username,
+    full_name: fullName,
+    email,
+    phone,
+    dob,
+    avatar_url: avatarUrl,
+    role,
+    country,
+    location,
+    education_level: educationLevel,
+    curriculum,
+    field_of_study: fieldOfStudy,
+    subjects,
+    title,
+    institution,
+    bio,
+    status: "online",
+    updated_at: nowIso,
+  };
+
+  const needsDbUpsert =
+    !existingProf ||
+    Object.keys(extra).length > 0 ||
+    existingProf.full_name !== canonical.full_name ||
+    (canonical.email && existingProf.email !== canonical.email) ||
+    existingProf.role !== canonical.role ||
+    (canonical.avatar_url && !existingProf.avatar_url) ||
+    (canonical.country && !existingProf.country) ||
+    (canonical.education_level && !existingProf.education_level) ||
+    (canonical.curriculum && !existingProf.curriculum) ||
+    (canonical.field_of_study && !existingProf.field_of_study) ||
+    (canonical.subjects && !existingProf.subjects) ||
+    !existingProf.username;
+
+  let persistedProfile = { ...(existingProf || {}), ...canonical };
+  if (privSb && needsDbUpsert) {
+    try {
+      const dbRow: Record<string, any> = { ...canonical };
+      // Omit optional columns if null to maximize compatibility across schemas
+      if (!dbRow.dob) delete dbRow.dob;
+      const { data: upserted, error: upsErr } = await privSb
+        .from("profiles")
+        .upsert(dbRow, { onConflict: "id" })
+        .select("*")
+        .maybeSingle();
+      if (!upsErr && upserted) {
+        persistedProfile = upserted;
+      } else if (upsErr) {
+        // Retry minimal safe column set in case optional columns differ
+        const minimalRow: Record<string, any> = {
+          id: userId,
+          full_name: fullName,
+          email,
+          avatar_url: avatarUrl,
+          role,
+          country,
+          location,
+          education_level: educationLevel,
+          curriculum,
+          field_of_study: fieldOfStudy,
+          subjects,
+          updated_at: nowIso,
+        };
+        const { data: minData } = await privSb
+          .from("profiles")
+          .upsert(minimalRow, { onConflict: "id" })
+          .select("*")
+          .maybeSingle();
+        if (minData) persistedProfile = { ...canonical, ...minData };
+      }
+    } catch (_) {}
+  }
+
+  const finalCanonical = {
+    ...canonical,
+    ...persistedProfile,
+    role,
+    full_name: persistedProfile.full_name || fullName,
+    email: persistedProfile.email || email,
+    avatar_url: persistedProfile.avatar_url || avatarUrl,
+    country: persistedProfile.country || country,
+    location: persistedProfile.location || location,
+    education_level: persistedProfile.education_level || educationLevel,
+    curriculum: persistedProfile.curriculum || curriculum,
+    field_of_study: persistedProfile.field_of_study || fieldOfStudy,
+    subjects: persistedProfile.subjects || subjects,
+  };
+
+  // Keep user_sync profileSnapshot aligned for offline / cross-device fallback
+  const snapDiffers =
+    !snap ||
+    !snap.full_name ||
+    snap.role !== finalCanonical.role ||
+    snap.country !== finalCanonical.country ||
+    snap.education_level !== finalCanonical.education_level ||
+    snap.subjects !== finalCanonical.subjects ||
+    snap.avatar_url !== finalCanonical.avatar_url ||
+    Object.keys(extra).length > 0;
+  if (snapDiffers) {
+    try {
+      await writeServerUserSync(userId, { profileSnapshot: finalCanonical }, sb || privSb);
+    } catch (_) {}
+  }
+
+  // Keep social user directory synchronized for all existing & new accounts
+  try {
+    await syncUserProfileToStoreAndSupabase(
+      {
+        ...authUser,
+        email: finalCanonical.email || authUser.email,
+        user_metadata: {
+          ...meta,
+          full_name: finalCanonical.full_name,
+          avatar_url: finalCanonical.avatar_url || undefined,
+          role: finalCanonical.role,
+          country: finalCanonical.country || undefined,
+          location: finalCanonical.location || undefined,
+          education_level: finalCanonical.education_level || undefined,
+          curriculum: finalCanonical.curriculum || undefined,
+          field_of_study: finalCanonical.field_of_study || undefined,
+          subjects: finalCanonical.subjects || undefined,
+          title: finalCanonical.title || undefined,
+          institution: finalCanonical.institution || undefined,
+          bio: finalCanonical.bio || undefined,
+        },
+      },
+      null,
+      {
+        name: finalCanonical.full_name,
+        email: finalCanonical.email || "",
+        avatar: finalCanonical.avatar_url || "",
+        location: finalCanonical.location || finalCanonical.country || "",
+        subjects: parseSubjectsList(finalCanonical.subjects),
+      }
+    );
+  } catch (_) {}
+
+  return finalCanonical;
 }
 
 const rawEndpoint = process.env.B2_ENDPOINT || "https://s3.us-west-004.backblazeb2.com";
@@ -1472,6 +2063,14 @@ function getMimeType(filename: string, defaultType = 'application/octet-stream')
       return 'image/svg+xml';
     case '.pdf':
       return 'application/pdf';
+    case '.epub':
+      return 'application/epub+zip';
+    case '.opf':
+      return 'application/oebps-package+xml';
+    case '.ncx':
+      return 'application/x-dtbncx+xml';
+    case '.xhtml':
+      return 'application/xhtml+xml';
     case '.txt':
       return 'text/plain';
     case '.json':
@@ -1526,15 +2125,18 @@ app.post("/api/auth/session", async (req, res) => {
     if (userErr || !userData?.user) {
       return res.status(401).json({ error: "Invalid or expired session." });
     }
-    let profile = null;
-    try {
-      const { data: profileData } = await sb
-        .from("profiles")
-        .select("*")
-        .eq("id", userData.user.id)
-        .maybeSingle();
-      profile = profileData || null;
-    } catch (_) {}
+    const authedSb = getServerSupabase(accessToken) || sb;
+    const profile = await ensureCanonicalUserProfile(userData.user, authedSb);
+    await syncUserProfileToStoreAndSupabase(userData.user, getServerSupabase() || authedSb, profile ? {
+      name: profile.full_name,
+      role: normalizeRole(profile.role, profile.email),
+      title: profile.title,
+      institution: profile.institution,
+      subjects: parseSubjectsList(profile.subjects),
+      bio: profile.bio,
+      location: profile.location || profile.country,
+      avatar: profile.avatar_url,
+    } : undefined).catch(() => {});
 
     return res.json({
       session: {
@@ -1550,11 +2152,103 @@ app.post("/api/auth/session", async (req, res) => {
   }
 });
 
-// Validate active Bearer JWT (and optionally refresh via x-refresh-token if expired)
-app.get("/api/auth/user", async (req, res) => {
+function sanitizeMetadataForJwt(meta: Record<string, any> | null | undefined): {
+  cleaned: Record<string, any>;
+  hadBloat: boolean;
+  extractedAvatar: string;
+} {
+  const src = meta && typeof meta === "object" ? meta : {};
+  const cleaned: Record<string, any> = {};
+  let hadBloat = false;
+  let extractedAvatar = "";
+
+  for (const [k, v] of Object.entries(src)) {
+    if (
+      (k === "avatar_url" || k === "profile_photo_key" || k === "picture") &&
+      typeof v === "string"
+    ) {
+      const trimmed = v.trim();
+      if (trimmed.startsWith("data:") || trimmed.length > 512) {
+        hadBloat = true;
+        if (!extractedAvatar && trimmed.startsWith("data:image/")) {
+          extractedAvatar = trimmed;
+        }
+        continue;
+      }
+    }
+    if (typeof v === "string" && v.length > 2048) {
+      hadBloat = true;
+      continue;
+    }
+    cleaned[k] = v;
+  }
+  return { cleaned, hadBloat, extractedAvatar };
+}
+
+async function scrubBloatedUserMetadata(user: any, sb?: SupabaseClient | null): Promise<boolean> {
+  if (!user?.id) return false;
+  const adminSb = getServerSupabase() || sb;
+  if (!adminSb?.auth?.admin?.updateUserById) return false;
+  const { cleaned, hadBloat, extractedAvatar } = sanitizeMetadataForJwt(user.user_metadata);
+  if (!hadBloat) return false;
+
+  try {
+    if (extractedAvatar) {
+      try {
+        await adminSb
+          .from("profiles")
+          .upsert(
+            {
+              id: user.id,
+              email: user.email || null,
+              avatar_url: extractedAvatar,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "id" }
+          );
+      } catch {
+        // Non-fatal: continue scrubbing user_metadata even if profiles upsert fails
+      }
+    }
+    await adminSb.auth.admin.updateUserById(user.id, { user_metadata: cleaned });
+    user.user_metadata = cleaned;
+    return true;
+  } catch (err) {
+    console.warn("[Auth] scrubBloatedUserMetadata warning:", err);
+    return false;
+  }
+}
+
+function extractRequestAuthTokens(req: express.Request): { token: string; refreshToken: string; fromBody: boolean } {
   const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
-  const refreshToken = typeof req.headers["x-refresh-token"] === "string" ? req.headers["x-refresh-token"].trim() : "";
+  const headerToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const bodyToken =
+    typeof req.body?.access_token === "string"
+      ? req.body.access_token.trim()
+      : typeof req.body?._accessToken === "string"
+      ? req.body._accessToken.trim()
+      : "";
+
+  const headerRefresh = typeof req.headers["x-refresh-token"] === "string" ? req.headers["x-refresh-token"].trim() : "";
+  const bodyRefresh =
+    typeof req.body?.refresh_token === "string"
+      ? req.body.refresh_token.trim()
+      : typeof req.body?._refreshToken === "string"
+      ? req.body._refreshToken.trim()
+      : "";
+
+  const token = (headerToken || bodyToken).replace(/[\r\n]+/g, "").trim();
+  const refreshToken = (headerRefresh || bodyRefresh).replace(/[\r\n]+/g, "").trim();
+  return {
+    token,
+    refreshToken,
+    fromBody: !headerToken && Boolean(bodyToken),
+  };
+}
+
+// Validate active Bearer JWT (or POST body token fallback) and optionally refresh via refreshToken
+async function handleAuthUserRequest(req: express.Request, res: express.Response) {
+  const { token, refreshToken } = extractRequestAuthTokens(req);
 
   const sb = getServerSupabase(token);
   if (!sb) {
@@ -1566,7 +2260,7 @@ app.get("/api/auth/user", async (req, res) => {
   }
 
   try {
-    let activeUser = null;
+    let activeUser: any = null;
     let activeAccessToken = token;
     let refreshedSession: any = null;
 
@@ -1574,20 +2268,15 @@ app.get("/api/auth/user", async (req, res) => {
     if (!userErr && userData?.user) {
       activeUser = userData.user;
     } else if (refreshToken) {
-      const authSb = getServerSupabase();
-      if (authSb) {
-        const { data: refreshData, error: refreshErr } = await authSb.auth.refreshSession({
-          refresh_token: refreshToken,
-        });
-        if (!refreshErr && refreshData?.session?.user) {
-          activeUser = refreshData.session.user;
-          activeAccessToken = refreshData.session.access_token;
-          refreshedSession = {
-            access_token: refreshData.session.access_token,
-            refresh_token: refreshData.session.refresh_token,
-            user: refreshData.session.user,
-          };
-        }
+      const refreshed = await refreshSupabaseSessionDeduped(refreshToken);
+      if (refreshed?.user) {
+        activeUser = refreshed.user;
+        activeAccessToken = refreshed.access_token;
+        refreshedSession = {
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+          user: refreshed.user,
+        };
       }
     }
 
@@ -1595,32 +2284,25 @@ app.get("/api/auth/user", async (req, res) => {
       return res.status(401).json({ error: "Session expired or invalid." });
     }
 
-    const authedSb = getServerSupabase(activeAccessToken) || sb;
-    let profile: any = null;
-    try {
-      const { data: profileData } = await authedSb
-        .from("profiles")
-        .select("*")
-        .eq("id", activeUser.id)
-        .maybeSingle();
-      profile = profileData || null;
-    } catch (_) {}
-
-    try {
-      const syncData = await readServerUserSync(activeUser.id, authedSb);
-      if (syncData?.profileSnapshot && typeof syncData.profileSnapshot === "object") {
-        profile = {
-          ...(syncData.profileSnapshot || {}),
-          ...(profile || {}),
-          avatar_url: profile?.avatar_url || syncData.profileSnapshot.avatar_url || activeUser.user_metadata?.avatar_url || null,
-          country: profile?.country || syncData.profileSnapshot.country || activeUser.user_metadata?.country || null,
-          education_level: profile?.education_level || syncData.profileSnapshot.education_level || activeUser.user_metadata?.education_level || null,
-          curriculum: profile?.curriculum || syncData.profileSnapshot.curriculum || activeUser.user_metadata?.curriculum || null,
-          field_of_study: profile?.field_of_study || syncData.profileSnapshot.field_of_study || activeUser.user_metadata?.field_of_study || null,
-          subjects: profile?.subjects || syncData.profileSnapshot.subjects || activeUser.user_metadata?.subjects || null,
-        };
+    // If caller sent an oversized bloated JWT (>3500 chars), strip base64 bloat from user_metadata & mint a compact token
+    if (token.length > 3500) {
+      const scrubbed = await scrubBloatedUserMetadata(activeUser, getServerSupabase());
+      if (scrubbed && refreshToken) {
+        const refreshed = await refreshSupabaseSessionDeduped(refreshToken);
+        if (refreshed?.user?.id && refreshed?.access_token && refreshed.access_token.length < token.length) {
+          activeUser = refreshed.user;
+          activeAccessToken = refreshed.access_token;
+          refreshedSession = {
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token,
+            user: refreshed.user,
+          };
+        }
       }
-    } catch (_) {}
+    }
+
+    const authedSb = getServerSupabase(activeAccessToken) || sb;
+    const profile = await ensureCanonicalUserProfile(activeUser, authedSb);
 
     return res.json({
       user: activeUser,
@@ -1631,7 +2313,10 @@ app.get("/api/auth/user", async (req, res) => {
     console.error("[Auth] /api/auth/user failed:", err);
     return res.status(401).json({ error: "Session verification failed." });
   }
-});
+}
+
+app.get("/api/auth/user", handleAuthUserRequest);
+app.post("/api/auth/user", handleAuthUserRequest);
 
 // Server-proxied Email Sign-In fallback when browser anon key env var is not yet injected
 app.post("/api/auth/signin", async (req, res) => {
@@ -1639,7 +2324,7 @@ app.post("/api/auth/signin", async (req, res) => {
   if (!sb) {
     return res.status(503).json({ error: "Authentication service is not configured." });
   }
-  const email = typeof req.body?.email === "string" ? req.body.email.trim() : "";
+  const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
   const password = typeof req.body?.password === "string" ? req.body.password : "";
   if (!email || !password) {
     return res.status(400).json({ error: "Email and password are required." });
@@ -1651,24 +2336,39 @@ app.post("/api/auth/signin", async (req, res) => {
       return res.status(401).json({ error: error?.message || "Invalid email or password." });
     }
 
-    let profile = null;
-    try {
-      const profSb = getServerSupabase();
-      if (profSb && data.user?.id) {
-        const { data: profileData } = await profSb
-          .from("profiles")
-          .select("*")
-          .eq("id", data.user.id)
-          .maybeSingle();
-        profile = profileData || null;
+    let finalSession = data.session;
+    let finalUser = data.user;
+    if (finalUser?.id && String(finalSession.access_token || "").length > 3500) {
+      const scrubbed = await scrubBloatedUserMetadata(finalUser, sb);
+      if (scrubbed && finalSession.refresh_token) {
+        const refreshed = await refreshSupabaseSessionDeduped(finalSession.refresh_token);
+        if (refreshed?.access_token && refreshed?.user) {
+          finalSession = refreshed;
+          finalUser = refreshed.user;
+        }
       }
-    } catch (_) {}
+    }
+
+    const profSb = getServerSupabase(finalSession.access_token) || sb;
+    const profile = finalUser?.id ? await ensureCanonicalUserProfile(finalUser, profSb) : null;
+    if (finalUser?.id) {
+      await syncUserProfileToStoreAndSupabase(finalUser, getServerSupabase() || profSb, profile ? {
+        name: profile.full_name,
+        role: normalizeRole(profile.role, profile.email),
+        title: profile.title,
+        institution: profile.institution,
+        subjects: parseSubjectsList(profile.subjects),
+        bio: profile.bio,
+        location: profile.location || profile.country,
+        avatar: profile.avatar_url,
+      } : undefined).catch(() => {});
+    }
 
     return res.json({
       session: {
-        access_token: data.session.access_token,
-        refresh_token: data.session.refresh_token,
-        user: data.user,
+        access_token: finalSession.access_token,
+        refresh_token: finalSession.refresh_token,
+        user: finalUser,
       },
       profile,
     });
@@ -1706,6 +2406,29 @@ app.post("/api/auth/signup", async (req, res) => {
       return res.status(400).json({ error: error.message || "Could not create account." });
     }
 
+    let profile: any = null;
+    if (data.user?.id) {
+      const profSb = data.session?.access_token ? getServerSupabase(data.session.access_token) || sb : sb;
+      profile = await ensureCanonicalUserProfile(data.user, profSb, {
+        extraPatch: { ...metadata, email },
+      });
+      await syncUserProfileToStoreAndSupabase(data.user, getServerSupabase() || profSb, profile ? {
+        name: profile.full_name,
+        role: normalizeRole(profile.role, profile.email),
+        title: profile.title,
+        institution: profile.institution,
+        subjects: parseSubjectsList(profile.subjects),
+        bio: profile.bio,
+        location: profile.location || profile.country,
+        avatar: profile.avatar_url,
+      } : undefined).catch(() => {});
+      broadcastAllConnectedUsers({
+        type: "social:directory-updated",
+        userId: data.user.id,
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
     return res.json({
       session: data.session
         ? {
@@ -1715,6 +2438,7 @@ app.post("/api/auth/signup", async (req, res) => {
           }
         : null,
       user: data.user || null,
+      profile,
     });
   } catch (err) {
     console.error("[Auth] /api/auth/signup error:", err);
@@ -1759,12 +2483,27 @@ app.post("/api/auth/otp-verify", async (req, res) => {
     if (error || !data?.session) {
       return res.status(401).json({ error: error?.message || "Invalid verification code." });
     }
+    const profSb = getServerSupabase(data.session.access_token) || sb;
+    const profile = data.user?.id ? await ensureCanonicalUserProfile(data.user, profSb) : null;
+    if (data.user?.id) {
+      await syncUserProfileToStoreAndSupabase(data.user, getServerSupabase() || profSb, profile ? {
+        name: profile.full_name,
+        role: normalizeRole(profile.role, profile.email),
+        title: profile.title,
+        institution: profile.institution,
+        subjects: parseSubjectsList(profile.subjects),
+        bio: profile.bio,
+        location: profile.location || profile.country,
+        avatar: profile.avatar_url,
+      } : undefined).catch(() => {});
+    }
     return res.json({
       session: {
         access_token: data.session.access_token,
         refresh_token: data.session.refresh_token,
         user: data.user,
       },
+      profile,
     });
   } catch (err) {
     console.error("[Auth] /api/auth/otp-verify error:", err);
@@ -1843,36 +2582,49 @@ app.post("/api/auth/preferences", async (req, res) => {
       profilePatch.role = body.role.trim();
     }
 
-    let updatedProfile = null;
-    try {
-      const { data: profData, error: profErr } = await sb
-        .from("profiles")
-        .upsert(profilePatch, { onConflict: "id" })
-        .select("*")
-        .maybeSingle();
-      if (!profErr && profData) {
-        updatedProfile = profData;
-      }
-    } catch (profEx) {
-      console.warn("[Auth] profiles upsert notice:", profEx);
-    }
+    const updatedProfile = await ensureCanonicalUserProfile(userData.user, sb, {
+      extraPatch: profilePatch,
+    });
 
-    try {
-      await writeServerUserSync(userId, { profileSnapshot: updatedProfile || profilePatch }, sb);
-    } catch (_) {}
-
-    // Opportunistically sync auth user_metadata if service role key is configured on server
+    // Opportunistically sync compact auth user_metadata (never store large data:image URLs inside JWT claims)
     try {
       const metaPatch: Record<string, any> = { ...(userData.user.user_metadata || {}) };
       for (const k of ["country", "education_level", "curriculum", "field_of_study", "subjects", "full_name", "avatar_url", "bio", "institution", "role"]) {
         if (profilePatch[k] !== undefined) {
+          if (k === "avatar_url" && typeof profilePatch[k] === "string" && (profilePatch[k].startsWith("data:") || profilePatch[k].length > 512)) {
+            continue;
+          }
           metaPatch[k] = profilePatch[k];
         }
       }
-      if (sb.auth?.admin?.updateUserById) {
-        await sb.auth.admin.updateUserById(userId, { user_metadata: metaPatch });
+      const { cleaned } = sanitizeMetadataForJwt(metaPatch);
+      const adminSb = getServerSupabase();
+      if (adminSb?.auth?.admin?.updateUserById) {
+        await adminSb.auth.admin.updateUserById(userId, { user_metadata: cleaned });
       }
     } catch (_) {}
+
+    await syncUserProfileToStoreAndSupabase(userData.user, getServerSupabase() || sb, {
+      name: updatedProfile?.full_name || profilePatch.full_name,
+      role: updatedProfile?.role ? normalizeRole(updatedProfile.role, updatedProfile.email) : undefined,
+      title: updatedProfile?.title || profilePatch.title,
+      institution: updatedProfile?.institution || profilePatch.institution,
+      subjects: parseSubjectsList(updatedProfile?.subjects ?? profilePatch.subjects),
+      bio: updatedProfile?.bio || profilePatch.bio,
+      location: updatedProfile?.location || updatedProfile?.country || profilePatch.location || profilePatch.country,
+      avatar: updatedProfile?.avatar_url ?? profilePatch.avatar_url,
+    }).catch(() => {});
+
+    sendWsPayloadToUser(userId, {
+      type: "account:sync-updated",
+      userId,
+      updatedAt: new Date().toISOString(),
+    });
+    broadcastAllConnectedUsers({
+      type: "social:directory-updated",
+      userId,
+      updatedAt: new Date().toISOString(),
+    });
 
     return res.json({
       ok: true,
@@ -1881,6 +2633,120 @@ app.post("/api/auth/preferences", async (req, res) => {
   } catch (err) {
     console.error("[Auth] /api/auth/preferences error:", err);
     return res.status(500).json({ error: "Could not save profile preferences." });
+  }
+});
+
+// Persistent avatar upload endpoint (stores in Supabase Storage avatars bucket + disk/B2 + profiles + sync)
+app.post("/api/profile/avatar", async (req, res) => {
+  const authHeader = req.headers.authorization || "";
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  if (!token) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  const sb = getServerSupabase(token);
+  const adminSb = getServerSupabase();
+  if (!sb) {
+    return res.status(503).json({ error: "Authentication service is not configured." });
+  }
+
+  try {
+    const { data: userData, error: userErr } = await sb.auth.getUser(token);
+    if (userErr || !userData?.user) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    const userId = userData.user.id;
+    const rawDataUrl = typeof req.body?.dataUrl === "string" ? req.body.dataUrl.trim() : "";
+    const rawFilename = typeof req.body?.filename === "string" ? req.body.filename : "avatar.jpg";
+    if (!rawDataUrl || !rawDataUrl.startsWith("data:image/")) {
+      return res.status(400).json({ error: "Valid image dataUrl is required." });
+    }
+
+    const match = rawDataUrl.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+    if (!match) {
+      return res.status(400).json({ error: "Invalid base64 image payload." });
+    }
+    const mimeType = match[1];
+    const buffer = Buffer.from(match[2], "base64");
+    const ext = mimeType.includes("png") ? "png" : mimeType.includes("webp") ? "webp" : "jpg";
+    const safeName = rawFilename.replace(/[^a-zA-Z0-9.\-_]/g, "_") || `avatar.${ext}`;
+    const storageKey = `avatars/${userId}/${Date.now()}-${safeName.replace(/\.[^.]+$/, "")}.${ext}`;
+
+    // 1. Save to local persistent disk
+    try {
+      const localPath = path.join(UPLOADS_DIR, storageKey);
+      fs.mkdirSync(path.dirname(localPath), { recursive: true });
+      fs.writeFileSync(localPath, buffer);
+    } catch (_) {}
+
+    // 2. Upload to Supabase Storage ('avatars' bucket)
+    let publicStorageUrl: string | null = null;
+    const storageSb = adminSb || sb;
+    try {
+      if (adminSb?.storage?.createBucket) {
+        await adminSb.storage.createBucket("avatars", { public: true }).catch(() => {});
+      }
+      const { error: upErr } = await storageSb.storage
+        .from("avatars")
+        .upload(storageKey, buffer, { contentType: mimeType, upsert: true });
+      if (!upErr) {
+        const { data: pub } = storageSb.storage.from("avatars").getPublicUrl(storageKey);
+        if (pub?.publicUrl) {
+          // Verify the public URL is actually readable before trusting it directly
+          try {
+            const probe = await fetch(pub.publicUrl, { method: "HEAD" });
+            if (probe.ok) {
+              publicStorageUrl = pub.publicUrl;
+            }
+          } catch (_) {}
+        }
+      }
+    } catch (_) {}
+
+    // Prefer verified public Storage URL or compact /api/download URL so JWT user_metadata never bloats; keep data URL fallback for DB/sync
+    const compactLocalAvatarUrl = `/api/download?key=${encodeURIComponent(storageKey)}&inline=true`;
+    const canonicalAvatarUrl = publicStorageUrl || compactLocalAvatarUrl || rawDataUrl;
+    const jwtSafeAvatarUrl = publicStorageUrl || compactLocalAvatarUrl;
+
+    const updatedProfile = await ensureCanonicalUserProfile(userData.user, sb, {
+      extraPatch: { avatar_url: canonicalAvatarUrl },
+    });
+
+    try {
+      if (adminSb?.auth?.admin?.updateUserById) {
+        const { cleaned } = sanitizeMetadataForJwt({
+          ...(userData.user.user_metadata || {}),
+          avatar_url: jwtSafeAvatarUrl,
+        });
+        await adminSb.auth.admin.updateUserById(userId, {
+          user_metadata: cleaned,
+        });
+      }
+    } catch (_) {}
+
+    await syncUserProfileToStoreAndSupabase(userData.user, adminSb || sb, {
+      avatar: canonicalAvatarUrl,
+    }).catch(() => {});
+
+    sendWsPayloadToUser(userId, {
+      type: "account:sync-updated",
+      userId,
+      updatedAt: new Date().toISOString(),
+    });
+    broadcastAllConnectedUsers({
+      type: "social:directory-updated",
+      userId,
+      updatedAt: new Date().toISOString(),
+    });
+
+    return res.json({
+      ok: true,
+      avatarUrl: canonicalAvatarUrl,
+      storageKey,
+      profile: updatedProfile,
+    });
+  } catch (err: any) {
+    console.error("[Avatar] POST /api/profile/avatar error:", err);
+    return res.status(500).json({ error: err.message || "Failed to save profile photo" });
   }
 });
 
@@ -1914,28 +2780,20 @@ app.get("/api/account/sync", async (req, res) => {
       await mirrorStateToWorkspaceFiles(userId, syncState, sb);
     }
 
-    let profile: any = null;
-    try {
-      const { data: profData } = await sb.from("profiles").select("*").eq("id", userId).maybeSingle();
-      if (profData) profile = profData;
-    } catch (_) {}
-
-    if (syncState?.profileSnapshot) {
-      profile = {
-        ...(syncState.profileSnapshot || {}),
-        ...(profile || {}),
-        avatar_url: profile?.avatar_url || syncState.profileSnapshot.avatar_url || userData.user.user_metadata?.avatar_url || null,
-        country: profile?.country || syncState.profileSnapshot.country || userData.user.user_metadata?.country || null,
-        education_level: profile?.education_level || syncState.profileSnapshot.education_level || userData.user.user_metadata?.education_level || null,
-        curriculum: profile?.curriculum || syncState.profileSnapshot.curriculum || userData.user.user_metadata?.curriculum || null,
-        field_of_study: profile?.field_of_study || syncState.profileSnapshot.field_of_study || userData.user.user_metadata?.field_of_study || null,
-        subjects: profile?.subjects || syncState.profileSnapshot.subjects || userData.user.user_metadata?.subjects || null,
-      };
-    }
+    const profile = await ensureCanonicalUserProfile(userData.user, sb, { existingSync: syncState });
+    const enrichedSync = profile
+      ? {
+          ...syncState,
+          profileSnapshot: {
+            ...(syncState?.profileSnapshot || {}),
+            ...profile,
+          },
+        }
+      : syncState;
 
     return res.json({
       ok: true,
-      sync: syncState,
+      sync: enrichedSync,
       profile,
     });
   } catch (err) {
@@ -1966,25 +2824,28 @@ app.put("/api/account/sync", async (req, res) => {
     const nextState = await writeServerUserSync(userId, body, sb);
 
     if (body.bookCoverOverrides && typeof body.bookCoverOverrides === "object") {
-      await persistGlobalBookCoversBatch(body.bookCoverOverrides, sb);
+      const updatedCovers = await persistGlobalBookCoversBatch(body.bookCoverOverrides, sb);
+      broadcastAllConnectedUsers({
+        type: "system:covers-updated",
+        covers: updatedCovers,
+        updatedAt: new Date().toISOString(),
+      });
     }
 
     if (body.profileSnapshot && typeof body.profileSnapshot === "object") {
       try {
-        const cleanPatch: Record<string, any> = { id: userId, updated_at: new Date().toISOString() };
-        const allowed = ["full_name", "avatar_url", "country", "location", "education_level", "curriculum", "field_of_study", "subjects", "role", "title", "institution", "bio"];
-        let hasFields = false;
-        for (const k of allowed) {
-          if (body.profileSnapshot[k] !== undefined && body.profileSnapshot[k] !== "") {
-            cleanPatch[k] = body.profileSnapshot[k];
-            hasFields = true;
-          }
-        }
-        if (hasFields) {
-          await sb.from("profiles").upsert(cleanPatch, { onConflict: "id" });
-        }
+        await ensureCanonicalUserProfile(userData.user, sb, {
+          extraPatch: body.profileSnapshot,
+          existingSync: nextState,
+        });
       } catch (_) {}
     }
+
+    sendWsPayloadToUser(userId, {
+      type: "account:sync-updated",
+      userId,
+      updatedAt: nextState.updatedAt || new Date().toISOString(),
+    });
 
     return res.json({ ok: true, sync: nextState });
   } catch (err) {
@@ -2076,6 +2937,68 @@ function broadcastPresenceUpdate(): void {
   }
 }
 
+function broadcastAllConnectedUsers(payload: Record<string, any>, excludeUserId?: string): void {
+  const serialized = JSON.stringify(payload);
+  for (const [uid, sockets] of socialSocketsByUser.entries()) {
+    if (excludeUserId && uid === excludeUserId) continue;
+    for (const sock of sockets) {
+      if (sock.readyState === WebSocket.OPEN) {
+        try {
+          sock.send(serialized);
+        } catch (_) {}
+      }
+    }
+  }
+}
+
+const inFlightSupabaseRefreshes = new Map<string, Promise<any>>();
+const recentSupabaseRefreshes = new Map<string, { session: any; expiresAt: number }>();
+
+async function refreshSupabaseSessionDeduped(refreshToken: string): Promise<any | null> {
+  const clean = String(refreshToken || "").trim();
+  if (!clean) return null;
+
+  const cached = recentSupabaseRefreshes.get(clean);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.session;
+  }
+
+  const existingPromise = inFlightSupabaseRefreshes.get(clean);
+  if (existingPromise) {
+    return existingPromise;
+  }
+
+  const promise = (async () => {
+    const authSb = getServerSupabase();
+    if (!authSb) return null;
+    try {
+      const { data: refreshData, error: refreshErr } = await authSb.auth.refreshSession({
+        refresh_token: clean,
+      });
+      if (!refreshErr && refreshData?.session?.user?.id && refreshData?.session?.access_token) {
+        const sess = refreshData.session;
+        const expiresAt = Date.now() + 60_000;
+        recentSupabaseRefreshes.set(clean, { session: sess, expiresAt });
+        if (recentSupabaseRefreshes.size > 200) {
+          const now = Date.now();
+          for (const [k, v] of recentSupabaseRefreshes.entries()) {
+            if (v.expiresAt <= now) recentSupabaseRefreshes.delete(k);
+          }
+        }
+        return sess;
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      inFlightSupabaseRefreshes.delete(clean);
+    }
+  })();
+
+  inFlightSupabaseRefreshes.set(clean, promise);
+  return promise;
+}
+
 async function verifySocialToken(token: string): Promise<{ user: any; sb: SupabaseClient } | null> {
   if (!token || token === "demo_token" || token === "local_token") return null;
   const sb = getServerSupabase(token);
@@ -2083,88 +3006,154 @@ async function verifySocialToken(token: string): Promise<{ user: any; sb: Supaba
   try {
     const { data, error } = await sb.auth.getUser(token);
     if (error || !data?.user?.id) return null;
-    return { user: data.user, sb };
+    return { user: data.user, sb: getServerSupabase() || sb };
   } catch {
     return null;
   }
 }
 
 async function requireSocialAuth(req: express.Request, res: express.Response) {
-  const authHeader = req.headers.authorization || "";
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : "";
+  const { token, refreshToken } = extractRequestAuthTokens(req);
   if (!token) {
     res.status(401).json({ error: "Unauthorized" });
     return null;
   }
+
+  let authResult: { user: any; sb: SupabaseClient; refreshedSession?: any } | null = null;
   const verified = await verifySocialToken(token);
-  if (!verified) {
-    res.status(401).json({ error: "Unauthorized" });
+  if (verified) {
+    authResult = verified;
+  } else if (refreshToken) {
+    const refreshed = await refreshSupabaseSessionDeduped(refreshToken);
+    const authSb = getServerSupabase();
+    if (refreshed?.user?.id && authSb) {
+      res.setHeader("x-refreshed-access-token", refreshed.access_token);
+      if (refreshed.refresh_token) {
+        res.setHeader("x-refreshed-refresh-token", refreshed.refresh_token);
+      }
+      authResult = {
+        user: refreshed.user,
+        sb: authSb,
+        refreshedSession: {
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+          user: refreshed.user,
+        },
+      };
+    }
+  }
+
+  if (!authResult) {
+    res.status(401).json({ error: "Session expired or invalid. Please sign in again." });
     return null;
   }
-  return verified;
+
+  // If the caller still holds an oversized JWT (>3500 chars), strip base64 bloat & mint a compact token
+  if (token.length > 3500 && authResult.user?.id) {
+    const scrubbed = await scrubBloatedUserMetadata(authResult.user, getServerSupabase() || authResult.sb);
+    if (scrubbed && refreshToken && !authResult.refreshedSession) {
+      const refreshed = await refreshSupabaseSessionDeduped(refreshToken);
+      if (refreshed?.user?.id && refreshed?.access_token && refreshed.access_token.length < token.length) {
+        res.setHeader("x-refreshed-access-token", refreshed.access_token);
+        if (refreshed.refresh_token) {
+          res.setHeader("x-refreshed-refresh-token", refreshed.refresh_token);
+        }
+        authResult.user = refreshed.user;
+        authResult.refreshedSession = {
+          access_token: refreshed.access_token,
+          refresh_token: refreshed.refresh_token,
+          user: refreshed.user,
+        };
+      }
+    }
+  }
+
+  return authResult;
 }
 
-app.get("/api/social/bootstrap", async (req, res) => {
+async function handleSocialBootstrap(req: express.Request, res: express.Response) {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
-    await hydrateDirectoryFromSupabase(auth.sb);
-    await hydrateFriendRequestsFromSupabase(auth.user.id, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await syncUserProfileToStoreAndSupabase(auth.user, privSb);
+    await hydrateDirectoryFromSupabase(privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
     const data = getBootstrapDataForUser(auth.user.id, getOnlineUserIdSet());
-    return res.json({ ok: true, ...data });
+    return res.json({
+      ok: true,
+      ...data,
+      ...(auth.refreshedSession ? { _refreshedSession: auth.refreshedSession } : {}),
+    });
   } catch (err) {
-    console.error("[Social] GET /api/social/bootstrap error:", err);
+    console.error("[Social] /api/social/bootstrap error:", err);
     return res.status(500).json({ error: "Failed to load social workspace." });
   }
-});
+}
 
-app.get("/api/social/users", async (req, res) => {
+app.get("/api/social/bootstrap", handleSocialBootstrap);
+app.post("/api/social/bootstrap", handleSocialBootstrap);
+
+async function handleSocialUsersSearch(req: express.Request, res: express.Response) {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
-    await hydrateDirectoryFromSupabase(auth.sb);
-    await hydrateFriendRequestsFromSupabase(auth.user.id, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await syncUserProfileToStoreAndSupabase(auth.user, privSb);
+    await hydrateDirectoryFromSupabase(privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
     const bootstrap = getBootstrapDataForUser(auth.user.id, getOnlineUserIdSet());
 
-    const q = String(req.query.q || "").trim().toLowerCase();
-    const roleFilter = String(req.query.role || "all").trim().toLowerCase();
+    const rawQ = req.method === "POST" ? req.body?.q ?? req.query.q : req.query.q;
+    const rawRole = req.method === "POST" ? req.body?.role ?? req.query.role : req.query.role;
+    const q = String(rawQ || "").trim().toLowerCase();
+    const roleFilter = String(rawRole || "all").trim().toLowerCase();
 
     const filtered = bootstrap.users.filter((u: any) => {
       if (u.id === auth.user.id) return false;
-      if (roleFilter === "teacher" && u.role !== "teacher") return false;
+      if (roleFilter === "teacher" && u.role !== "teacher" && u.role !== "educator") return false;
       if (roleFilter === "student" && u.role !== "student") return false;
       if (roleFilter === "friends" && u.friendStatus !== "friends") return false;
       if (roleFilter === "pending" && u.friendStatus !== "pending_received" && u.friendStatus !== "pending_sent") return false;
-      if (q) {
-        const hay = `${u.name} ${u.email} ${u.title} ${u.institution} ${u.bio} ${(u.subjects || []).join(" ")}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
+      if (q && !matchesDirectorySearchQuery(u, q)) return false;
       return true;
     });
 
-    return res.json({ ok: true, users: filtered, currentUser: bootstrap.currentUser });
+    return res.json({
+      ok: true,
+      users: filtered,
+      currentUser: bootstrap.currentUser,
+      ...(auth.refreshedSession ? { _refreshedSession: auth.refreshedSession } : {}),
+    });
   } catch (err) {
-    console.error("[Social] GET /api/social/users error:", err);
+    console.error("[Social] /api/social/users error:", err);
     return res.status(500).json({ error: "Failed to search user directory." });
   }
-});
+}
+
+app.get("/api/social/users", handleSocialUsersSearch);
+app.post("/api/social/users/search", handleSocialUsersSearch);
 
 app.post("/api/social/profile", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
+    const privSb = getServerSupabase() || auth.sb;
     const body = req.body && typeof req.body === "object" ? req.body : {};
-    const updated = await syncUserProfileToStoreAndSupabase(auth.user, auth.sb, {
+    const updated = await syncUserProfileToStoreAndSupabase(auth.user, privSb, {
       name: typeof body.name === "string" && body.name.trim() ? body.name.trim() : undefined,
-      role: body.role ? normalizeRole(body.role) : undefined,
+      role: body.role ? normalizeRole(body.role, auth.user.email) : undefined,
       title: typeof body.title === "string" ? body.title.trim() : undefined,
       institution: typeof body.institution === "string" ? body.institution.trim() : undefined,
       subjects: body.subjects !== undefined ? parseSubjectsList(body.subjects) : undefined,
       bio: typeof body.bio === "string" ? body.bio.trim() : undefined,
       location: typeof body.location === "string" ? body.location.trim() : undefined,
       avatar: typeof body.avatar === "string" && !body.avatar.includes("unsplash.com") ? body.avatar.trim() : undefined,
+    });
+    broadcastAllConnectedUsers({
+      type: "social:directory-updated",
+      userId: auth.user.id,
+      updatedAt: new Date().toISOString(),
     });
     return res.json({ ok: true, profile: updated });
   } catch (err) {
@@ -2177,11 +3166,13 @@ app.post("/api/social/friend-requests", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    const senderProfile = await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await hydrateDirectoryFromSupabase(privSb);
+    const senderProfile = await syncUserProfileToStoreAndSupabase(auth.user, privSb);
     const receiverId = typeof req.body?.receiverId === "string" ? req.body.receiverId.trim() : "";
     const note = typeof req.body?.note === "string" ? req.body.note : undefined;
 
-    const result = await sendFriendRequestAction(auth.user.id, receiverId, note, auth.sb);
+    const result = await sendFriendRequestAction(auth.user.id, receiverId, note, privSb);
     if (!result.ok) {
       return res.status(400).json({ error: result.error || "Could not send friend request." });
     }
@@ -2194,6 +3185,12 @@ app.post("/api/social/friend-requests", async (req, res) => {
         conversation: result.conversation,
         actor: { id: senderProfile.id, name: senderProfile.name, role: senderProfile.role, avatar: senderProfile.avatar },
       });
+      if (result.conversation) {
+        broadcastSocialEventToUsers([auth.user.id, receiverId], {
+          type: "chat:conversation",
+          conversation: result.conversation,
+        });
+      }
     } else {
       sendWsPayloadToUser(receiverId, {
         type: "friend:request",
@@ -2220,14 +3217,17 @@ app.post("/api/social/friend-requests/respond", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    const responderProfile = await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await hydrateDirectoryFromSupabase(privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
+    const responderProfile = await syncUserProfileToStoreAndSupabase(auth.user, privSb);
     const senderId = typeof req.body?.senderId === "string" ? req.body.senderId.trim() : "";
     const action = req.body?.action === "decline" ? "decline" : "accept";
     if (!senderId) {
       return res.status(400).json({ error: "senderId is required." });
     }
 
-    const result = await respondToFriendRequestAction(auth.user.id, senderId, action, auth.sb);
+    const result = await respondToFriendRequestAction(auth.user.id, senderId, action, privSb);
     if (!result.ok) {
       return res.status(404).json({ error: result.error || "Friend request not found." });
     }
@@ -2263,11 +3263,12 @@ app.delete("/api/social/friend-requests/:targetId", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
+    const privSb = getServerSupabase() || auth.sb;
     const targetId = String(req.params.targetId || "").trim();
     if (!targetId) {
       return res.status(400).json({ error: "Target user ID is required." });
     }
-    await removeFriendshipAction(auth.user.id, targetId, auth.sb);
+    await removeFriendshipAction(auth.user.id, targetId, privSb);
     broadcastSocialEventToUsers([auth.user.id, targetId], {
       type: "friend:removed",
       actorId: auth.user.id,
@@ -2284,7 +3285,10 @@ app.post("/api/social/conversations/direct", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await syncUserProfileToStoreAndSupabase(auth.user, privSb);
+    await hydrateDirectoryFromSupabase(privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
     const partnerId = typeof req.body?.partnerId === "string" ? req.body.partnerId.trim() : "";
     const result = openOrCreateDirectConversation(auth.user.id, partnerId);
     if (!result.ok) {
@@ -2305,7 +3309,9 @@ app.post("/api/social/conversations/group", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await syncUserProfileToStoreAndSupabase(auth.user, privSb);
+    await hydrateDirectoryFromSupabase(privSb);
     const result = createGroupConversationAction(auth.user.id, {
       name: req.body?.name,
       description: req.body?.description,
@@ -2331,6 +3337,8 @@ app.post("/api/social/conversations/:id/members", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
+    const privSb = getServerSupabase() || auth.sb;
+    await hydrateDirectoryFromSupabase(privSb);
     const convId = String(req.params.id || "").trim();
     const memberId = typeof req.body?.memberId === "string" ? req.body.memberId.trim() : "";
     const result = addGroupMemberAction(auth.user.id, convId, memberId);
@@ -2363,7 +3371,9 @@ app.post("/api/social/messages", async (req, res) => {
   const auth = await requireSocialAuth(req, res);
   if (!auth) return;
   try {
-    await syncUserProfileToStoreAndSupabase(auth.user, auth.sb);
+    const privSb = getServerSupabase() || auth.sb;
+    await syncUserProfileToStoreAndSupabase(auth.user, privSb);
+    await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
     const result = sendChatMessageAction(
       auth.user.id,
       {
@@ -2537,7 +3547,7 @@ app.get("/api/books", async (req, res) => {
     let localCatalog = readLocalBooksCatalog();
     const knownFileUrls = new Set(localCatalog.map((b: any) => b.fileUrl).filter(Boolean));
 
-    // Auto-discover any uploaded PDF files on local disk not yet in books-catalog.json
+    // Auto-discover any uploaded PDF or EPUB files on local disk not yet in books-catalog.json
     const scanDirs = ["books", "uploads", ""];
     let catalogUpdated = false;
     for (const sub of scanDirs) {
@@ -2545,10 +3555,13 @@ app.get("/api/books", async (req, res) => {
       if (!fs.existsSync(targetDir)) continue;
       const entries = fs.readdirSync(targetDir, { withFileTypes: true });
       for (const entry of entries) {
-        if (!entry.isFile() || !entry.name.toLowerCase().endsWith(".pdf")) continue;
+        const lowerName = entry.name.toLowerCase();
+        const isPdf = lowerName.endsWith(".pdf");
+        const isEpub = lowerName.endsWith(".epub");
+        if (!entry.isFile() || (!isPdf && !isEpub)) continue;
         const relKey = sub ? `${sub}/${entry.name}` : entry.name;
         if (knownFileUrls.has(relKey) || deletedSet.has(`disk-${relKey}`)) continue;
-        const cleanName = entry.name.replace(/^\d+-/, "").replace(/\.pdf$/i, "").replace(/[_\-]+/g, " ").trim();
+        const cleanName = entry.name.replace(/^\d+-/, "").replace(/\.(pdf|epub)$/i, "").replace(/[_\-]+/g, " ").trim();
         const inferredKlb = cleanName.toLowerCase().includes("klb");
         const discoveredBook = {
           id: `disk-${relKey}`,
@@ -2559,10 +3572,19 @@ app.get("/api/books", async (req, res) => {
           coverImage: "",
           category: "Textbook",
           rating: 4.8,
-          description: "Uploaded source PDF textbook stored in platform library.",
+          description: isEpub
+            ? "Reflowable EPUB curriculum textbook stored in platform library."
+            : "Uploaded source PDF textbook stored in platform library.",
           level: "School",
           curriculum: inferredKlb ? ["CBC", "KCSE"] : ["General"],
           fileUrl: relKey,
+          format: isEpub ? "epub" : "pdf",
+          securityPolicy: {
+            requireEncryptedOffline: true,
+            watermarkUser: true,
+            allowRawExport: !isEpub,
+            offlineLeaseDays: 90,
+          },
           createdAt: new Date().toISOString(),
         };
         localCatalog = [discoveredBook, ...localCatalog];
@@ -2712,7 +3734,23 @@ app.get("/api/books", async (req, res) => {
       }
     }
 
-    const finalBooks = Array.from(mergedMap.values()).map((b) => applyGlobalBookCover(b, globalCovers));
+    const finalBooks = Array.from(mergedMap.values()).map((b) => {
+      const withCover = applyGlobalBookCover(b, globalCovers);
+      const inferredFormat =
+        withCover.format === "epub" || String(withCover.fileUrl || "").toLowerCase().split("?")[0].endsWith(".epub")
+          ? "epub"
+          : "pdf";
+      return {
+        ...withCover,
+        format: inferredFormat,
+        securityPolicy: withCover.securityPolicy || {
+          requireEncryptedOffline: true,
+          watermarkUser: true,
+          allowRawExport: inferredFormat !== "epub",
+          offlineLeaseDays: 90,
+        },
+      };
+    });
 
     res.json({
       books: finalBooks,
@@ -2771,6 +3809,12 @@ app.put("/api/book-covers/:id", async (req, res) => {
     }
 
     const covers = await persistGlobalBookCoverUpdate(bookId, override, auth.sb, bookMeta);
+    broadcastAllConnectedUsers({
+      type: "system:covers-updated",
+      bookId,
+      covers,
+      updatedAt: new Date().toISOString(),
+    });
     res.json({ success: true, covers });
   } catch (err: any) {
     console.error("[Catalog] PUT /api/book-covers error:", err);
@@ -2809,6 +3853,16 @@ app.post("/api/books", async (req, res) => {
       country: Array.isArray(payload.country) ? payload.country : undefined,
       coverImage: payload.coverImage || "",
       fileUrl: payload.fileUrl || "",
+      format:
+        payload.format === "epub" || String(payload.fileUrl || "").toLowerCase().split("?")[0].endsWith(".epub")
+          ? "epub"
+          : "pdf",
+      securityPolicy: payload.securityPolicy || {
+        requireEncryptedOffline: true,
+        watermarkUser: true,
+        allowRawExport: false,
+        offlineLeaseDays: 90,
+      },
       createdAt: new Date().toISOString(),
     };
 
@@ -2853,6 +3907,13 @@ app.post("/api/books", async (req, res) => {
     const deletedIds = readDeletedBookIds().filter((id) => id !== createdBook.id);
     writeDeletedBookIds(deletedIds);
 
+    broadcastAllConnectedUsers({
+      type: "system:books-updated",
+      bookId: createdBook.id,
+      action: "create",
+      updatedAt: new Date().toISOString(),
+    });
+
     res.json({ book: createdBook, success: true });
   } catch (err: any) {
     console.error("[Catalog] POST /api/books error:", err);
@@ -2866,7 +3927,7 @@ app.patch("/api/books/:id", async (req, res) => {
     const updates = req.body || {};
     const authHeader = req.headers.authorization || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
-    const sb = getServerSupabase(token);
+    const sb = getServerSupabase() || getServerSupabase(token);
 
     const existing = readLocalBooksCatalog();
     const idx = existing.findIndex((b: any) => b.id === bookId);
@@ -2877,13 +3938,41 @@ app.patch("/api/books/:id", async (req, res) => {
       writeLocalBooksCatalog([{ id: bookId, ...updates }, ...existing]);
     }
 
+    // Sync metadata updates to Supabase public.books so all accounts see canonical catalog updates
+    if (sb && bookId && !isSystemBookConfigRow({ id: bookId })) {
+      try {
+        const dbPatch: Record<string, any> = {};
+        if (updates.title !== undefined) dbPatch.title = updates.title;
+        if (updates.author !== undefined) dbPatch.author = updates.author;
+        if (updates.description !== undefined) dbPatch.description = updates.description;
+        if (updates.category !== undefined) dbPatch.category = updates.category;
+        if (updates.level !== undefined) dbPatch.education_level = updates.level;
+        if (updates.curriculum !== undefined) {
+          dbPatch.curriculum = Array.isArray(updates.curriculum) ? updates.curriculum[0] || null : updates.curriculum;
+        }
+        if (updates.subjects !== undefined) {
+          dbPatch.subjects = Array.isArray(updates.subjects) ? updates.subjects.join(", ") : updates.subjects;
+        }
+        if (updates.coverImage !== undefined) dbPatch.cover_image = updates.coverImage;
+        if (updates.fileUrl !== undefined) dbPatch.file_url = updates.fileUrl;
+        if (updates.publisher !== undefined) dbPatch.publisher = updates.publisher;
+        if (updates.isbn !== undefined) dbPatch.isbn = updates.isbn;
+        if (updates.isKicdApproved !== undefined) dbPatch.is_kicd_approved = Boolean(updates.isKicdApproved);
+
+        if (Object.keys(dbPatch).length > 0) {
+          await sb.from("books").update(dbPatch).eq("id", bookId);
+        }
+      } catch (_) {}
+    }
+
+    let updatedCovers: Record<string, BookCoverOverride> | null = null;
     if (
       updates.coverImage !== undefined ||
       updates.coverMode !== undefined ||
       updates.pdfCoverPage !== undefined ||
       updates.customCover !== undefined
     ) {
-      await persistGlobalBookCoverUpdate(
+      updatedCovers = await persistGlobalBookCoverUpdate(
         bookId,
         {
           coverMode: updates.coverMode,
@@ -2896,6 +3985,21 @@ app.patch("/api/books/:id", async (req, res) => {
         sb,
         updates.title ? updates : existing[idx]
       );
+    }
+
+    broadcastAllConnectedUsers({
+      type: "system:books-updated",
+      bookId,
+      action: "update",
+      updatedAt: new Date().toISOString(),
+    });
+    if (updatedCovers) {
+      broadcastAllConnectedUsers({
+        type: "system:covers-updated",
+        bookId,
+        covers: updatedCovers,
+        updatedAt: new Date().toISOString(),
+      });
     }
 
     res.json({ success: true });
@@ -2925,10 +4029,80 @@ app.delete("/api/books/:id", async (req, res) => {
       }
     }
 
+    broadcastAllConnectedUsers({
+      type: "system:books-updated",
+      bookId,
+      action: "delete",
+      updatedAt: new Date().toISOString(),
+    });
+
     res.json({ success: true });
   } catch (err: any) {
     console.error("[Catalog] DELETE /api/books error:", err);
     res.status(500).json({ error: err.message || "Failed to delete book" });
+  }
+});
+
+// System-wide Notifications & Broadcasts API (synced across all existing & newly signed-up accounts)
+app.get("/api/system/notifications", async (_req, res) => {
+  try {
+    const sb = getServerSupabase();
+    const notifications = await readSystemNotifications(sb);
+    res.json({ ok: true, notifications });
+  } catch (err: any) {
+    console.error("[SystemNotifications] GET error:", err);
+    res.status(500).json({ error: "Failed to load system notifications" });
+  }
+});
+
+app.post("/api/system/notifications", async (req, res) => {
+  const auth = await requireSocialAuth(req, res);
+  if (!auth) return;
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const title = String(body.title || "").trim();
+    const message = String(body.message || "").trim();
+    if (!title || !message) {
+      return res.status(400).json({ error: "Notification title and message are required." });
+    }
+
+    const notification = {
+      id: body.id || `notif-sys-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      type: body.type || "platform",
+      title,
+      message,
+      timestamp: body.timestamp || "Just now",
+      createdAt: Number(body.createdAt) || Date.now(),
+      isRead: false,
+      priority: body.priority || "normal",
+      author: {
+        name:
+          body.author?.name ||
+          auth.user?.user_metadata?.full_name ||
+          auth.user?.email?.split("@")[0] ||
+          "Edu AI Team",
+        role: body.author?.role || "Platform",
+        badge: body.author?.badge || "System Broadcast",
+      },
+      actionLabel: body.actionLabel || undefined,
+      actionView: body.actionView || undefined,
+      tags: Array.isArray(body.tags) ? body.tags : [],
+      pinned: Boolean(body.pinned),
+      systemWide: true,
+      createdBy: auth.user.id,
+    };
+
+    const notifications = await persistSystemNotification(notification, auth.sb);
+    broadcastAllConnectedUsers({
+      type: "system:notification",
+      notification,
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.json({ ok: true, notification, notifications });
+  } catch (err: any) {
+    console.error("[SystemNotifications] POST error:", err);
+    res.status(500).json({ error: err.message || "Failed to publish system notification" });
   }
 });
 
@@ -2968,20 +4142,18 @@ const handleDirectUpload = async (req: express.Request, res: express.Response) =
     }
 
     // Check if body is a Buffer or stream
+    let fileBuffer: Buffer = Buffer.from("");
     if (Buffer.isBuffer(req.body) && req.body.length > 0) {
-      fs.writeFileSync(localFilePath, req.body);
+      fileBuffer = req.body;
     } else if (typeof req.body === 'string') {
-      fs.writeFileSync(localFilePath, Buffer.from(req.body));
-    } else {
-      // Empty body or stream fallback
-      fs.writeFileSync(localFilePath, Buffer.from(''));
+      fileBuffer = Buffer.from(req.body);
     }
+    fs.writeFileSync(localFilePath, fileBuffer);
 
     // 2. Opportunistically sync with Backblaze B2 cloud storage
     const s3 = getS3Client();
     if (s3 && B2_BUCKET_NAME) {
       try {
-        const fileBuffer = fs.readFileSync(localFilePath);
         const command = new PutObjectCommand({
           Bucket: B2_BUCKET_NAME,
           Key: key,
@@ -2993,6 +4165,21 @@ const handleDirectUpload = async (req: express.Request, res: express.Response) =
       } catch (b2Err: any) {
         console.warn(`[Storage] B2 cloud sync notice for ${key}:`, b2Err.message || b2Err);
       }
+    }
+
+    // 3. Mirror uploads to Supabase Storage so images/files survive container restarts
+    const sb = getServerSupabase();
+    if (sb && fileBuffer.length > 0) {
+      const targetBucket = key.startsWith("avatars") || contentType.startsWith("image/") ? "avatars" : "workspace-files";
+      try {
+        if (sb.storage?.createBucket) {
+          await sb.storage.createBucket(targetBucket, { public: targetBucket === "avatars" }).catch(() => {});
+        }
+        await sb.storage.from(targetBucket).upload(key, fileBuffer, {
+          contentType,
+          upsert: true,
+        });
+      } catch (_) {}
     }
 
     res.json({ 
@@ -3066,14 +4253,29 @@ app.get("/api/download", async (req, res) => {
     return res.status(400).send("Key is required");
   }
 
-  const filename = key.split('/').pop() || 'download';
-  const localFilePath = path.join(UPLOADS_DIR, key);
+  const safeKey = key.replace(/^\/+/, "").replace(/\.\.(\/|\\|$)/g, "");
+  const strippedUploadsKey = safeKey.replace(/^uploads\/+/, "");
+  const filename = safeKey.split('/').pop() || 'download';
+  const candidateLocalPaths = Array.from(
+    new Set([
+      path.join(UPLOADS_DIR, safeKey),
+      path.join(UPLOADS_DIR, strippedUploadsKey),
+    ])
+  );
+  const localFilePath = candidateLocalPaths[0];
+  const existingLocalPath = candidateLocalPaths.find((p) => {
+    try {
+      return fs.existsSync(p) && fs.statSync(p).isFile();
+    } catch (_) {
+      return false;
+    }
+  });
 
   // 1. Check local persistent storage first
-  if (fs.existsSync(localFilePath)) {
+  if (existingLocalPath) {
     try {
       const mimeType = getMimeType(filename);
-      const stat = fs.statSync(localFilePath);
+      const stat = fs.statSync(existingLocalPath);
       res.setHeader('Content-Type', mimeType);
       res.setHeader('Content-Length', stat.size);
       res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -3082,7 +4284,7 @@ app.get("/api/download", async (req, res) => {
       } else {
         res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       }
-      return fs.createReadStream(localFilePath).pipe(res);
+      return fs.createReadStream(existingLocalPath).pipe(res);
     } catch (readErr) {
       console.error("[Storage] Error streaming local file:", readErr);
     }
@@ -3091,52 +4293,81 @@ app.get("/api/download", async (req, res) => {
   // 2. If not local, try remote B2 bucket
   const s3 = getS3Client();
   if (s3 && B2_BUCKET_NAME) {
-    try {
-      const command = new GetObjectCommand({
-        Bucket: B2_BUCKET_NAME,
-        Key: key,
-      });
+    for (const s3Key of Array.from(new Set([safeKey, strippedUploadsKey]))) {
+      try {
+        const command = new GetObjectCommand({
+          Bucket: B2_BUCKET_NAME,
+          Key: s3Key,
+        });
 
-      const response = await s3.send(command);
-      
-      const mimeType = response.ContentType || getMimeType(filename);
-      res.setHeader('Content-Type', mimeType);
-      if (response.ContentLength) res.setHeader('Content-Length', response.ContentLength);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      
-      if (inline === 'true' || mimeType.startsWith('image/')) {
-        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-      } else {
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-      }
-      
-      if (response.Body) {
-        try {
-          const chunks: any[] = [];
-          for await (const chunk of (response.Body as any)) {
-            chunks.push(chunk);
-          }
-          const buffer = Buffer.concat(chunks);
-          
-          // Cache to local disk so future requests are instant 0ms
-          try {
-            const localDir = path.dirname(localFilePath);
-            if (!fs.existsSync(localDir)) {
-              fs.mkdirSync(localDir, { recursive: true });
-            }
-            fs.writeFileSync(localFilePath, buffer);
-          } catch (cacheErr) {
-            console.warn("[Storage] Error caching remote file to disk:", cacheErr);
-          }
-
-          return res.end(buffer);
-        } catch (streamErr) {
-          console.error("[Storage] Error reading stream from B2:", streamErr);
-          return (response.Body as any).pipe(res);
+        const response = await s3.send(command);
+        
+        const mimeType = response.ContentType || getMimeType(filename);
+        res.setHeader('Content-Type', mimeType);
+        if (response.ContentLength) res.setHeader('Content-Length', response.ContentLength);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        
+        if (inline === 'true' || mimeType.startsWith('image/')) {
+          res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+        } else {
+          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
         }
+        
+        if (response.Body) {
+          try {
+            const chunks: any[] = [];
+            for await (const chunk of (response.Body as any)) {
+              chunks.push(chunk);
+            }
+            const buffer = Buffer.concat(chunks);
+            
+            // Cache to local disk so future requests are instant 0ms
+            try {
+              const localDir = path.dirname(localFilePath);
+              if (!fs.existsSync(localDir)) {
+                fs.mkdirSync(localDir, { recursive: true });
+              }
+              fs.writeFileSync(localFilePath, buffer);
+            } catch (cacheErr) {
+              console.warn("[Storage] Error caching remote file to disk:", cacheErr);
+            }
+
+            return res.end(buffer);
+          } catch (streamErr) {
+            console.error("[Storage] Error reading stream from B2:", streamErr);
+            return (response.Body as any).pipe(res);
+          }
+        }
+      } catch (error: any) {
+        console.warn(`[Storage] Remote B2 fetch for ${s3Key} notice:`, error.message || error);
       }
-    } catch (error: any) {
-      console.warn(`[Storage] Remote B2 fetch for ${key} notice:`, error.message || error);
+    }
+  }
+
+  // 2b. Check Supabase Storage buckets before returning 404
+  const sb = getServerSupabase();
+  if (sb) {
+    const keyVariants = Array.from(new Set([safeKey, strippedUploadsKey, filename]));
+    for (const bucket of ['avatars', 'workspace-files', 'uploads', 'public']) {
+      for (const variant of keyVariants) {
+        try {
+          const { data: blobData, error: dlErr } = await sb.storage.from(bucket).download(variant);
+          if (!dlErr && blobData) {
+            const arrBuf = await blobData.arrayBuffer();
+            const buffer = Buffer.from(arrBuf);
+            const mimeType = blobData.type || getMimeType(filename);
+            try {
+              fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
+              fs.writeFileSync(localFilePath, buffer);
+            } catch (_) {}
+            res.setHeader('Content-Type', mimeType);
+            res.setHeader('Content-Length', buffer.length);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.setHeader('Content-Disposition', `${inline === 'true' || mimeType.startsWith('image/') ? 'inline' : 'attachment'}; filename="${filename}"`);
+            return res.end(buffer);
+          }
+        } catch (_) {}
+      }
     }
   }
 
@@ -3145,8 +4376,33 @@ app.get("/api/download", async (req, res) => {
       return res.status(404).send("Image not found");
     }
 
-    // 3. Graceful fallback for study documents / syllabus materials
+    // 3. Graceful fallback for study documents / syllabus materials (EPUB 3 or PDF)
     const title = getTitleFromKey(key);
+    const wantsEpub =
+      req.query.format === 'epub' ||
+      filename.toLowerCase().endsWith('.epub') ||
+      key.toLowerCase().endsWith('.epub');
+
+    if (wantsEpub) {
+      try {
+        const epubBuffer = await generateEducationalEpub({
+          id: key,
+          title,
+        });
+        const epubFilename = filename.toLowerCase().endsWith('.epub')
+          ? filename
+          : `${filename.replace(/\.pdf$/i, '')}.epub`;
+        res.setHeader('Content-Type', 'application/epub+zip');
+        res.setHeader('Content-Length', epubBuffer.length);
+        res.setHeader('Cache-Control', 'public, max-age=3600');
+        res.setHeader('Content-Disposition', `inline; filename="${epubFilename}"`);
+        return res.send(epubBuffer);
+      } catch (epubErr) {
+        console.error("[Storage] Error generating educational EPUB for " + title + ":", epubErr);
+        return res.status(500).send("Error generating EPUB study material");
+      }
+    }
+
     res.setHeader('Content-Type', 'application/pdf');
     const downloadFilename = filename.endsWith('.pdf') ? filename : `${filename}.pdf`;
     res.setHeader('Content-Disposition', `inline; filename="${downloadFilename}"`);
@@ -3169,11 +4425,202 @@ app.get("/api/download", async (req, res) => {
     }
   });
 
+  // Flutter Mobile Companion & Publisher EPUB Readiness Manifest
+  app.get("/api/flutter/manifest", (req, res) => {
+    const localCatalog = readLocalBooksCatalog();
+    const epubCount = localCatalog.filter(
+      (b: any) => b?.format === "epub" || String(b?.fileUrl || "").toLowerCase().endsWith(".epub")
+    ).length;
+    const pdfCount = localCatalog.length - epubCount;
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.get("host") || "";
+    const apiBaseUrl = host ? `${protocol}://${host}` : "";
+
+    res.json({
+      appId: "io.supabase.eduai",
+      minSdk: "Flutter >= 3.3.0",
+      apiBaseUrl,
+      supabaseUrlConfigured: Boolean(getResolvedSupabaseUrlEnv()),
+      readerEngines: {
+        epub: {
+          package: "epub_view: ^3.2.0",
+          capabilities: ["reflowable-text", "toc-drawer", "cfi-resume", "offline-encrypted-bytes"],
+        },
+        pdf: {
+          package: "pdfx: ^2.6.0",
+          capabilities: ["pinch-zoom", "page-jump", "night-invert", "offline-encrypted-bytes"],
+        },
+        offlineSecurity: {
+          packages: ["flutter_secure_storage: ^9.2.2", "encrypt: ^5.0.3", "crypto: ^3.0.3"],
+          cipher: "AES-256-CBC + SHA-256",
+          keyStorage: "Keychain (iOS) / Keystore (Android)",
+        },
+      },
+      catalogStats: {
+        uploadedBooks: localCatalog.length,
+        epubBooks: epubCount,
+        pdfBooks: pdfCount,
+      },
+      endpoints: {
+        booksCatalog: "/api/books",
+        bookCovers: "/api/book-covers",
+        downloadStream: "/api/download?key={fileKey}&format=epub|pdf",
+        aiTutorEdgeFunction: "{SUPABASE_URL}/functions/v1/ai-tutor",
+      },
+    });
+  });
+
+  const extractCleanApiError = (error: any, fallback: string) => {
+    const raw = String(error?.message || fallback);
+    if (raw.trim().startsWith("{")) {
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error?.message) return String(parsed.error.message);
+      } catch (_) {}
+    }
+    return raw;
+  };
+
+  // Audiobook Tutor Script & Multimodal Concept Visualization Endpoint
+  app.post("/api/audiobooks/script", async (req, res) => {
+    try {
+      const {
+        bookId,
+        title,
+        author,
+        publisher,
+        category,
+        level,
+        curriculum,
+        subjects,
+        description,
+        fileUrl,
+        chapterIndex,
+        chapterTitle,
+        sourceText,
+        chaptersList,
+        academicSummary,
+        forceRefresh,
+      } = req.body || {};
+
+      if (!bookId || !title) {
+        return res.status(400).json({ error: "bookId and title are required." });
+      }
+
+      const script = await generateAudiobookChapterScript({
+        uploadsDir: UPLOADS_DIR,
+        bookId: String(bookId),
+        title: String(title),
+        author: author ? String(author) : undefined,
+        publisher: publisher ? String(publisher) : undefined,
+        category: category ? String(category) : undefined,
+        level: level ? String(level) : undefined,
+        curriculum: Array.isArray(curriculum) ? curriculum : undefined,
+        subjects: Array.isArray(subjects) ? subjects : undefined,
+        description: description ? String(description) : undefined,
+        fileUrl: fileUrl ? String(fileUrl) : undefined,
+        chapterIndex: typeof chapterIndex === "number" ? chapterIndex : Number(chapterIndex || 0),
+        chapterTitle: chapterTitle ? String(chapterTitle) : undefined,
+        sourceText: sourceText ? String(sourceText) : undefined,
+        chaptersList: Array.isArray(chaptersList) ? chaptersList : undefined,
+        academicSummary: academicSummary ? String(academicSummary) : undefined,
+        forceRefresh: Boolean(forceRefresh),
+      });
+
+      return res.json(script);
+    } catch (error: any) {
+      const msg = extractCleanApiError(error, "Failed to generate audiobook narration script.");
+      console.warn("[Audiobooks] /api/audiobooks/script notice:", msg);
+      const status = msg.includes("GEMINI_API_KEY") ? 503 : error?.status || 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
+  // Audiobook Gemini TTS Audio Synthesis Endpoint (returns complete WAV file)
+  app.post("/api/audiobooks/tts", async (req, res) => {
+    try {
+      const { text, voiceId } = req.body || {};
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({ error: "Narration text is required." });
+      }
+
+      const result = await synthesizeAudiobookSpeech({
+        uploadsDir: UPLOADS_DIR,
+        text,
+        voiceId: voiceId ? String(voiceId) : "seraphina",
+      });
+
+      res.setHeader("Content-Type", "audio/wav");
+      res.setHeader("Content-Length", result.wavBuffer.length);
+      res.setHeader("X-TTS-Voice", result.voiceName);
+      res.setHeader("X-TTS-Cached", result.cached ? "1" : "0");
+      res.setHeader("Cache-Control", "public, max-age=86400");
+      return res.send(result.wavBuffer);
+    } catch (error: any) {
+      const msg = extractCleanApiError(error, "Failed to synthesize audiobook speech.");
+      console.warn("[Audiobooks] /api/audiobooks/tts notice:", msg);
+      const status =
+        error?.status ||
+        (msg.includes("GEMINI_API_KEY") || msg.includes("API key") ? 503 : 500);
+      return res.status(status).json({ error: msg, fallbackToDeviceSpeech: true });
+    }
+  });
+
+  function getUsableServerGeminiKey(): { apiKey: string | null; reason?: string } {
+    const raw = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
+    if (!raw || raw === "MY_GEMINI_API_KEY" || raw.startsWith("your_") || raw.length < 16) {
+      return {
+        apiKey: null,
+        reason: "Gemini API key is not configured. Please check GEMINI_API_KEY in Settings > Secrets.",
+      };
+    }
+    return { apiKey: raw };
+  }
+
+  function isGeminiKeyOrPermissionError(err: any): boolean {
+    const raw = String(err?.message || err || "");
+    return (
+      err?.status === 401 ||
+      err?.status === 403 ||
+      raw.includes("API_KEY_INVALID") ||
+      raw.includes("API key not valid") ||
+      raw.includes("PERMISSION_DENIED") ||
+      raw.includes("UNAUTHENTICATED")
+    );
+  }
+
+  function formatGeminiErrorPayload(err: any): { status: number; message: string } {
+    const raw = String(err?.message || err || "");
+    const lower = raw.toLowerCase();
+    if (isGeminiKeyOrPermissionError(err)) {
+      return {
+        status: err?.status === 403 ? 403 : 400,
+        message: "Your Gemini API key was rejected (API_KEY_INVALID). Please check or update GEMINI_API_KEY in Settings > Secrets.",
+      };
+    }
+    if (err?.status === 429 || lower.includes("resource_exhausted") || lower.includes("quota") || lower.includes("429")) {
+      return {
+        status: 429,
+        message: "Your Gemini API quota or credits are exhausted. Please check billing/quota in Settings > Secrets or retry shortly.",
+      };
+    }
+    if (err?.status === 503 || lower.includes("unavailable") || lower.includes("503") || lower.includes("high demand")) {
+      return {
+        status: 503,
+        message: "The AI model is temporarily experiencing high demand. Please retry in a few moments.",
+      };
+    }
+    return {
+      status: typeof err?.status === "number" && err.status >= 400 ? err.status : 500,
+      message: "Could not complete AI request right now. Please try again shortly.",
+    };
+  }
+
   app.post("/api/learning-path", async (req, res) => {
     try {
-      const apiKey = process.env.GEMINI_API_KEY;
+      const { apiKey, reason } = getUsableServerGeminiKey();
       if (!apiKey) {
-        return res.status(500).json({ error: "GEMINI_API_KEY environment variable is missing" });
+        return res.status(503).json({ error: reason || "GEMINI_API_KEY environment variable is missing" });
       }
 
       const ai = new GoogleGenAI({
@@ -3196,6 +4643,7 @@ Return a JSON object with a single 'steps' array. Each step should have:
 
       const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
       let parsedSteps: any = null;
+      let lastErr: any = null;
 
       for (const modelName of modelsToTry) {
         try {
@@ -3231,8 +4679,12 @@ Return a JSON object with a single 'steps' array. Each step should have:
             parsedSteps = parsed.steps;
             break;
           }
-        } catch (mErr) {
-          console.warn(`[Learning Path] Model ${modelName} error, trying next fallback:`, mErr);
+        } catch (mErr: any) {
+          lastErr = mErr;
+          if (isGeminiKeyOrPermissionError(mErr)) {
+            break;
+          }
+          console.warn(`[Learning Path] Model ${modelName} error, trying next fallback:`, mErr?.message || mErr);
         }
       }
 
@@ -3240,23 +4692,11 @@ Return a JSON object with a single 'steps' array. Each step should have:
         return res.json({ steps: parsedSteps });
       }
 
-      // Safe educational fallback steps
-      return res.json({
-        steps: [
-          { title: "Core Foundations & Fundamental Definitions", status: "completed", duration: "1 week" },
-          { title: "Theoretical Derivations & Quantitative Problem Solving", status: "current", duration: "2 weeks" },
-          { title: "Advanced Applications & Synoptic Exam Review", status: "upcoming", duration: "2 weeks" }
-        ]
-      });
+      const formatted = formatGeminiErrorPayload(lastErr);
+      return res.status(formatted.status).json({ error: formatted.message });
     } catch (error: any) {
-      console.error("Error generating learning path:", error);
-      res.json({
-        steps: [
-          { title: "Core Foundations & Fundamental Definitions", status: "completed", duration: "1 week" },
-          { title: "Theoretical Derivations & Quantitative Problem Solving", status: "current", duration: "2 weeks" },
-          { title: "Advanced Applications & Synoptic Exam Review", status: "upcoming", duration: "2 weeks" }
-        ]
-      });
+      const formatted = formatGeminiErrorPayload(error);
+      return res.status(formatted.status).json({ error: formatted.message });
     }
   });
 
@@ -3389,29 +4829,13 @@ Behavioral Persona:
         return res.json({ reply: replyText });
       }
 
-      // Default to Gemini with robust fallback cascade for quota resilience
-      const apiKey = process.env.GEMINI_API_KEY;
-      const generateEducationalFallback = (reasonText?: string) => {
-        const bookTitle = bookContext?.title || 'your reading material';
-        const pageInfo = bookContext?.page ? ` (Page ${bookContext.page})` : '';
-        const excerptHighlight = bookContext?.selectedText ? `\n> *"${bookContext.selectedText}"*\n` : '';
-        return `### Sage AI Tutor Insight for ${bookTitle}${pageInfo}
-${excerptHighlight}
-**Concept Analysis & Intuition:**
-Regarding your inquiry *"${prompt}"*:
-
-* **Core Principle:** In academic and scientific literature, key terms and definitions operate systematically within a bounded framework. Rather than memorizing raw text, focus on identifying cause-and-effect relationships between the variables.
-* **Intuitive Breakdown:** Think of this concept like an interconnected ecosystem: adjusting one parameter (such as force, pressure, or volume) triggers a predictable proportional response throughout the entire system.
-* **Mathematical & Formal Representation:** When modeled mathematically, these relationships often take the form of differential or rate-of-change expressions:
-  $$f(x) = \\lim_{\\Delta t \\to 0} \\frac{\\Delta y}{\\Delta t}$$
-  $$E = mc^2 \\quad \\text{or} \\quad P = \\frac{F}{A}$$
-
-* **Practical Study Takeaway:** Connect this rule directly to real-world applications (such as engineering, everyday machines, or biological processes) to solidify lasting memory.
-
-${reasonText ? `*Note: ${reasonText}*` : ''}
-
-Would you like me to walk through a concrete numerical example or test your understanding with a quick practice problem?`;
-      };
+      // Default to Gemini with robust fallback cascade for transient model errors
+      const { apiKey, reason } = getUsableServerGeminiKey();
+      if (!apiKey) {
+        return res.status(503).json({
+          error: reason || "Gemini API key is not configured. Please check GEMINI_API_KEY in Settings > Secrets.",
+        });
+      }
 
       let chatContext = '';
       if (recentHistory.length > 0) {
@@ -3440,6 +4864,11 @@ Would you like me to walk through a concrete numerical example or test your unde
         return config;
       };
 
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
       // Real-time Server-Sent Events (SSE) Streaming
       if (isStreamingRequested) {
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -3457,19 +4886,8 @@ Would you like me to walk through a concrete numerical example or test your unde
           }
         });
 
-        if (!apiKey) {
-          const fallback = generateEducationalFallback();
-          res.write(`data: ${JSON.stringify({ text: fallback })}\n\n`);
-          res.write(`data: [DONE]\n\n`);
-          return res.end();
-        }
-
-        const ai = new GoogleGenAI({
-          apiKey,
-          httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-        });
-
         let streamedAny = false;
+        let lastModelErr: any = null;
         for (const modelName of modelsToTry) {
           if (clientAborted) break;
           try {
@@ -3510,13 +4928,17 @@ Would you like me to walk through a concrete numerical example or test your unde
               break;
             }
           } catch (modelErr: any) {
-            console.warn(`[AI Tutor Stream] Model ${modelName} call failed, trying next fallback:`, modelErr?.message || modelErr);
+            lastModelErr = modelErr;
+            if (isGeminiKeyOrPermissionError(modelErr)) {
+              break;
+            }
+            console.warn(`[AI Tutor Stream] Model ${modelName} transient error, trying next fallback:`, modelErr?.message || modelErr);
           }
         }
 
         if (!streamedAny && !clientAborted) {
-          const fallbackNote = "Generated via Edu AI Local Knowledge Engine while the live cloud model recovers from temporary rate-limits.";
-          res.write(`data: ${JSON.stringify({ text: generateEducationalFallback(fallbackNote) })}\n\n`);
+          const formatted = formatGeminiErrorPayload(lastModelErr);
+          res.write(`data: ${JSON.stringify({ error: formatted.message })}\n\n`);
         }
 
         if (!clientAborted) {
@@ -3527,16 +4949,8 @@ Would you like me to walk through a concrete numerical example or test your unde
       }
 
       // Standard non-streaming JSON generation
-      if (!apiKey) {
-        return res.json({ reply: generateEducationalFallback() });
-      }
-
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-      });
-
       let generatedText: string | null = null;
+      let lastModelErr: any = null;
       for (const modelName of modelsToTry) {
         try {
           const config = getModelConfig(modelName);
@@ -3550,11 +4964,11 @@ Would you like me to walk through a concrete numerical example or test your unde
             break;
           }
         } catch (modelErr: any) {
-          console.warn(`[AI Tutor] Model ${modelName} call failed, trying next fallback:`, modelErr?.message || modelErr);
-          const errStr = (modelErr?.message || String(modelErr)).toLowerCase();
-          if (errStr.includes('quota') || errStr.includes('resource_exhausted') || errStr.includes('overloaded') || errStr.includes('503') || errStr.includes('429')) {
-            continue;
+          lastModelErr = modelErr;
+          if (isGeminiKeyOrPermissionError(modelErr)) {
+            break;
           }
+          console.warn(`[AI Tutor] Model ${modelName} transient error, trying next fallback:`, modelErr?.message || modelErr);
         }
       }
 
@@ -3562,23 +4976,15 @@ Would you like me to walk through a concrete numerical example or test your unde
         return res.json({ reply: generatedText });
       }
 
-      const fallbackNote = "Generated via Edu AI Local Knowledge Engine while the live cloud model recovers from temporary rate-limits.";
-      return res.json({ reply: generateEducationalFallback(fallbackNote) });
+      const formatted = formatGeminiErrorPayload(lastModelErr);
+      return res.status(formatted.status).json({ error: formatted.message });
     } catch (error: any) {
-      console.error("Error generating chat response:", error);
-      
       const errorString = error?.toString() || JSON.stringify(error) || "";
       if ((error?.status === 400 || errorString.includes('400')) && errorString.includes('credit balance')) {
         return res.status(400).json({ error: "Your Anthropic API credit balance is too low. Please switch to the Gemini Model or add credits to your Anthropic account." });
       }
-
-      let errorMessage = "Failed to generate chat response";
-      if (error?.status === 429 || errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED') || errorString.includes('prepayment credits are depleted')) {
-        errorMessage = "Your Gemini API credits are depleted. Please check your billing settings in Google AI Studio to add credits.";
-      } else if (error?.status === 503 || errorString.includes('503') || errorString.includes('UNAVAILABLE') || errorString.includes('high demand')) {
-        errorMessage = "The AI model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again in a few moments.";
-      }
-      res.status(error?.status || 500).json({ error: errorMessage });
+      const formatted = formatGeminiErrorPayload(error);
+      return res.status(formatted.status).json({ error: formatted.message });
     }
   });
 
@@ -3702,6 +5108,104 @@ function attachSocialWebSocketServer(httpServer: http.Server): void {
   });
 }
 
+async function reconcileAdminProfilesOnBoot() {
+  const sb = getServerSupabase();
+  if (sb) {
+    try {
+      const nowIso = new Date().toISOString();
+      const { data: rows } = await sb
+        .from("profiles")
+        .select("id, email, role")
+        .or("email.ilike.eduai.platform@admin.com,email.ilike.wolter@admin.com");
+
+      if (Array.isArray(rows)) {
+        for (const row of rows) {
+          const emailLower = String(row?.email || "").trim().toLowerCase();
+          if (emailLower === "eduai.platform@admin.com" && row.role !== "admin") {
+            await sb.from("profiles").update({ role: "admin", updated_at: nowIso }).eq("id", row.id);
+            await sb.auth?.admin?.updateUserById?.(row.id, { user_metadata: { role: "admin" } }).catch(() => {});
+          } else if (emailLower === "wolter@admin.com" && row.role === "admin") {
+            await sb.from("profiles").update({ role: "student", updated_at: nowIso }).eq("id", row.id);
+            await sb.auth?.admin?.updateUserById?.(row.id, { user_metadata: { role: "student" } }).catch(() => {});
+          }
+        }
+      }
+
+      // Also reconcile Supabase Auth user_metadata in case user exists in auth.users before profile row update
+      try {
+        let totalScanned = 0;
+        let platformExists = false;
+        let plaformExists = false;
+        let platformConfirmed = false;
+        let plaformConfirmed = false;
+
+        for (let page = 1; page <= 10; page++) {
+          const { data: usersPage } = await sb.auth.admin.listUsers({ page, perPage: 200 });
+          const batch = usersPage?.users || [];
+          totalScanned += batch.length;
+          for (const u of batch) {
+            // Scrub any bloated base64 avatar data from Supabase Auth user_metadata so JWTs stay compact (<1KB)
+            await scrubBloatedUserMetadata(u, sb);
+
+            const emailLower = String(u?.email || "").trim().toLowerCase();
+            if (emailLower === "eduai.platform@admin.com") {
+              platformExists = true;
+              platformConfirmed = Boolean(u?.email_confirmed_at || u?.confirmed_at);
+              const needsConfirm = !platformConfirmed;
+              const needsRole = u?.user_metadata?.role !== "admin";
+              if (needsConfirm || needsRole) {
+                await sb.auth.admin.updateUserById(u.id, {
+                  ...(needsConfirm ? { email_confirm: true } : {}),
+                  user_metadata: { ...(u.user_metadata || {}), role: "admin" },
+                }).catch(() => {});
+                if (needsConfirm) platformConfirmed = true;
+              }
+              await sb.from("profiles").upsert({ id: u.id, email: u.email, role: "admin", updated_at: nowIso }, { onConflict: "id" });
+            } else if (emailLower === "eduai.plaform@admin.com") {
+              plaformExists = true;
+              plaformConfirmed = Boolean(u?.email_confirmed_at || u?.confirmed_at);
+            } else if (emailLower === "wolter@admin.com" && u?.user_metadata?.role === "admin") {
+              await sb.auth.admin.updateUserById(u.id, {
+                user_metadata: { ...(u.user_metadata || {}), role: "student" },
+              }).catch(() => {});
+              await sb.from("profiles").update({ role: "student", updated_at: nowIso }).eq("id", u.id);
+            }
+          }
+          if (batch.length < 200) break;
+        }
+      } catch (_) {}
+    } catch (err) {
+      console.warn("[AdminMigration] Profile role reconciliation notice:", err);
+    }
+  }
+
+  // Reconcile any cached user-sync files on local disk
+  try {
+    if (fs.existsSync(USER_SYNC_DIR)) {
+      for (const fname of fs.readdirSync(USER_SYNC_DIR)) {
+        if (!fname.endsWith(".json")) continue;
+        const fpath = path.join(USER_SYNC_DIR, fname);
+        try {
+          const parsed = JSON.parse(fs.readFileSync(fpath, "utf-8"));
+          const snapEmail = String(parsed?.profileSnapshot?.email || "").trim().toLowerCase();
+          if (snapEmail === "eduai.platform@admin.com" && parsed.profileSnapshot.role !== "admin") {
+            parsed.profileSnapshot.role = "admin";
+            fs.writeFileSync(fpath, JSON.stringify(parsed, null, 2), "utf-8");
+          } else if (snapEmail === "wolter@admin.com" && parsed.profileSnapshot.role === "admin") {
+            parsed.profileSnapshot.role = "student";
+            fs.writeFileSync(fpath, JSON.stringify(parsed, null, 2), "utf-8");
+          }
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+
+  // Pre-hydrate ALL registered users into the social directory & backfill Supabase public.profiles directory on boot
+  try {
+    await hydrateDirectoryFromSupabase(getServerSupabase(), { backfillProfiles: true });
+  } catch (_) {}
+}
+
 async function startDevServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -3717,15 +5221,22 @@ async function startDevServer() {
     });
   }
 
-  const httpServer = http.createServer(app);
+  const httpServer = http.createServer({ maxHeaderSize: 65536 }, app);
+  httpServer.on("error", (err) => {
+    console.error("[Server] HTTP server error:", err);
+  });
   attachSocialWebSocketServer(httpServer);
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT} (HTTP + WS /ws/chat)`);
+    void reconcileAdminProfilesOnBoot();
   });
 }
 
-startDevServer();
+startDevServer().catch((err) => {
+  console.error("[Server] Failed to start dev server:", err);
+  process.exit(1);
+});
 
 export default app;
 

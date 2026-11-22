@@ -1,8 +1,15 @@
 import { Map, CheckCircle2, Circle, Sparkles, Loader2, Calendar, Target, Clock, BookOpen, ChevronRight, Layers, Award } from 'lucide-react';
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { extractUserAcademicProfile, ACADEMIC_PREFS_EVENT } from '../lib/bookPersonalization';
+import { safeStorage } from '../lib/safeStorage';
+import { pushAccountSyncPatch, ACCOUNT_SYNC_EVENT } from '../lib/accountSyncService';
+import {
+  recordLearningPathMilestoneCompleted,
+  reconcileAchievementsSnapshot,
+} from '../lib/achievementsService';
 
 interface LearningStep {
+  id?: string;
   title: string;
   status: 'completed' | 'current' | 'upcoming';
   duration: string;
@@ -41,33 +48,111 @@ export function LearningPath({ user, profile }: LearningPathProps) {
     ? academicProfile.subjects.join(', ')
     : 'core syllabus concepts';
 
+  const buildDefaultSteps = useCallback((): LearningStep[] => [
+    {
+      id: 'step-1',
+      title: `Foundations of ${trackLabel}`,
+      status: 'completed',
+      duration: '2 weeks',
+      description: `Core syllabus principles, foundational definitions, and guided reading modules aligned with ${academicProfile.summaryLabel}.`,
+      concepts: academicProfile.subjects.slice(0, 3).length > 0
+        ? academicProfile.subjects.slice(0, 3)
+        : ['Key Terminology', 'Fundamental Laws', 'Core Frameworks']
+    },
+    {
+      id: 'step-2',
+      title: `Core Mastery in ${subjectsLabel}`,
+      status: 'current',
+      duration: '3 weeks',
+      description: 'In-depth conceptual breakdowns, worked examples, and curriculum-aligned textbook problem sets.',
+      concepts: ['Analytical Frameworks', 'Worked Examples', 'Practical Inquiry']
+    },
+    {
+      id: 'step-3',
+      title: `${academicProfile.curriculum || academicProfile.educationLevel || 'Syllabus'} Assessment & Synthesis`,
+      status: 'upcoming',
+      duration: '4 weeks',
+      description: 'Comprehensive evaluations, past-paper style quizzes, and cross-topic mastery synthesis.',
+      concepts: ['Exam Readiness', 'Active Recall', 'Review Assessments']
+    },
+  ], [trackLabel, subjectsLabel, academicProfile.summaryLabel, academicProfile.curriculum, academicProfile.educationLevel, academicProfile.subjects]);
+
+  const storageKey = user?.id ? `edu_learning_path_steps_${user.id}` : 'edu_learning_path_steps_guest';
+  const currentPathId = `path_${trackLabel.toLowerCase().replace(/[^a-z0-9]+/g, '_')}`;
+
   useEffect(() => {
-    setSteps([
-      { 
-        title: `Foundations of ${trackLabel}`, 
-        status: 'completed', 
-        duration: '2 weeks',
-        description: `Core syllabus principles, foundational definitions, and guided reading modules aligned with ${academicProfile.summaryLabel}.`,
-        concepts: academicProfile.subjects.slice(0, 3).length > 0
-          ? academicProfile.subjects.slice(0, 3)
-          : ['Key Terminology', 'Fundamental Laws', 'Core Frameworks']
-      },
-      { 
-        title: `Core Mastery in ${subjectsLabel}`, 
-        status: 'current', 
-        duration: '3 weeks',
-        description: 'In-depth conceptual breakdowns, worked examples, and curriculum-aligned textbook problem sets.',
-        concepts: ['Analytical Frameworks', 'Worked Examples', 'Practical Inquiry']
-      },
-      { 
-        title: `${academicProfile.curriculum || academicProfile.educationLevel || 'Syllabus'} Assessment & Synthesis`, 
-        status: 'upcoming', 
-        duration: '4 weeks',
-        description: 'Comprehensive evaluations, past-paper style quizzes, and cross-topic mastery synthesis.',
-        concepts: ['Exam Readiness', 'Active Recall', 'Review Assessments']
-      },
-    ]);
-  }, [trackLabel, subjectsLabel, academicProfile.summaryLabel, academicProfile.curriculum, academicProfile.educationLevel, academicProfile.subjects]);
+    const saved = safeStorage.getJSON<LearningStep[]>(storageKey, []);
+    if (Array.isArray(saved) && saved.length > 0) {
+      setSteps(saved);
+    } else {
+      const defaults = buildDefaultSteps();
+      setSteps(defaults);
+      if (user?.id) {
+        reconcileAchievementsSnapshot(
+          user.id,
+          {
+            completedPathSteps: defaults
+              .filter((s) => s.status === 'completed')
+              .map((s, idx) => ({
+                pathId: currentPathId,
+                stepId: s.id || `step-${idx + 1}`,
+                stepTitle: s.title,
+              })),
+          },
+          { silentToast: true }
+        );
+      }
+    }
+  }, [storageKey, buildDefaultSteps, user?.id, currentPathId]);
+
+  useEffect(() => {
+    const onAccountSync = (e: any) => {
+      if (e?.detail?.userId && user?.id && e.detail.userId !== user.id) return;
+      const synced = e?.detail?.sync?.learningPathSteps;
+      if (Array.isArray(synced) && synced.length > 0) {
+        setSteps(synced);
+      }
+    };
+    window.addEventListener(ACCOUNT_SYNC_EVENT, onAccountSync);
+    return () => window.removeEventListener(ACCOUNT_SYNC_EVENT, onAccountSync);
+  }, [user?.id]);
+
+  const persistSteps = useCallback((nextSteps: LearningStep[]) => {
+    setSteps(nextSteps);
+    safeStorage.setJSON(storageKey, nextSteps);
+    if (user?.id) {
+      pushAccountSyncPatch(user.id, { learningPathSteps: nextSteps }, undefined, { immediate: true });
+    }
+  }, [storageKey, user?.id]);
+
+  const handleCompleteMilestone = useCallback((targetIdx: number) => {
+    const updated: LearningStep[] = steps.map((step, i) =>
+      i === targetIdx ? { ...step, status: 'completed' } : step
+    );
+    // Promote first remaining upcoming step to 'current' if none are current
+    if (!updated.some(s => s.status === 'current')) {
+      const nextUpcomingIdx = updated.findIndex(s => s.status === 'upcoming');
+      if (nextUpcomingIdx !== -1) {
+        updated[nextUpcomingIdx] = { ...updated[nextUpcomingIdx], status: 'current' };
+      }
+    }
+
+    setSteps(updated);
+    safeStorage.setJSON(storageKey, updated);
+    if (user?.id) {
+      pushAccountSyncPatch(user.id, { learningPathSteps: updated }, undefined, { immediate: true });
+    }
+
+    const targetStep = updated[targetIdx];
+    const allCompleted = updated.length > 0 && updated.every(s => s.status === 'completed');
+    recordLearningPathMilestoneCompleted(user?.id, {
+      pathId: currentPathId,
+      stepId: targetStep?.id || `step-${targetIdx + 1}`,
+      stepTitle: targetStep?.title || `Milestone ${targetIdx + 1}`,
+      allStepsCompleted: allCompleted,
+      pathTitle: `${trackLabel} Study Path`,
+    });
+  }, [steps, storageKey, user?.id, currentPathId, trackLabel]);
 
   const generatePersonalizedPath = async () => {
     setIsGenerating(true);
@@ -100,11 +185,13 @@ export function LearningPath({ user, profile }: LearningPathProps) {
 
       const data = await response.json();
       if (data.steps) {
-        setSteps(data.steps.map((s: any) => ({
+        const formatted = data.steps.map((s: any, idx: number) => ({
           ...s,
+          id: s.id || `gen-step-${Date.now()}-${idx + 1}`,
           description: s.description || 'Structured academic milestone designed for deep comprehension.',
           concepts: s.concepts || ['Target Competency', 'Active Recall', 'Quiz Review']
-        })));
+        }));
+        persistSteps(formatted);
       }
     } catch (err: any) {
       setError(err.message || 'Could not generate personalized path. Please try again.');
@@ -283,9 +370,21 @@ export function LearningPath({ user, profile }: LearningPathProps) {
                     <span>{step.duration}</span>
                   </div>
 
-                  {isCurrent && (
-                    <button className="bg-brand-600 dark:bg-indigo-600/80 hover:bg-brand-700 dark:hover:bg-indigo-600 text-white px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer shadow-xs">
-                      <span>Active Focus</span>
+                  {isCompleted ? (
+                    <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                      +40 EP Earned
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleCompleteMilestone(idx)}
+                      className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer shadow-xs whitespace-nowrap ${
+                        isCurrent
+                          ? 'bg-brand-600 dark:bg-indigo-600/80 hover:bg-brand-700 dark:hover:bg-indigo-600 text-white'
+                          : 'bg-slate-100 dark:bg-[#242429] hover:bg-slate-200 dark:hover:bg-[#303038] text-slate-700 dark:text-[#ededed] border border-slate-200 dark:border-[#34343c]'
+                      }`}
+                    >
+                      <span>Complete Milestone (+40 EP)</span>
                       <ChevronRight className="w-3.5 h-3.5" />
                     </button>
                   )}

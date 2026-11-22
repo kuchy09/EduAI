@@ -3,24 +3,58 @@ import { getSupabaseClient, getPersistedDeviceSession, supabase } from './supaba
 import { safeStorage } from './safeStorage';
 import { ACCOUNT_SYNC_EVENT, pushAccountSyncPatch } from './accountSyncService';
 
+// Tracks URLs that failed <img> loading in the current session so components
+// automatically advance to secondary/fallback sources instead of rendering broken images.
+const failedAvatarUrls = new Set<string>();
+const fetchedServerAvatarForUser = new Set<string>();
+
 function isMockAvatarUrl(url?: string | null): boolean {
   if (!url || typeof url !== 'string') return false;
   return url.includes('photo-1534528741775-53994a69daeb');
+}
+
+function normalizeUrlForComparison(url: string): string {
+  return url.trim();
+}
+
+export function isAvatarUrlFailed(url?: string | null): boolean {
+  if (!url || typeof url !== 'string') return false;
+  const trimmed = normalizeUrlForComparison(url);
+  if (!trimmed) return false;
+  if (failedAvatarUrls.has(trimmed)) return true;
+  // Also match encoded/raw /api/download key variants
+  if (trimmed.includes('/api/download')) {
+    try {
+      const parsed = new URL(trimmed, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+      const key = parsed.searchParams.get('key');
+      if (key && (failedAvatarUrls.has(key) || failedAvatarUrls.has(key.replace(/^uploads\/+/, '')))) {
+        return true;
+      }
+    } catch (_) {}
+  }
+  return false;
 }
 
 export function getPublicAvatarUrl(keyOrUrl: string | null | undefined): string | null {
   if (!keyOrUrl || typeof keyOrUrl !== 'string') return null;
   const trimmed = keyOrUrl.trim();
   if (!trimmed || isMockAvatarUrl(trimmed)) return null;
+  let resolved: string;
   if (
     trimmed.startsWith('http://') ||
     trimmed.startsWith('https://') ||
     trimmed.startsWith('data:') ||
-    trimmed.startsWith('blob:')
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('/api/download')
   ) {
-    return trimmed;
+    resolved = trimmed;
+  } else {
+    resolved = `/api/download?key=${encodeURIComponent(trimmed)}&inline=true`;
   }
-  return `/api/download?key=${encodeURIComponent(trimmed)}&inline=true`;
+  if (isAvatarUrlFailed(resolved) || isAvatarUrlFailed(trimmed)) {
+    return null;
+  }
+  return resolved;
 }
 
 function getScopedKeys(userId?: string) {
@@ -31,97 +65,172 @@ function getScopedKeys(userId?: string) {
   };
 }
 
-export function getStoredUserAvatar(user?: any, profile?: any): string | null {
+export function getAvatarCandidates(user?: any, profile?: any): string[] {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const pushCandidate = (raw?: string | null) => {
+    const resolved = getPublicAvatarUrl(raw);
+    if (resolved && !seen.has(resolved)) {
+      seen.add(resolved);
+      candidates.push(resolved);
+    }
+  };
+
   try {
     const userId = user?.id || profile?.id;
 
-    // 1. Prefer live cloud/profile avatar URL when available (keeps PC & phone synced)
-    const profileAvatar = getPublicAvatarUrl(profile?.avatar_url);
-    if (profileAvatar) {
-      return profileAvatar;
-    }
+    // 1. Live cloud/profile avatar URL (when valid and not failed)
+    pushCandidate(profile?.avatar_url);
 
-    // 2. Check user-scoped storage keys first
+    // 2. User-scoped storage keys (including local data URL backup)
     if (userId) {
       const scoped = getScopedKeys(userId);
       const scopedUrl = safeStorage.getItem(scoped.customUrlKey);
       if (scopedUrl && !isMockAvatarUrl(scopedUrl)) {
-        return getPublicAvatarUrl(scopedUrl);
+        pushCandidate(scopedUrl);
       }
       const scopedKey = safeStorage.getItem(scoped.avatarKey);
       if (scopedKey && !isMockAvatarUrl(scopedKey)) {
-        return getPublicAvatarUrl(scopedKey);
+        pushCandidate(scopedKey);
       }
       const scopedData = safeStorage.getItem(scoped.dataUrlKey);
       if (
         scopedData &&
         (scopedData.startsWith('data:image') || scopedData.startsWith('blob:') || scopedData.startsWith('http'))
       ) {
-        return scopedData;
+        pushCandidate(scopedData);
       }
     }
 
-    // 3. Check user auth metadata
-    const metaAvatar = getPublicAvatarUrl(user?.user_metadata?.avatar_url);
-    if (metaAvatar) return metaAvatar;
+    // 3. User auth metadata fields (supports OAuth picture, profile_photo_key, avatar_url)
+    pushCandidate(user?.user_metadata?.avatar_url);
+    pushCandidate(user?.user_metadata?.profile_photo_key);
+    pushCandidate(user?.user_metadata?.picture);
 
-    const metaPhotoKey = getPublicAvatarUrl(user?.user_metadata?.profile_photo_key);
-    if (metaPhotoKey) return metaPhotoKey;
-
-    const metaPicture = getPublicAvatarUrl(user?.user_metadata?.picture);
-    if (metaPicture) return metaPicture;
-
-    // 4. Fallback to legacy unscoped keys only if matching current/no user
-    if (!userId) {
-      const directDataUrl = safeStorage.getItem('user_avatar_data_url');
-      if (directDataUrl && (directDataUrl.startsWith('data:image') || directDataUrl.startsWith('http'))) {
-        return directDataUrl;
+    // 4. Legacy unscoped keys as final backup when no userId or when userId has no other working source
+    const directDataUrl = safeStorage.getItem('user_avatar_data_url');
+    if (directDataUrl && (directDataUrl.startsWith('data:image') || directDataUrl.startsWith('http'))) {
+      if (!userId || candidates.length === 0) {
+        pushCandidate(directDataUrl);
       }
+    }
+    if (!userId) {
       const cachedUrl = safeStorage.getItem('user_custom_avatar');
       if (cachedUrl && !isMockAvatarUrl(cachedUrl)) {
-        return getPublicAvatarUrl(cachedUrl);
+        pushCandidate(cachedUrl);
       }
       const cachedKey = safeStorage.getItem('user_profile_avatar_key');
       if (cachedKey && !isMockAvatarUrl(cachedKey)) {
-        return getPublicAvatarUrl(cachedKey);
+        pushCandidate(cachedKey);
       }
     }
   } catch (err) {
-    console.warn('[userAvatarService] Error retrieving stored avatar:', err);
+    console.warn('[userAvatarService] Error collecting avatar candidates:', err);
   }
-  return null;
+
+  return candidates;
+}
+
+export function getStoredUserAvatar(user?: any, profile?: any): string | null {
+  const candidates = getAvatarCandidates(user, profile);
+  return candidates.length > 0 ? candidates[0] : null;
+}
+
+export function markAvatarUrlFailed(
+  failedUrl: string | null | undefined,
+  user?: any,
+  profile?: any
+): string | null {
+  if (failedUrl && typeof failedUrl === 'string') {
+    const trimmed = normalizeUrlForComparison(failedUrl);
+    if (trimmed) {
+      failedAvatarUrls.add(trimmed);
+      if (trimmed.includes('/api/download')) {
+        try {
+          const parsed = new URL(trimmed, typeof window !== 'undefined' ? window.location.origin : 'http://localhost');
+          const key = parsed.searchParams.get('key');
+          if (key) {
+            failedAvatarUrls.add(key);
+            failedAvatarUrls.add(key.replace(/^uploads\/+/, ''));
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  const userId = user?.id || profile?.id || getPersistedDeviceSession()?.user?.id;
+  if (userId) {
+    const scoped = getScopedKeys(userId);
+    const curUrl = safeStorage.getItem(scoped.customUrlKey);
+    if (curUrl && isAvatarUrlFailed(curUrl)) {
+      safeStorage.removeItem(scoped.customUrlKey);
+    }
+    const curKey = safeStorage.getItem(scoped.avatarKey);
+    if (curKey && (isAvatarUrlFailed(curKey) || isAvatarUrlFailed(getPublicAvatarUrl(curKey)))) {
+      safeStorage.removeItem(scoped.avatarKey);
+    }
+  }
+
+  const nextCandidate = getStoredUserAvatar(user, profile);
+  if (typeof window !== 'undefined') {
+    queueMicrotask(() => {
+      window.dispatchEvent(
+        new CustomEvent('user_avatar_changed', {
+          detail: { avatarUrl: nextCandidate, userId },
+        })
+      );
+    });
+  }
+  return nextCandidate;
 }
 
 export function saveUserAvatarLocally(keyOrUrl: string, directDataUrl?: string, userId?: string) {
   try {
+    const activeUserId = userId || getPersistedDeviceSession()?.user?.id;
+    const scoped = getScopedKeys(activeUserId);
+
+    const hasFreshDataUrl =
+      !!directDataUrl && (directDataUrl.startsWith('data:image') || directDataUrl.startsWith('blob:'));
+
+    if (hasFreshDataUrl && directDataUrl) {
+      failedAvatarUrls.delete(directDataUrl.trim());
+    }
+    if (keyOrUrl) {
+      const trimmedKey = keyOrUrl.trim();
+      if (hasFreshDataUrl || trimmedKey.startsWith('data:image') || trimmedKey.startsWith('blob:')) {
+        failedAvatarUrls.delete(trimmedKey);
+      } else if (isAvatarUrlFailed(trimmedKey) || isAvatarUrlFailed(getPublicAvatarUrl(trimmedKey))) {
+        return;
+      }
+    }
+
     const formattedUrl = directDataUrl || getPublicAvatarUrl(keyOrUrl);
     if (!formattedUrl) return;
 
-    const scoped = getScopedKeys(userId);
-    const activeUserId = userId || getPersistedDeviceSession()?.user?.id;
-    const activeScoped = activeUserId ? getScopedKeys(activeUserId) : scoped;
-
-    if (directDataUrl) {
+    if (directDataUrl && (directDataUrl.startsWith('data:image') || directDataUrl.startsWith('blob:'))) {
       try {
-        safeStorage.setItem(activeScoped.dataUrlKey, directDataUrl);
+        safeStorage.setItem(scoped.dataUrlKey, directDataUrl);
       } catch (_) {}
     } else if (keyOrUrl.startsWith('data:image') || keyOrUrl.startsWith('blob:')) {
       try {
-        safeStorage.setItem(activeScoped.dataUrlKey, keyOrUrl);
+        safeStorage.setItem(scoped.dataUrlKey, keyOrUrl);
       } catch (_) {}
     }
 
     const remoteUrl = getPublicAvatarUrl(keyOrUrl);
-    safeStorage.setItem(activeScoped.customUrlKey, remoteUrl || formattedUrl);
-    safeStorage.setItem(activeScoped.avatarKey, keyOrUrl);
+    safeStorage.setItem(scoped.customUrlKey, remoteUrl || formattedUrl);
+    safeStorage.setItem(scoped.avatarKey, keyOrUrl);
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('user_avatar_changed', {
-          detail: { avatarUrl: remoteUrl || formattedUrl, key: keyOrUrl, userId: activeUserId },
-        })
-      );
-      window.dispatchEvent(new Event('storage'));
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new CustomEvent('user_avatar_changed', {
+            detail: { avatarUrl: remoteUrl || formattedUrl, key: keyOrUrl, userId: activeUserId },
+          })
+        );
+        window.dispatchEvent(new Event('storage'));
+      });
     }
   } catch (err) {
     console.warn('[userAvatarService] Error saving avatar locally:', err);
@@ -142,19 +251,21 @@ export function removeUserAvatarLocally(userId?: string) {
     safeStorage.removeItem('user_profile_avatar_key');
 
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(
-        new CustomEvent('user_avatar_changed', {
-          detail: { avatarUrl: null, key: null, userId: activeUserId },
-        })
-      );
-      window.dispatchEvent(new Event('storage'));
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new CustomEvent('user_avatar_changed', {
+            detail: { avatarUrl: null, key: null, userId: activeUserId },
+          })
+        );
+        window.dispatchEvent(new Event('storage'));
+      });
     }
   } catch (err) {
     console.warn('[userAvatarService] Error removing avatar locally:', err);
   }
 }
 
-async function compressImageToDataUrl(file: File, maxDim = 256): Promise<string | null> {
+async function compressImageToDataUrl(file: File, maxDim = 320): Promise<string | null> {
   if (typeof document === 'undefined') return null;
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -171,7 +282,7 @@ async function compressImageToDataUrl(file: File, maxDim = 256): Promise<string 
           const ctx = canvas.getContext('2d');
           if (!ctx) return resolve(null);
           ctx.drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', 0.8));
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
         } catch (_) {
           resolve(null);
         }
@@ -185,8 +296,8 @@ async function compressImageToDataUrl(file: File, maxDim = 256): Promise<string 
 }
 
 /**
- * Upload profile picture to Supabase Storage ('avatars' bucket) + server disk/B2,
- * and persist the permanent URL into Supabase profiles, auth metadata, and cross-device sync.
+ * Upload profile picture durably to Supabase Storage ('avatars' bucket) + server disk/B2,
+ * with a portable compact JPEG fallback so profile photos persist across restarts & devices.
  */
 export async function uploadAndSyncUserAvatar(
   file: File,
@@ -194,8 +305,9 @@ export async function uploadAndSyncUserAvatar(
   explicitToken?: string
 ): Promise<string | null> {
   const userId = user?.id;
-  let previewDataUrl = '';
+  failedAvatarUrls.clear();
 
+  let previewDataUrl = '';
   try {
     previewDataUrl = await new Promise<string>((resolve) => {
       const reader = new FileReader();
@@ -203,16 +315,57 @@ export async function uploadAndSyncUserAvatar(
       reader.onerror = () => resolve('');
       reader.readAsDataURL(file);
     });
-    if (previewDataUrl) {
-      saveUserAvatarLocally(previewDataUrl, previewDataUrl, userId);
-    }
   } catch (_) {}
 
-  let permanentUrl: string | null = null;
-  const sbClient = getSupabaseClient() || supabase;
+  const compactDataUrl = await compressImageToDataUrl(file, 320);
+  const localBestDataUrl = compactDataUrl || previewDataUrl;
 
-  // 1. Try Supabase Storage public 'avatars' bucket first (globally accessible across PC & mobile)
-  if (sbClient && userId) {
+  if (localBestDataUrl) {
+    saveUserAvatarLocally(localBestDataUrl, localBestDataUrl, userId);
+  }
+
+  const sbClient = getSupabaseClient() || supabase;
+  let token = explicitToken || '';
+  if (!token && sbClient) {
+    try {
+      const { data } = await sbClient.auth.getSession();
+      token = data?.session?.access_token || '';
+    } catch (_) {}
+  }
+  if (!token) {
+    token = getPersistedDeviceSession()?.access_token || '';
+  }
+
+  let permanentUrl: string | null = null;
+
+  // 1. Primary path: server-side durable upload + Supabase Storage + Postgres profiles + sync
+  if (token && userId && localBestDataUrl) {
+    try {
+      const res = await fetch('/api/profile/avatar', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          dataUrl: localBestDataUrl,
+          filename: file.name,
+        }),
+      });
+      if (res.ok) {
+        const json = await res.json().catch(() => ({}));
+        const resolvedServerUrl = json?.avatarUrl || json?.avatar_url;
+        if (resolvedServerUrl && typeof resolvedServerUrl === 'string') {
+          permanentUrl = resolvedServerUrl;
+        }
+      }
+    } catch (err) {
+      console.warn('[userAvatarService] /api/profile/avatar notice:', err);
+    }
+  }
+
+  // 2. Client Supabase Storage fallback if server endpoint wasn't used or didn't return a URL
+  if (!permanentUrl && sbClient && userId) {
     try {
       const ext = (file.name.split('.').pop() || 'png').replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'png';
       const storagePath = `${userId}/avatar-${Date.now()}.${ext}`;
@@ -230,48 +383,22 @@ export async function uploadAndSyncUserAvatar(
     }
   }
 
-  // 2. Also upload to backend server disk & B2 for fallback & fast local caching
-  let serverKey: string | null = null;
-  try {
-    const prefix = userId ? `avatars/${userId}` : 'avatars';
-    const uploadRes = await fetch(
-      `/api/upload-direct?filename=${encodeURIComponent(file.name)}&prefix=${encodeURIComponent(prefix)}`,
-      {
-        method: 'POST',
-        body: file,
-        headers: { 'Content-Type': file.type || 'image/png' },
-      }
-    );
-    if (uploadRes.ok) {
-      const data = await uploadRes.json().catch(() => ({}));
-      if (data?.key) {
-        serverKey = data.key;
-      }
-    }
-  } catch (_) {}
-
-  // 3. When Supabase 'avatars' bucket isn't available, prefer a portable compressed JPEG data URL
-  // so avatars render identically across AI Studio containers, Vercel, Chrome, and mobile devices.
+  // 3. Fallback to compact portable data URL (never vanishes across container restarts)
   if (!permanentUrl) {
-    const compactDataUrl = await compressImageToDataUrl(file, 256);
-    if (compactDataUrl) {
-      permanentUrl = compactDataUrl;
-    } else if (serverKey) {
-      permanentUrl = `/api/download?key=${encodeURIComponent(serverKey)}&inline=true`;
-    } else {
-      permanentUrl = previewDataUrl || null;
-    }
+    permanentUrl = localBestDataUrl || null;
   }
 
   if (permanentUrl && userId) {
-    saveUserAvatarLocally(permanentUrl, previewDataUrl || undefined, userId);
+    saveUserAvatarLocally(permanentUrl, localBestDataUrl || undefined, userId);
 
     if (sbClient) {
-      try {
-        await sbClient.auth.updateUser({
-          data: { avatar_url: permanentUrl, profile_photo_key: permanentUrl },
-        });
-      } catch (_) {}
+      if (!permanentUrl.startsWith('data:') && permanentUrl.length < 512) {
+        try {
+          await sbClient.auth.updateUser({
+            data: { avatar_url: permanentUrl, profile_photo_key: permanentUrl },
+          });
+        } catch (_) {}
+      }
 
       try {
         await sbClient
@@ -285,17 +412,6 @@ export async function uploadAndSyncUserAvatar(
             { onConflict: 'id' }
           );
       } catch (_) {}
-    }
-
-    let token = explicitToken || '';
-    if (!token && sbClient) {
-      try {
-        const { data } = await sbClient.auth.getSession();
-        token = data?.session?.access_token || '';
-      } catch (_) {}
-    }
-    if (!token) {
-      token = getPersistedDeviceSession()?.access_token || '';
     }
 
     if (token) {
@@ -317,6 +433,16 @@ export async function uploadAndSyncUserAvatar(
       token,
       { immediate: true }
     );
+
+    if (typeof window !== 'undefined') {
+      queueMicrotask(() => {
+        window.dispatchEvent(
+          new CustomEvent(ACCOUNT_SYNC_EVENT, {
+            detail: { userId, profile: { avatar_url: permanentUrl } },
+          })
+        );
+      });
+    }
   }
 
   return permanentUrl;
@@ -329,24 +455,28 @@ export function useUserAvatar(user?: any, profile?: any): string | null {
     let isMounted = true;
     const userId = user?.id || profile?.id;
 
-    // 1. Immediate resolution from profile / scoped storage / metadata
+    // 1. Immediate resolution from non-failed profile / scoped storage / metadata candidates
     const current = getStoredUserAvatar(user, profile);
     if (isMounted) {
       setAvatarUrl(current);
     }
 
-    // Persist profile.avatar_url to user-scoped storage when present
+    // Cache valid profile.avatar_url to user-scoped storage when not failed
     if (profile?.avatar_url && !isMockAvatarUrl(profile.avatar_url) && userId) {
       const resolved = getPublicAvatarUrl(profile.avatar_url);
       if (resolved) {
         const scoped = getScopedKeys(userId);
         safeStorage.setItem(scoped.customUrlKey, resolved);
         safeStorage.setItem(scoped.avatarKey, profile.avatar_url);
+        if (profile.avatar_url.startsWith('data:image')) {
+          safeStorage.setItem(scoped.dataUrlKey, profile.avatar_url);
+        }
         if (isMounted) setAvatarUrl(resolved);
       }
     }
 
-    // 2. Fetch latest avatar from Supabase profiles table
+    // 2. Fetch latest avatar from Supabase profiles table (when client SDK configured)
+    //    or via backend /api/auth/user (in server-proxied auth mode)
     const sbClient = getSupabaseClient() || supabase;
     if (sbClient && userId) {
       const fetchProfileAvatar = async () => {
@@ -363,6 +493,9 @@ export function useUserAvatar(user?: any, profile?: any): string | null {
               const scoped = getScopedKeys(userId);
               safeStorage.setItem(scoped.customUrlKey, resolved);
               safeStorage.setItem(scoped.avatarKey, data.avatar_url);
+              if (data.avatar_url.startsWith('data:image')) {
+                safeStorage.setItem(scoped.dataUrlKey, data.avatar_url);
+              }
               setAvatarUrl(resolved);
             }
           }
@@ -371,12 +504,49 @@ export function useUserAvatar(user?: any, profile?: any): string | null {
         }
       };
       fetchProfileAvatar();
+    } else if (userId && !current && !fetchedServerAvatarForUser.has(userId)) {
+      const session = getPersistedDeviceSession();
+      if (
+        session?.access_token &&
+        session.access_token !== 'demo_token' &&
+        session.access_token !== 'local_token'
+      ) {
+        fetchedServerAvatarForUser.add(userId);
+        fetch('/api/auth/user', {
+          headers: {
+            Authorization: `Bearer ${session.access_token}`,
+            ...(session.refresh_token ? { 'x-refresh-token': session.refresh_token } : {}),
+          },
+        })
+          .then((res) => (res.ok ? res.json() : null))
+          .then((json) => {
+            if (!isMounted || !json) return;
+            const serverAvatar =
+              json?.profile?.avatar_url ||
+              json?.user?.user_metadata?.avatar_url ||
+              json?.user?.user_metadata?.picture;
+            if (serverAvatar && !isMockAvatarUrl(serverAvatar)) {
+              const resolved = getPublicAvatarUrl(serverAvatar);
+              if (resolved) {
+                const scoped = getScopedKeys(userId);
+                safeStorage.setItem(scoped.customUrlKey, resolved);
+                safeStorage.setItem(scoped.avatarKey, serverAvatar);
+                if (serverAvatar.startsWith('data:image')) {
+                  safeStorage.setItem(scoped.dataUrlKey, serverAvatar);
+                }
+                setAvatarUrl(resolved);
+              }
+            }
+          })
+          .catch(() => {});
+      }
     }
 
     // 3. Listen to local avatar changes and cross-device sync updates
     const handleAvatarChanged = (e: any) => {
       if (e?.detail?.userId && userId && e.detail.userId !== userId) return;
-      const newUrl = e?.detail?.avatarUrl !== undefined ? e.detail.avatarUrl : getStoredUserAvatar(user, profile);
+      const newUrl =
+        e?.detail?.avatarUrl !== undefined ? e.detail.avatarUrl : getStoredUserAvatar(user, profile);
       if (isMounted) {
         setAvatarUrl(newUrl || null);
       }
@@ -391,6 +561,9 @@ export function useUserAvatar(user?: any, profile?: any): string | null {
             const scoped = getScopedKeys(userId);
             safeStorage.setItem(scoped.customUrlKey, resolved);
             safeStorage.setItem(scoped.avatarKey, syncAvatar);
+            if (syncAvatar.startsWith('data:image')) {
+              safeStorage.setItem(scoped.dataUrlKey, syncAvatar);
+            }
           }
           setAvatarUrl(resolved);
         }
@@ -418,6 +591,7 @@ export function useUserAvatar(user?: any, profile?: any): string | null {
     user?.id,
     user?.user_metadata?.avatar_url,
     user?.user_metadata?.profile_photo_key,
+    user?.user_metadata?.picture,
     profile?.id,
     profile?.avatar_url,
   ]);

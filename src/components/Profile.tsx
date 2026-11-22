@@ -1,9 +1,17 @@
 import { Mail, MapPin, Building, Calendar, BookOpen, GraduationCap, BarChart2, LogOut, Award, Star, Clock, Camera, Loader2 } from 'lucide-react';
 import React, { useEffect, useState, useRef } from 'react';
-import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
-import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl, uploadAndSyncUserAvatar } from '../lib/userAvatarService';
+import { supabase, clearStaleSupabaseTokens, getPersistedDeviceSession } from '../lib/supabase';
+import { saveUserAvatarLocally, useUserAvatar, getPublicAvatarUrl, uploadAndSyncUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
 import { extractUserAcademicProfile, ACADEMIC_PREFS_EVENT } from '../lib/bookPersonalization';
-import { ACCOUNT_SYNC_EVENT } from '../lib/accountSyncService';
+import { ACCOUNT_SYNC_EVENT, pushAccountSyncPatch } from '../lib/accountSyncService';
+import {
+  getStoredAchievements,
+  ACHIEVEMENTS_UPDATED_EVENT,
+  UserAchievementState,
+  getScholarRank,
+} from '../lib/achievementsService';
+import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
+import { BadgesShowcase } from './BadgesShowcase';
 
 export interface ProfileProps {
   user?: any;
@@ -21,6 +29,17 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
   const avatarUrl = useUserAvatar(user, profile);
   const [avatarFailed, setAvatarFailed] = useState(false);
   const [prefsTick, setPrefsTick] = useState(0);
+  const [achievements, setAchievements] = useState<UserAchievementState>(() =>
+    getStoredAchievements(propUser?.id)
+  );
+  const [studyMinutes, setStudyMinutes] = useState<number>(() => {
+    const g = getDailyGoal();
+    return Object.values(g.history || {}).reduce((acc, h) => acc + (h.minutes || 0), 0);
+  });
+
+  useEffect(() => {
+    setAchievements(getStoredAchievements(user?.id));
+  }, [user?.id]);
 
   useEffect(() => {
     const onPrefsUpdated = () => setPrefsTick((t) => t + 1);
@@ -28,20 +47,45 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
       if (e?.detail?.profile) {
         setProfile((prev: any) => ({ ...(prev || {}), ...e.detail.profile }));
       }
+      setAchievements(getStoredAchievements(user?.id));
       setPrefsTick((t) => t + 1);
+    };
+    const onAchievementsUpdated = () => {
+      setAchievements(getStoredAchievements(user?.id));
+    };
+    const onGoalUpdated = () => {
+      const g = getDailyGoal();
+      setStudyMinutes(Object.values(g.history || {}).reduce((acc, h) => acc + (h.minutes || 0), 0));
     };
     window.addEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
     window.addEventListener(ACCOUNT_SYNC_EVENT, onAccountSync);
+    window.addEventListener(ACHIEVEMENTS_UPDATED_EVENT, onAchievementsUpdated);
+    window.addEventListener(GOAL_EVENT_NAME, onGoalUpdated);
     return () => {
       window.removeEventListener(ACADEMIC_PREFS_EVENT, onPrefsUpdated);
       window.removeEventListener(ACCOUNT_SYNC_EVENT, onAccountSync);
+      window.removeEventListener(ACHIEVEMENTS_UPDATED_EVENT, onAchievementsUpdated);
+      window.removeEventListener(GOAL_EVENT_NAME, onGoalUpdated);
     };
-  }, []);
+  }, [user?.id]);
 
   const academicProfile = React.useMemo(
     () => extractUserAcademicProfile(profile, user),
     [profile, user, prefsTick]
   );
+
+  const scholarRank = React.useMemo(
+    () => getScholarRank(achievements.totalEduPoints),
+    [achievements.totalEduPoints]
+  );
+
+  const earnedBadgesCount = Object.keys(achievements.earnedBadges).length;
+  const completedQuizzes = Object.values(achievements.completedQuizIds);
+  const avgQuizScore =
+    completedQuizzes.length > 0
+      ? Math.round(completedQuizzes.reduce((acc, q) => acc + q.bestScore, 0) / completedQuizzes.length)
+      : 0;
+  const studyHoursDisplay = studyMinutes >= 60 ? `${Math.round((studyMinutes / 60) * 10) / 10}h` : `${studyMinutes}m`;
 
   useEffect(() => {
     if (propUser) setUser(propUser);
@@ -56,53 +100,99 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
   }, [avatarUrl]);
 
   useEffect(() => {
-    if (!supabase) return;
-
     let isMounted = true;
 
     const loadUserData = async () => {
       try {
-        const res = await supabase.auth.getUser();
-        if (res?.error) {
-          if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
-            clearStaleSupabaseTokens();
+        let activeUser = propUser || null;
+        if (supabase) {
+          const res = await supabase.auth.getUser();
+          if (res?.error) {
+            if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
+              clearStaleSupabaseTokens();
+            }
+          } else if (res?.data?.user) {
+            activeUser = res.data.user;
           }
-          if (isMounted) setUser(null);
-          return;
         }
-        const user = res?.data?.user || null;
-        if (!isMounted) return;
-        setUser(user);
-        if (user) {
+
+        if (!isMounted || !activeUser?.id) return;
+        setUser(activeUser);
+
+        // Fetch canonical profile via backend /api/auth/user (backfills missing/partial existing accounts automatically)
+        const session = getPersistedDeviceSession();
+        if (session?.access_token && session.access_token !== 'demo_token' && session.access_token !== 'local_token') {
           try {
-            const { data } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+            const authRes = await fetch('/api/auth/user', {
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+                ...(session.refresh_token ? { 'x-refresh-token': session.refresh_token } : {}),
+              },
+            });
+            if (authRes.ok && isMounted) {
+              const authJson = await authRes.json().catch(() => ({}));
+              if (authJson?.user) setUser(authJson.user);
+              if (authJson?.profile) {
+                setProfile((prev: any) => ({ ...(prev || {}), ...authJson.profile }));
+                if (authJson.profile.avatar_url) {
+                  saveUserAvatarLocally(authJson.profile.avatar_url, undefined, activeUser.id);
+                }
+              }
+            }
+          } catch (_) {}
+        }
+
+        if (supabase) {
+          try {
+            const { data } = await supabase.from('profiles').select('*').eq('id', activeUser.id).maybeSingle();
             if (!isMounted) return;
             if (data) {
               setProfile((prev: any) => ({ ...(prev || {}), ...data }));
               if (data.avatar_url) {
-                saveUserAvatarLocally(data.avatar_url, undefined, user.id);
+                saveUserAvatarLocally(data.avatar_url, undefined, activeUser.id);
               }
             } else {
+              const meta = activeUser.user_metadata || {};
+              const canonicalSeed: Record<string, any> = {
+                id: activeUser.id,
+                email: activeUser.email || null,
+                full_name: meta.full_name || meta.name || (activeUser.email ? activeUser.email.split('@')[0] : 'Edu AI Learner'),
+                avatar_url: meta.avatar_url || meta.picture || null,
+                role: meta.role || 'student',
+                country: meta.country || meta.location || null,
+                education_level: meta.education_level || null,
+                curriculum: meta.curriculum || null,
+                field_of_study: meta.field_of_study || null,
+                subjects: meta.subjects || null,
+                updated_at: new Date().toISOString(),
+              };
               try {
-                const { data: newProfile } = await supabase.from('profiles').insert([{ id: user.id }]).select().single();
-                if (isMounted && newProfile) setProfile(newProfile);
+                const { data: newProfile } = await supabase
+                  .from('profiles')
+                  .upsert(canonicalSeed, { onConflict: 'id' })
+                  .select()
+                  .maybeSingle();
+                if (isMounted && newProfile) {
+                  setProfile((prev: any) => ({ ...(prev || {}), ...newProfile }));
+                  pushAccountSyncPatch(activeUser.id, { profileSnapshot: newProfile }, session?.access_token, { immediate: true });
+                }
               } catch (e) {
-                console.warn("Profile insert error ignored:", e);
+                console.warn('Profile upsert error ignored:', e);
               }
             }
           } catch (e) {
-            console.warn("Profile select error ignored:", e);
+            console.warn('Profile select error ignored:', e);
           }
         }
       } catch (e) {
-        console.warn("GetUser error ignored:", e);
+        console.warn('GetUser error ignored:', e);
       }
     };
 
     loadUserData();
 
     return () => { isMounted = false; };
-  }, []);
+  }, [propUser?.id]);
 
   const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -148,32 +238,33 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
                 accept="image/*" 
               />
               <div className="w-32 h-32 sm:w-40 sm:h-40 bg-white dark:bg-[#1a1a1d] p-1.5 rounded-full z-10 shadow-md relative overflow-hidden">
-                {avatarUrl && !avatarFailed ? (
-                  <img 
-                    src={avatarUrl} 
-                    alt="Profile" 
-                    className="w-full h-full rounded-full object-cover"
-                    onError={() => setAvatarFailed(true)}
-                  />
-                ) : profile?.avatar_url && !avatarFailed ? (
-                  <img 
-                    src={getPublicUrl(profile.avatar_url)} 
-                    alt="Profile" 
-                    className="w-full h-full rounded-full object-cover"
-                    onError={() => setAvatarFailed(true)}
-                  />
-                ) : user?.user_metadata?.profile_photo_key && !avatarFailed ? (
-                  <img 
-                    src={getPublicUrl(user.user_metadata.profile_photo_key)} 
-                    alt="Profile" 
-                    className="w-full h-full rounded-full object-cover"
-                    onError={() => setAvatarFailed(true)}
-                  />
-                ) : (
-                  <div className="w-full h-full bg-brand-100 dark:bg-brand-950 rounded-full flex items-center justify-center text-4xl font-display font-bold text-brand-600 dark:text-brand-300">
-                    {user?.email ? user.email.charAt(0).toUpperCase() : 'U'}
-                  </div>
-                )}
+                {(() => {
+                  const resolvedProfileUrl = getPublicUrl(profile?.avatar_url);
+                  const resolvedMetaPhoto = getPublicUrl(user?.user_metadata?.profile_photo_key);
+                  const displayUrl = avatarUrl || resolvedProfileUrl || resolvedMetaPhoto;
+                  if (displayUrl && !avatarFailed) {
+                    return (
+                      <img 
+                        src={displayUrl} 
+                        alt="Profile" 
+                        className="w-full h-full rounded-full object-cover"
+                        onError={() => {
+                          const nextCandidate = markAvatarUrlFailed(displayUrl, user, profile);
+                          if (nextCandidate && nextCandidate !== displayUrl) {
+                            setAvatarFailed(false);
+                          } else {
+                            setAvatarFailed(true);
+                          }
+                        }}
+                      />
+                    );
+                  }
+                  return (
+                    <div className="w-full h-full bg-brand-100 dark:bg-brand-950 rounded-full flex items-center justify-center text-4xl font-display font-bold text-brand-600 dark:text-brand-300">
+                      {user?.email ? user.email.charAt(0).toUpperCase() : 'U'}
+                    </div>
+                  );
+                })()}
                 
                 {/* Overlay for uploading */}
                 <div className="absolute inset-0 bg-black/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
@@ -191,16 +282,28 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
             </button>
           </div>
 
-          {/* Name & Badge */}
-          <div className="space-y-1 sm:space-y-2">
-            <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          {/* Name & Scholar Metadata */}
+          <div className="space-y-1.5 sm:space-y-2">
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
               <h1 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-white tracking-tight">
                 {profile?.full_name || user?.user_metadata?.full_name || 'Edu AI Learner'}
               </h1>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-brand-50 dark:bg-brand-950/60 text-brand-700 dark:text-brand-300 text-xs font-semibold rounded-full w-fit">
-                <GraduationCap className="w-3.5 h-3.5" />
-                {academicProfile.educationLevel || 'Active Student'} {user?.user_metadata?.role ? `• ${user.user_metadata.role}` : ''}
+              <span className="text-xs font-semibold text-brand-600 dark:text-brand-300 flex items-center gap-1.5">
+                <GraduationCap className="w-3.5 h-3.5 shrink-0" />
+                <span>
+                  {academicProfile.educationLevel || 'Active Student'}
+                  {user?.user_metadata?.role ? ` · ${user.user_metadata.role}` : ''}
+                </span>
               </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs sm:text-sm text-slate-600 dark:text-[#c4c4c8] font-medium">
+              <span className="font-semibold text-brand-700 dark:text-[#b8a5f0] tabular-nums">
+                {achievements.totalEduPoints.toLocaleString()} Edu Points
+              </span>
+              <span aria-hidden="true" className="text-slate-400">·</span>
+              <span>{scholarRank.title}</span>
+              <span aria-hidden="true" className="text-slate-400">·</span>
+              <span className="tabular-nums">{earnedBadgesCount} {earnedBadgesCount === 1 ? 'Badge' : 'Badges'} Earned</span>
             </div>
             <p className="text-slate-500 dark:text-slate-400 max-w-2xl text-sm md:text-base">
               {academicProfile.isConfigured
@@ -336,32 +439,32 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
                 <div className="w-10 h-10 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mb-1">
                   <Award className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0</div>
-                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Certificates</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed] tabular-nums">{achievements.totalEduPoints.toLocaleString()}</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa]">Edu Points</div>
               </div>
               
               <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
                 <div className="w-10 h-10 bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-full flex items-center justify-center mb-1">
                   <BookOpen className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0</div>
-                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Books Read</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed] tabular-nums">{achievements.completedBookIds.length}</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa]">Books Completed</div>
               </div>
               
               <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
                 <div className="w-10 h-10 bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 rounded-full flex items-center justify-center mb-1">
                   <Star className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0</div>
-                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Avg Quiz Score</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed] tabular-nums">{avgQuizScore}%</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa]">Avg Quiz Score</div>
               </div>
               
               <div className="p-4 bg-slate-50 dark:bg-[#222226] rounded-xl border border-slate-100 dark:border-[#2e2e34] flex flex-col items-center justify-center text-center space-y-2">
                 <div className="w-10 h-10 bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 rounded-full flex items-center justify-center mb-1">
                   <Clock className="w-5 h-5" />
                 </div>
-                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed]">0h</div>
-                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa] uppercase tracking-wider">Study Time</div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-[#ededed] tabular-nums">{studyHoursDisplay}</div>
+                <div className="text-xs font-medium text-slate-500 dark:text-[#a1a1aa]">Study Time</div>
               </div>
             </div>
             
@@ -371,14 +474,29 @@ export function Profile({ user: propUser, profile: propProfile, onNavigate, onSi
                 <BarChart2 className="w-6 h-6" />
               </div>
               <div className="flex-1 text-center sm:text-left">
-                <h4 className="font-semibold text-slate-900 dark:text-[#ededed]">Start Your Journey!</h4>
-                <p className="text-sm text-slate-500 dark:text-[#a1a1aa] mt-1">You're ready to start learning. Pick a book or course to begin tracking your progress.</p>
+                <h4 className="font-semibold text-slate-900 dark:text-[#ededed]">
+                  {earnedBadgesCount > 0
+                    ? `${earnedBadgesCount} Badges Unlocked · ${scholarRank.title}`
+                    : 'Start Your Journey!'}
+                </h4>
+                <p className="text-sm text-slate-500 dark:text-[#a1a1aa] mt-1">
+                  {earnedBadgesCount > 0
+                    ? 'Keep completing textbooks, practice quizzes, and learning paths to climb to the next scholar tier.'
+                    : 'Pick a textbook, quiz, or learning path milestone to earn Edu Points and unlock profile badges.'}
+                </p>
               </div>
-              <button className="text-sm font-medium text-brand-600 dark:text-[#b8a5f0] hover:text-brand-700 dark:hover:text-[#d8cef6] whitespace-nowrap bg-brand-50 dark:bg-brand-500/20 dark:hover:bg-brand-500/30 px-4 py-2 rounded-lg transition-colors">
+              <button
+                type="button"
+                onClick={() => onNavigate?.('library')}
+                className="text-sm font-medium text-brand-600 dark:text-[#b8a5f0] hover:text-brand-700 dark:hover:text-[#d8cef6] whitespace-nowrap bg-brand-50 dark:bg-brand-500/20 dark:hover:bg-brand-500/30 px-4 py-2 rounded-lg transition-colors cursor-pointer"
+              >
                 View Library
               </button>
             </div>
           </div>
+
+          {/* Badges & Achievements Showcase */}
+          <BadgesShowcase achievements={achievements} onNavigate={onNavigate} />
           
         </div>
       </div>

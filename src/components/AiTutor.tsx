@@ -400,9 +400,10 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         // Sage TALKS BACK aloud to user!
         speakSageVoice(replyText);
       } else {
-        const fallback = "I encountered an issue processing that. Please try asking again.";
-        setVoiceLastAiReply(fallback);
-        speakSageVoice(fallback);
+        const errData = await response.json().catch(() => ({}));
+        const errMessage = errData.error || "I encountered an issue processing that. Please try asking again.";
+        setVoiceLastAiReply(errMessage);
+        speakSageVoice(errMessage);
       }
     } catch {
       const networkError = "I'm having trouble connecting to the network right now. Please try again.";

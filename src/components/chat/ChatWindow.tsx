@@ -277,7 +277,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
 
               {!isGroup && partner && (
                 <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 shrink-0">
-                  · {partner.role === 'teacher' ? 'Educator' : 'Student'}
+                  · {partner.role === 'admin' ? 'Platform Admin' : partner.role === 'teacher' || partner.role === 'educator' ? 'Educator' : 'Student'}
                 </span>
               )}
             </div>
@@ -443,7 +443,7 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
             </h3>
             
             <p className="text-xs text-slate-500 dark:text-slate-400 font-medium mt-1">
-              {partner.role === 'teacher' ? 'Faculty Educator' : 'Student'}
+              {partner.role === 'admin' ? 'Platform Admin' : partner.role === 'teacher' || partner.role === 'educator' ? 'Faculty Educator' : 'Student'}
               {partner.institution ? ` · ${partner.institution}` : ''}
               {partner.status === 'online' ? ' · Active now' : ''}
             </p>
@@ -547,11 +547,11 @@ export const ChatWindow: React.FC<ChatWindowProps> = ({
                     {msg.senderName}
                   </span>
                   <span className={`text-[9px] font-bold uppercase px-1.5 py-0.2 rounded ${
-                    msg.senderRole === 'teacher' 
+                    msg.senderRole === 'teacher' || msg.senderRole === 'educator' || msg.senderRole === 'admin'
                       ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300' 
                       : 'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300'
                   }`}>
-                    {msg.senderRole}
+                    {msg.senderRole === 'admin' ? 'admin' : msg.senderRole}
                   </span>
                 </div>
               )}

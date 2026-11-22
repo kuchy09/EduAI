@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../core/providers.dart';
 import 'models.dart';
@@ -58,6 +59,11 @@ class _TutorScreenState extends ConsumerState<TutorScreen> {
       appBar: AppBar(
         title: const Text('Sage AI Tutor'),
         actions: [
+          IconButton(
+            tooltip: 'Library',
+            icon: const Icon(Icons.menu_book_outlined),
+            onPressed: () => context.go('/library'),
+          ),
           PopupMenuButton<KcseSubject>(
             tooltip: 'Subject',
             initialValue: state.subject,
@@ -87,6 +93,42 @@ class _TutorScreenState extends ConsumerState<TutorScreen> {
       ),
       body: Column(
         children: [
+          if (state.activeBookContext != null)
+            Material(
+              color: theme.colorScheme.secondaryContainer,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      Icons.menu_book,
+                      size: 16,
+                      color: theme.colorScheme.onSecondaryContainer,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        state.activeBookContext!,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSecondaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.close, size: 16),
+                      onPressed: () => controller.setActiveBookContext(null),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           Expanded(
             child: state.messages.isEmpty
                 ? const _EmptyState()

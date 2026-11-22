@@ -41,6 +41,7 @@ import {
   pushPeerActivityNotification,
   socialWsClient,
   SocialWsEvent,
+  SOCIAL_SESSION_REFRESHED_EVENT,
 } from '../lib/socialChatClient';
 import { getPeerCurrentUserStorageKey } from '../lib/userDirectoryService';
 
@@ -60,7 +61,12 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
     );
     const meta = user?.user_metadata || {};
     const rawRole = String(profile?.role || meta.role || 'student').toLowerCase();
-    const role = rawRole.includes('teach') || rawRole.includes('educat') ? 'teacher' : 'student';
+    const role =
+      rawRole === 'admin' || rawRole === 'super_admin'
+        ? 'admin'
+        : rawRole.includes('teach') || rawRole.includes('educat')
+        ? 'teacher'
+        : 'student';
 
     const subjects =
       typeof profile?.subjects === 'string'
@@ -116,6 +122,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
   >({});
   const [isWsConnected, setIsWsConnected] = useState(socialWsClient.isConnected());
   const [isLoadingSocial, setIsLoadingSocial] = useState(true);
+  const [socialError, setSocialError] = useState<string | null>(null);
   const [toastBanner, setToastBanner] = useState<{ text: string; tone: 'info' | 'success' | 'error' } | null>(null);
 
   // Mobile responsive view & drawers/modals
@@ -173,6 +180,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
     }
     try {
       const data = await fetchSocialBootstrap();
+      setSocialError(null);
       if (data.currentUser) {
         setCurrentUser((prev) => ({ ...prev, ...data.currentUser, status: 'online' }));
       }
@@ -191,6 +199,8 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
         if (targetConv) {
           setActiveConversationId(targetConv.id);
           setMobileView('chat');
+          socialWsClient.sendRead(targetConv.id);
+          void markConversationReadApi(targetConv.id).catch(() => {});
         } else {
           try {
             const res = await openDirectConversationApi(pendingPartnerId);
@@ -209,8 +219,9 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
           } catch (_) {}
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.warn('[Chat] Bootstrap load notice:', err);
+      setSocialError(err?.message || 'Unable to load member directory right now.');
     } finally {
       setIsLoadingSocial(false);
     }
@@ -248,6 +259,11 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
             lastSeen: onlineSet.has(u.id) ? 'Active now' : u.lastSeen,
           }))
         );
+        return;
+      }
+
+      if (ev.type === 'social:directory-updated') {
+        void hydrateFromServer();
         return;
       }
 
@@ -440,10 +456,16 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       }
     });
 
+    const onSessionRefreshed = () => {
+      if (mounted) void hydrateFromServer();
+    };
+    window.addEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onSessionRefreshed);
+
     return () => {
       mounted = false;
       unsubStatus();
       unsubEvents();
+      window.removeEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onSessionRefreshed);
     };
   }, [user?.id, buildCurrentUser, hydrateFromServer, showToast]);
 
@@ -861,11 +883,20 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
           onStartDirectChat={handleStartDirectChat}
           users={allUsers}
           friendRequests={friendRequests}
+          onSendFriendRequest={(uid) => handleSendFriendRequest(uid)}
           onAcceptFriendRequest={handleAcceptFriendRequest}
           onDeclineFriendRequest={handleDeclineFriendRequest}
           onCancelFriendRequest={handleCancelOrRemoveFriend}
-          onOpenFindFriends={() => setIsFindFriendsOpen(true)}
-          onOpenCreateGroup={() => setIsCreateGroupOpen(true)}
+          onOpenFindFriends={() => {
+            setIsFindFriendsOpen(true);
+            void hydrateFromServer();
+          }}
+          onOpenCreateGroup={() => {
+            setIsCreateGroupOpen(true);
+            void hydrateFromServer();
+          }}
+          onRefreshDirectory={() => void hydrateFromServer()}
+          socialError={socialError}
           typingByConversation={typingNamesMap}
           isWsConnected={isWsConnected}
         />
@@ -1006,7 +1037,9 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
         onDeclineRequest={handleDeclineFriendRequest}
         onCancelRequest={handleCancelOrRemoveFriend}
         onStartChat={handleStartDirectChat}
+        onRefresh={() => hydrateFromServer()}
         isLoading={isLoadingSocial}
+        error={socialError}
       />
 
       {/* Create Study Group Modal */}

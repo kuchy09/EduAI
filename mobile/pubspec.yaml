@@ -1,5 +1,5 @@
 name: eduai
-description: Sage AI tutor for Kenyan students (KCSE / CBC).
+description: Sage AI tutor and offline-first EPUB/PDF textbook reader for Kenyan students (KCSE / CBC).
 publish_to: "none"
 version: 0.1.0+1
 
@@ -14,6 +14,14 @@ dependencies:
   http: ^1.2.1
   flutter_riverpod: ^2.5.1
   go_router: ^13.2.0
+  epub_view: ^3.2.0
+  pdfx: ^2.6.0
+  flutter_secure_storage: ^9.2.2
+  encrypt: ^5.0.3
+  crypto: ^3.0.3
+  path_provider: ^2.1.4
+  dio: ^5.7.0
+  connectivity_plus: ^6.1.0
 
 dev_dependencies:
   flutter_test:

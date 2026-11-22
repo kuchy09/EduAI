@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserRole } from './types';
+import { getPublicAvatarUrl, markAvatarUrlFailed } from '../../lib/userAvatarService';
 
 interface AvatarBadgeProps {
   name?: string;
@@ -70,10 +71,11 @@ export const AvatarBadge: React.FC<AvatarBadgeProps> = ({
     setImgFailed(false);
   }, [avatarUrl]);
 
+  const resolvedUrl = getPublicAvatarUrl(avatarUrl);
   const validUrl =
-    typeof avatarUrl === 'string' &&
-    avatarUrl.trim().length > 0 &&
-    !avatarUrl.includes('unsplash.com');
+    typeof resolvedUrl === 'string' &&
+    resolvedUrl.trim().length > 0 &&
+    !resolvedUrl.includes('unsplash.com');
 
   const radiusClass = shape === 'circle' ? 'rounded-full' : 'rounded-2xl';
   const paletteClass = PALETTES[getPaletteIndex(name, role)];
@@ -87,10 +89,13 @@ export const AvatarBadge: React.FC<AvatarBadgeProps> = ({
       >
         {validUrl && !imgFailed ? (
           <img
-            src={avatarUrl}
+            src={resolvedUrl!}
             alt={name || 'Member avatar'}
             referrerPolicy="no-referrer"
-            onError={() => setImgFailed(true)}
+            onError={() => {
+              markAvatarUrlFailed(resolvedUrl);
+              setImgFailed(true);
+            }}
             className="w-full h-full object-cover"
           />
         ) : (

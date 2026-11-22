@@ -9,6 +9,7 @@ import {
   Clock,
   ShieldCheck,
   GraduationCap,
+  RefreshCw,
 } from 'lucide-react';
 import { ChatUser, Conversation, FriendRequestRecord } from './types';
 import { AvatarBadge } from './AvatarBadge';
@@ -21,11 +22,14 @@ interface ChatSidebarProps {
   onStartDirectChat: (partnerId: string) => void;
   users: ChatUser[];
   friendRequests?: FriendRequestRecord[];
+  onSendFriendRequest?: (userId: string) => void;
   onAcceptFriendRequest: (senderId: string) => void;
   onDeclineFriendRequest: (senderId: string) => void;
   onCancelFriendRequest: (targetId: string) => void;
   onOpenFindFriends: () => void;
   onOpenCreateGroup: () => void;
+  onRefreshDirectory?: () => void;
+  socialError?: string | null;
   typingByConversation?: Record<string, string[]>;
   isWsConnected?: boolean;
 }
@@ -40,11 +44,14 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
   onStartDirectChat,
   users,
   friendRequests = [],
+  onSendFriendRequest,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
   onCancelFriendRequest,
   onOpenFindFriends,
   onOpenCreateGroup,
+  onRefreshDirectory,
+  socialError = null,
   typingByConversation = {},
   isWsConnected = false,
 }) => {
@@ -93,7 +100,9 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         const partner = users.find((u) => u.id === partnerId);
         return (
           (partner?.name || '').toLowerCase().includes(q) ||
+          (partner?.email || '').toLowerCase().includes(q) ||
           (partner?.institution || '').toLowerCase().includes(q) ||
+          (partner?.subjects || []).join(' ').toLowerCase().includes(q) ||
           (conv.lastMessage?.content || '').toLowerCase().includes(q)
         );
       })
@@ -103,6 +112,35 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
         return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
       });
   }, [conversations, activeTab, searchQuery, currentUser.id, users]);
+
+  const matchingDirectoryPeers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q || activeTab === 'groups' || activeTab === 'requests') return [];
+    const tokens = q.split(/\s+/).filter(Boolean);
+    const existingDmPartnerIds = new Set(
+      filteredConversations
+        .filter((c) => c.type === 'direct')
+        .map((c) => c.participants.find((id) => id !== currentUser.id))
+        .filter(Boolean) as string[]
+    );
+    return users
+      .filter((u) => {
+        if (u.id === currentUser.id) return false;
+        if (existingDmPartnerIds.has(u.id)) return false;
+        if (activeTab === 'friends' && u.friendStatus !== 'friends') return false;
+        const emailLower = (u.email || '').toLowerCase();
+        const emailHandle = emailLower.includes('@') ? emailLower.split('@')[0] : '';
+        const roleKeywords =
+          u.role === 'teacher' || u.role === 'educator'
+            ? 'teacher educator faculty'
+            : u.role === 'admin'
+            ? 'admin administrator'
+            : 'student scholar learner';
+        const hay = `${u.name || ''} ${emailLower} ${emailHandle} ${u.phone || ''} ${u.institution || ''} ${u.title || ''} ${(u.subjects || []).join(' ')} ${u.bio || ''} ${u.location || ''} ${roleKeywords}`.toLowerCase();
+        return hay.includes(q) || (tokens.length > 0 && tokens.every((tok) => hay.includes(tok)));
+      })
+      .slice(0, 12);
+  }, [users, currentUser.id, searchQuery, activeTab, filteredConversations]);
 
   const formatListTime = (iso?: string) => {
     if (!iso) return '';
@@ -274,7 +312,7 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                               {reqUser.name}
                             </p>
                             <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
-                              {reqUser.role === 'teacher' ? 'Educator' : 'Student'} · {reqUser.institution}
+                              {reqUser.role === 'admin' ? 'Platform Admin' : reqUser.role === 'teacher' || reqUser.role === 'educator' ? 'Educator' : 'Student'} · {reqUser.institution}
                             </p>
                             {note && (
                               <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 line-clamp-2 italic">
@@ -424,34 +462,142 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
               </div>
             )}
 
+            {/* Error Banner if directory failed to load */}
+            {socialError && users.length === 0 && (
+              <div className="p-3 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 space-y-2">
+                <p className="text-xs font-semibold text-amber-900 dark:text-amber-200">
+                  Directory sync paused
+                </p>
+                <p className="text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
+                  {socialError}
+                </p>
+                {onRefreshDirectory && (
+                  <button
+                    type="button"
+                    onClick={onRefreshDirectory}
+                    className="h-8 px-3 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Retry Sync</span>
+                  </button>
+                )}
+              </div>
+            )}
+
+            {/* Matching Directory Members when typing a search query */}
+            {matchingDirectoryPeers.length > 0 && (
+              <div className="space-y-1.5 pb-2 border-b border-slate-100 dark:border-slate-800/80">
+                <div className="flex items-center justify-between px-2 pt-1">
+                  <p className="text-[11px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">
+                    People Directory ({matchingDirectoryPeers.length})
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onOpenFindFriends}
+                    className="text-[11px] font-semibold text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 cursor-pointer"
+                  >
+                    View all
+                  </button>
+                </div>
+                {matchingDirectoryPeers.map((peer) => (
+                  <div
+                    key={peer.id}
+                    className="p-2 rounded-xl bg-slate-50/80 dark:bg-slate-800/50 border border-slate-200/60 dark:border-slate-800 flex items-center justify-between gap-2"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <AvatarBadge
+                        name={peer.name}
+                        avatarUrl={peer.avatar}
+                        role={peer.role}
+                        isOnline={peer.status === 'online'}
+                        size="sm"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-semibold text-slate-900 dark:text-white truncate">
+                          {peer.name}
+                        </p>
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                          {peer.email || peer.institution || peer.title}
+                        </p>
+                      </div>
+                    </div>
+                    {peer.friendStatus === 'friends' ? (
+                      <button
+                        type="button"
+                        onClick={() => onStartDirectChat(peer.id)}
+                        className="h-7 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        <MessageSquare className="w-3 h-3" />
+                        <span>Chat</span>
+                      </button>
+                    ) : peer.friendStatus === 'pending_received' ? (
+                      <button
+                        type="button"
+                        onClick={() => onAcceptFriendRequest(peer.id)}
+                        className="h-7 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+                      >
+                        <Check className="w-3 h-3" />
+                        <span>Accept</span>
+                      </button>
+                    ) : peer.friendStatus === 'pending_sent' ? (
+                      <button
+                        type="button"
+                        onClick={() => onCancelFriendRequest(peer.id)}
+                        className="h-7 px-2.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold shrink-0 cursor-pointer"
+                      >
+                        Pending
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (onSendFriendRequest) {
+                            onSendFriendRequest(peer.id);
+                          } else {
+                            onOpenFindFriends();
+                          }
+                        }}
+                        className="h-7 px-2.5 rounded-lg bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white dark:bg-indigo-950/60 dark:hover:bg-indigo-600 dark:text-indigo-300 dark:hover:text-white border border-indigo-200 dark:border-indigo-800 text-[11px] font-semibold flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                      >
+                        <UserPlus className="w-3 h-3" />
+                        <span>Connect</span>
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
             {/* Conversation Threads */}
             {filteredConversations.length === 0 ? (
-              <div className="py-12 px-4 text-center space-y-3">
-                <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 mx-auto flex items-center justify-center text-slate-400">
-                  <GraduationCap className="w-6 h-6" />
+              matchingDirectoryPeers.length > 0 ? null : (
+                <div className="py-12 px-4 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-100 dark:bg-slate-800 mx-auto flex items-center justify-center text-slate-400">
+                    <GraduationCap className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1">
+                    <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
+                      {activeTab === 'groups'
+                        ? 'No study groups yet'
+                        : searchQuery
+                        ? 'No matching members or chats'
+                        : 'No active conversations'}
+                    </p>
+                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
+                      {activeTab === 'groups'
+                        ? 'Create a study group to collaborate on textbooks and shared notes.'
+                        : 'Search the directory to send friend requests and start chatting with peers.'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={activeTab === 'groups' ? onOpenCreateGroup : onOpenFindFriends}
+                    className="h-9 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors cursor-pointer"
+                  >
+                    {activeTab === 'groups' ? 'New Study Group' : 'Find Friends'}
+                  </button>
                 </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-semibold text-slate-700 dark:text-slate-200">
-                    {activeTab === 'groups'
-                      ? 'No study groups yet'
-                      : searchQuery
-                      ? 'No matching conversations'
-                      : 'No active conversations'}
-                  </p>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    {activeTab === 'groups'
-                      ? 'Create a study group to collaborate on textbooks and shared notes.'
-                      : 'Search the directory to send friend requests and start chatting with peers.'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={activeTab === 'groups' ? onOpenCreateGroup : onOpenFindFriends}
-                  className="h-9 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors cursor-pointer"
-                >
-                  {activeTab === 'groups' ? 'New Study Group' : 'Find Friends'}
-                </button>
-              </div>
+              )
             ) : (
               <div className="space-y-1">
                 {filteredConversations.map((conv) => {
@@ -515,8 +661,8 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                             >
                               {title}
                             </span>
-                            {!isGroup && partner?.role === 'teacher' && (
-                              <span title="Verified Educator" className="shrink-0 flex items-center">
+                            {!isGroup && (partner?.role === 'teacher' || partner?.role === 'educator' || partner?.role === 'admin') && (
+                              <span title={partner?.role === 'admin' ? 'Platform Admin' : 'Verified Educator'} className="shrink-0 flex items-center">
                                 <ShieldCheck className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                               </span>
                             )}

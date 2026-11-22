@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion } from 'motion/react';
 import { Book, Bookmark } from '../types';
-import { Filter, Search, Bookmark as BookmarkIcon, LayoutGrid, List, HardDriveDownload, CheckCircle2, Loader2, WifiOff, CloudDownload, X, ShoppingBag, BookmarkCheck, ArrowRight, Compass } from 'lucide-react';
+import { Filter, Search, Bookmark as BookmarkIcon, LayoutGrid, List, HardDriveDownload, CheckCircle2, Loader2, WifiOff, CloudDownload, X, ShoppingBag, BookmarkCheck, ArrowRight, Compass, Headphones } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
 import { useOffline } from '../lib/useOffline';
 import { platformBookStoreCatalog } from '../data';
@@ -21,6 +21,7 @@ interface LibraryProps {
   books: Book[];
   categories: string[];
   onBookSelect: (book: Book) => void;
+  onListenBook?: (book: Book) => void;
   bookmarks: Bookmark[];
   user?: any;
   profile?: any;
@@ -29,7 +30,7 @@ interface LibraryProps {
   onOpenAcademicPrefs?: () => void;
 }
 
-export function Library({ books, categories, onBookSelect, bookmarks, user, profile, onAddBookToLibrary, onNavigate, onOpenAcademicPrefs }: LibraryProps) {
+export function Library({ books, categories, onBookSelect, onListenBook, bookmarks, user, profile, onAddBookToLibrary, onNavigate, onOpenAcademicPrefs }: LibraryProps) {
   const [activeCategory, setActiveCategory] = useState('All');
   const [searchQuery, setSearchQuery] = useState('');
   const [viewMode, setViewMode] = useState<'books' | 'bookmarks' | 'downloaded'>('books');
@@ -479,17 +480,33 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
                       <h4 className="font-semibold text-slate-900 dark:text-slate-100 leading-tight text-xs sm:text-sm line-clamp-2 mb-1 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">{book.title}</h4>
                       <p className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-300 line-clamp-1 mb-2">{book.author}</p>
                       
-                      <div className="mt-auto flex items-center gap-1.5 flex-wrap">
-                        {cached && (
-                          <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-1.5 py-0.5 rounded font-medium">
-                            <HardDriveDownload className="w-2.5 h-2.5" /> Offline
-                          </span>
-                        )}
-                        {book.aiInsights && book.aiInsights.length > 0 && (
-                          <div className="inline-flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 px-2 py-0.5 rounded-md font-medium uppercase tracking-wider">
-                            <Sparkles className="w-2.5 h-2.5" />
-                            {book.aiInsights.length} Notes
-                          </div>
+                      <div className="mt-auto flex items-center justify-between gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          {cached && (
+                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/50 px-1.5 py-0.5 rounded font-medium">
+                              <HardDriveDownload className="w-2.5 h-2.5" /> Offline
+                            </span>
+                          )}
+                          {book.aiInsights && book.aiInsights.length > 0 && (
+                            <div className="inline-flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/50 px-2 py-0.5 rounded-md font-medium uppercase tracking-wider">
+                              <Sparkles className="w-2.5 h-2.5" />
+                              {book.aiInsights.length} Notes
+                            </div>
+                          )}
+                        </div>
+                        {onListenBook && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onListenBook(book);
+                            }}
+                            title="Listen in Audiobooks"
+                            className="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 px-1.5 py-0.5 rounded transition-colors cursor-pointer"
+                          >
+                            <Headphones className="w-3 h-3" />
+                            <span>Listen</span>
+                          </button>
                         )}
                       </div>
                     </div>
@@ -554,6 +571,18 @@ export function Library({ books, categories, onBookSelect, bookmarks, user, prof
                               <CloudDownload className="w-3.5 h-3.5" /> Save Offline
                             </button>
                           ) : null}
+                          {onListenBook && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                onListenBook(book);
+                              }}
+                              className="text-xs px-2.5 py-1 rounded-md bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/50 dark:hover:bg-indigo-900/60 text-indigo-700 dark:text-indigo-300 font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                            >
+                              <Headphones className="w-3.5 h-3.5" /> Listen
+                            </button>
+                          )}
                           {book.category && (
                             <span className="shrink-0 text-[10px] font-medium text-slate-500 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full uppercase tracking-wider">
                               {book.category}

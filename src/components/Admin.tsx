@@ -16,14 +16,16 @@ import { Book } from '../types';
 import { getCurriculumBooks } from '../lib/kenyaCurriculumService';
 import { BookCoverVisual } from './BookCoverVisual';
 import { BookCoverEditorModal } from './BookCoverEditorModal';
+import { ADMIN_LOGIN_EMAIL, isAdminLoginEmail } from '../../shared/adminAuth';
 
 interface AdminProps {
   appBooks?: Book[];
+  user?: any;
   onUpdateBook?: (book: Book) => void;
   onDeleteBook?: (bookId: string) => void;
 }
 
-export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
+export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: AdminProps) {
   const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [devBypass, setDevBypass] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -54,6 +56,9 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
   const [publisher, setPublisher] = useState('');
   const [isbn, setIsbn] = useState('');
   const [isKicdApproved, setIsKicdApproved] = useState(false);
+  const [requireEncryptedOffline, setRequireEncryptedOffline] = useState(true);
+  const [watermarkUser, setWatermarkUser] = useState(true);
+  const [allowRawExport, setAllowRawExport] = useState(false);
   const [coverImage, setCoverImage] = useState('');
   const [file, setFile] = useState<File | null>(null);
   
@@ -67,27 +72,47 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
   useEffect(() => {
     checkAdminStatus();
     loadBooks();
-  }, [devBypass]);
+  }, [devBypass, propUser?.id, propUser?.email]);
 
   const checkAdminStatus = async () => {
-    if (!supabase) {
-      setIsAdmin(false);
-      return;
-    }
     try {
-      const res = await supabase.auth.getUser();
-      if (res?.error) {
-        if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
-          clearStaleSupabaseTokens();
+      let resolvedUser = propUser || null;
+
+      if (!resolvedUser && supabase) {
+        const res = await supabase.auth.getUser();
+        if (res?.error) {
+          if (res.error.message?.includes('Refresh Token') || res.error.message?.includes('refresh_token')) {
+            clearStaleSupabaseTokens();
+          }
+        } else if (res?.data?.user) {
+          resolvedUser = res.data.user;
         }
-        setIsAdmin(devBypass);
-        return;
       }
-      const user = res?.data?.user;
-      const isDomainAdmin = user?.email?.toLowerCase().endsWith('@admin.com') || false;
-      setIsAdmin(isDomainAdmin || devBypass);
-      if (user?.email) {
-        setAdminEmail(user.email);
+
+      if (!resolvedUser) {
+        const session = getPersistedDeviceSession();
+        if (session?.user) {
+          resolvedUser = session.user;
+        } else if (session?.access_token && session.access_token !== 'demo_token' && session.access_token !== 'local_token') {
+          try {
+            const authRes = await fetch('/api/auth/user', {
+              headers: {
+                Authorization: `Bearer ${session.access_token}`,
+                ...(session.refresh_token ? { 'x-refresh-token': session.refresh_token } : {}),
+              },
+            });
+            if (authRes.ok) {
+              const authJson = await authRes.json().catch(() => ({}));
+              if (authJson?.user) resolvedUser = authJson.user;
+            }
+          } catch (_) {}
+        }
+      }
+
+      const isAuthorizedAdmin = isAdminLoginEmail(resolvedUser?.email);
+      setIsAdmin(isAuthorizedAdmin || devBypass);
+      if (resolvedUser?.email) {
+        setAdminEmail(resolvedUser.email);
       }
     } catch {
       setIsAdmin(devBypass);
@@ -249,12 +274,17 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
       setErrorMsg('');
       setSuccessMsg('');
 
-      // 1. Always upload PDF binary to persistent backend disk (& B2 if configured)
+      const isEpubFile =
+        file.name.toLowerCase().endsWith('.epub') ||
+        file.type === 'application/epub+zip';
+      const resolvedFormat: 'epub' | 'pdf' = isEpubFile ? 'epub' : 'pdf';
+
+      // 1. Always upload EPUB/PDF binary to persistent backend disk (& B2 if configured)
       const uploadRes = await fetch(`/api/upload-direct?filename=${encodeURIComponent(file.name)}&prefix=books`, {
         method: 'POST',
         body: file,
         headers: {
-          'Content-Type': file.type || 'application/pdf',
+          'Content-Type': file.type || (isEpubFile ? 'application/epub+zip' : 'application/pdf'),
         },
       });
 
@@ -296,6 +326,13 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
           country: location ? [location.trim()] : (inferredKlb ? ['Kenya'] : undefined),
           coverImage: coverImage || '',
           fileUrl: fileKey,
+          format: resolvedFormat,
+          securityPolicy: {
+            requireEncryptedOffline,
+            watermarkUser,
+            allowRawExport,
+            offlineLeaseDays: 90,
+          },
         }),
       });
 
@@ -543,7 +580,7 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
     return (
       <div className="p-8 max-w-xl mx-auto mt-16 font-sans text-center bg-white dark:bg-[#1a1a1d] border border-slate-200 dark:border-[#2e2e32] rounded-2xl shadow-xs">
         <h2 className="text-2xl font-bold mb-3 text-slate-900 dark:text-[#ededed]">Admin Access Only</h2>
-        <p className="text-slate-500 dark:text-[#a1a1aa] mb-6 text-sm">You must be logged in with an @admin.com email.</p>
+        <p className="text-slate-500 dark:text-[#a1a1aa] mb-6 text-sm">You must be logged in with {ADMIN_LOGIN_EMAIL}.</p>
         <button 
           onClick={() => setDevBypass(true)} 
           className="px-6 py-2.5 bg-brand-600 dark:bg-[#7b5ecc] text-white font-semibold rounded-xl hover:bg-brand-700 dark:hover:bg-[#684db8] transition-colors cursor-pointer"
@@ -676,13 +713,48 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
                 </>
               )}
 
+              <div className="p-3 rounded-xl bg-[#f8f9fb] dark:bg-[#222226] border border-slate-200 dark:border-[#34343c] space-y-2">
+                <div className="text-[11px] font-bold text-slate-700 dark:text-[#d4d4d8]">
+                  Publisher Security &amp; Offline Policy (Flutter + Web)
+                </div>
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-[#c4c4c8] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={requireEncryptedOffline}
+                    onChange={e => setRequireEncryptedOffline(e.target.checked)}
+                    className="rounded border-slate-300 dark:border-[#3f3f46]"
+                  />
+                  Require AES-256 encrypted offline vault
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-[#c4c4c8] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={watermarkUser}
+                    onChange={e => setWatermarkUser(e.target.checked)}
+                    className="rounded border-slate-300 dark:border-[#3f3f46]"
+                  />
+                  Bind offline key to learner account ID
+                </label>
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-[#c4c4c8] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={allowRawExport}
+                    onChange={e => setAllowRawExport(e.target.checked)}
+                    className="rounded border-slate-300 dark:border-[#3f3f46]"
+                  />
+                  Allow unencrypted file export
+                </label>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-slate-600 dark:text-[#c4c4c8] mb-1">File (PDF) *</label>
+                <label className="block text-xs font-semibold text-slate-600 dark:text-[#c4c4c8] mb-1">
+                  File (EPUB Recommended or PDF) *
+                </label>
                 <div className="border border-dashed border-slate-300 dark:border-[#3f3f46] bg-transparent dark:bg-[#222226]/60 rounded-lg p-3 text-center hover:bg-[#f8f9fb] dark:hover:bg-[#27272c] transition-colors">
-                  <input type="file" required ref={fileInputRef} onChange={handleFileChange} accept=".pdf,application/pdf" className="hidden" id="file-upload" />
+                  <input type="file" required ref={fileInputRef} onChange={handleFileChange} accept=".epub,.pdf,application/epub+zip,application/pdf" className="hidden" id="file-upload" />
                   <label htmlFor="file-upload" className="cursor-pointer text-xs font-medium flex flex-col items-center gap-1">
                     <FileText className="w-5 h-5 text-slate-400 dark:text-[#8e8e93]" />
-                    <span className="text-brand-600 dark:text-[#a78bfa] hover:text-brand-700 dark:hover:text-[#c4b5fd]">Choose PDF File</span>
+                    <span className="text-brand-600 dark:text-[#a78bfa] hover:text-brand-700 dark:hover:text-[#c4b5fd]">Choose EPUB or PDF File</span>
                     <span className="text-slate-400 dark:text-[#8e8e93] text-[11px] truncate max-w-[200px]">{file ? file.name : 'No file selected'}</span>
                   </label>
                 </div>
@@ -812,17 +884,24 @@ export function Admin({ appBooks, onUpdateBook, onDeleteBook }: AdminProps) {
                             <div className="text-[11px] text-slate-500 dark:text-[#a1a1aa] truncate max-w-[220px]">
                               {b.publisher || b.author || 'Unknown Author'}
                             </div>
-                            <div className="flex flex-wrap items-center gap-1 mt-0.5">
+                            <div className="flex flex-wrap items-center gap-1.5 mt-0.5 text-[10px] text-slate-500 dark:text-[#a1a1aa]">
+                              <span className="font-mono font-semibold text-indigo-600 dark:text-indigo-400">
+                                {(b.format === 'epub' || String(b.fileUrl || '').toLowerCase().endsWith('.epub')) ? 'EPUB · Reflowable' : 'PDF'}
+                              </span>
                               {b.curriculum && (
-                                <span className="inline-block text-[9px] font-mono font-bold bg-[#f1f3f7] dark:bg-[#27272d] text-slate-600 dark:text-[#d4d4d8] px-1.5 py-0.2 rounded border border-transparent dark:border-[#34343c]">
-                                  {b.curriculum.join(', ')}
-                                </span>
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="font-mono font-semibold">{b.curriculum.join(', ')}</span>
+                                </>
                               )}
                               {b.isKicdApproved && (
-                                <span className="inline-flex items-center gap-0.5 text-[9px] font-bold bg-emerald-50 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 px-1.5 py-0.2 rounded border border-emerald-200/70 dark:border-emerald-500/25">
-                                  <CheckCircle2 className="w-2.5 h-2.5" />
-                                  KICD
-                                </span>
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="inline-flex items-center gap-0.5 font-semibold text-emerald-600 dark:text-emerald-400">
+                                    <CheckCircle2 className="w-2.5 h-2.5" />
+                                    KICD
+                                  </span>
+                                </>
                               )}
                             </div>
                           </td>
