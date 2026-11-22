@@ -746,6 +746,9 @@ export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: Sup
           (fr.senderId === row.receiver_id && fr.receiverId === row.sender_id)
       );
 
+      const existingUpdatedMs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
+      const rowUpdatedMs = rowUpdatedAt ? Date.parse(rowUpdatedAt) : 0;
+
       if (!existing) {
         state.friendRequests.push({
           id: row.id || `fr_${crypto.randomUUID()}`,
@@ -759,7 +762,7 @@ export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: Sup
         changed = true;
       } else if (
         (status === "accepted" && existing.status !== "accepted") ||
-        (rowUpdatedAt && existing.updatedAt && rowUpdatedAt > existing.updatedAt)
+        (!Number.isNaN(rowUpdatedMs) && !Number.isNaN(existingUpdatedMs) && rowUpdatedMs > existingUpdatedMs)
       ) {
         existing.senderId = row.sender_id;
         existing.receiverId = row.receiver_id;
@@ -783,6 +786,55 @@ export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: Sup
     }
   } catch (err) {
     console.warn("[SocialStore] hydrateFriendRequestsFromSupabase warning:", err);
+  }
+}
+
+let lastFriendReqBackfillAt = 0;
+
+export async function backfillFriendRequestsToSupabase(
+  sb?: SupabaseClient | null,
+  force = false
+): Promise<void> {
+  if (!sb) return;
+  const nowMs = Date.now();
+  if (!force && nowMs - lastFriendReqBackfillAt < 60_000) return;
+  lastFriendReqBackfillAt = nowMs;
+
+  try {
+    const state = readDiskState();
+    if (!state.friendRequests.length) return;
+
+    const { data: existingRows, error: fetchErr } = await sb
+      .from("friend_requests")
+      .select("sender_id, receiver_id, status");
+
+    if (fetchErr) {
+      console.warn("[SocialStore] backfillFriendRequestsToSupabase read warning:", fetchErr.message);
+    }
+
+    const existingPairs = new Set<string>();
+    if (Array.isArray(existingRows)) {
+      for (const r of existingRows) {
+        if (r?.sender_id && r?.receiver_id) {
+          existingPairs.add(`${r.sender_id}:${r.receiver_id}`);
+          existingPairs.add(`${r.receiver_id}:${r.sender_id}`);
+        }
+      }
+    }
+
+    for (const fr of state.friendRequests) {
+      if (!fr.senderId || !fr.receiverId || fr.status === "declined") continue;
+      if (existingPairs.has(`${fr.senderId}:${fr.receiverId}`)) continue;
+      await upsertFriendRequestInSupabase(sb, {
+        senderId: fr.senderId,
+        receiverId: fr.receiverId,
+        status: fr.status,
+        note: fr.note,
+        updatedAt: fr.updatedAt || fr.createdAt || new Date().toISOString(),
+      });
+    }
+  } catch (err) {
+    console.warn("[SocialStore] backfillFriendRequestsToSupabase warning:", err);
   }
 }
 
@@ -977,8 +1029,8 @@ export function getBootstrapDataForUser(viewerId: string, onlineUserIds: Set<str
 async function upsertFriendRequestInSupabase(
   sb: SupabaseClient | null | undefined,
   record: { senderId: string; receiverId: string; status: string; note?: string; updatedAt: string }
-): Promise<void> {
-  if (!sb) return;
+): Promise<boolean> {
+  if (!sb) return false;
   try {
     const withNote: Record<string, any> = {
       sender_id: record.senderId,
@@ -989,12 +1041,18 @@ async function upsertFriendRequestInSupabase(
     if (record.note) {
       withNote.note = record.note;
     }
+
     const { error } = await sb
       .from("friend_requests")
       .upsert(withNote, { onConflict: "sender_id,receiver_id" });
 
-    if (error && record.note) {
-      await sb
+    if (!error) return true;
+
+    console.warn("[SocialStore] upsertFriendRequestInSupabase primary error:", error.message);
+
+    // Fallback 1: omit optional note in case table schema lacks note
+    if (record.note) {
+      const { error: noNoteErr } = await sb
         .from("friend_requests")
         .upsert(
           {
@@ -1005,8 +1063,52 @@ async function upsertFriendRequestInSupabase(
           },
           { onConflict: "sender_id,receiver_id" }
         );
+      if (!noNoteErr) return true;
     }
-  } catch (_) {}
+
+    // Fallback 2: SELECT -> UPDATE / INSERT (works even without UNIQUE (sender_id, receiver_id))
+    const { data: existingRow } = await sb
+      .from("friend_requests")
+      .select("id")
+      .eq("sender_id", record.senderId)
+      .eq("receiver_id", record.receiverId)
+      .maybeSingle();
+
+    if (existingRow?.id) {
+      const { error: updErr } = await sb
+        .from("friend_requests")
+        .update({
+          status: record.status,
+          updated_at: record.updatedAt,
+          ...(record.note ? { note: record.note } : {}),
+        })
+        .eq("id", existingRow.id);
+      if (!updErr) return true;
+
+      const { error: minUpdErr } = await sb
+        .from("friend_requests")
+        .update({ status: record.status })
+        .eq("id", existingRow.id);
+      return !minUpdErr;
+    }
+
+    const { error: insErr } = await sb.from("friend_requests").insert(withNote);
+    if (!insErr) return true;
+
+    const { error: minInsErr } = await sb.from("friend_requests").insert({
+      sender_id: record.senderId,
+      receiver_id: record.receiverId,
+      status: record.status,
+    });
+    if (minInsErr) {
+      console.warn("[SocialStore] upsertFriendRequestInSupabase insert fallback failed:", minInsErr.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn("[SocialStore] upsertFriendRequestInSupabase exception:", err);
+    return false;
+  }
 }
 
 export async function sendFriendRequestAction(
@@ -1018,15 +1120,16 @@ export async function sendFriendRequestAction(
   if (!senderId || !receiverId || senderId === receiverId) {
     return { ok: false, status: "pending", request: null as any, error: "Invalid recipient." };
   }
-  const state = readDiskState();
+  let state = readDiskState();
   if (!state.users[receiverId]) {
     await hydrateDirectoryFromSupabase(sb);
   }
+  await hydrateFriendRequestsFromSupabase(senderId, sb);
+  state = readDiskState();
+
   if (!state.users[receiverId]) {
     return { ok: false, status: "pending", request: null as any, error: "User not found." };
   }
-
-  await hydrateFriendRequestsFromSupabase(senderId, sb);
 
   // Check if reverse request already pending — if so, auto-accept!
   const reverse = state.friendRequests.find(
@@ -1103,7 +1206,7 @@ export async function respondToFriendRequestAction(
   action: "accept" | "decline",
   sb?: SupabaseClient | null
 ): Promise<{ ok: boolean; request?: FriendRequestRecord; conversation?: any; error?: string }> {
-  const state = readDiskState();
+  let state = readDiskState();
 
   let reqRecord =
     state.friendRequests.find(
@@ -1115,6 +1218,7 @@ export async function respondToFriendRequestAction(
 
   if (!reqRecord && sb) {
     await hydrateFriendRequestsFromSupabase(responderId, sb);
+    state = readDiskState();
     reqRecord =
       state.friendRequests.find(
         (fr) => fr.senderId === senderId && fr.receiverId === responderId && fr.status === "pending"

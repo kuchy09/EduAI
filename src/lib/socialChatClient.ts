@@ -53,18 +53,22 @@ export function setActiveSocialTokens(
 ): void {
   if (!tokens) {
     inMemorySocialSession = null;
+    socialWsClient.handleSessionChange(null, undefined);
     return;
   }
   const cleanAccess = cleanAccessTokenVal(tokens.accessToken);
   if (!cleanAccess) {
     inMemorySocialSession = null;
+    socialWsClient.handleSessionChange(null, undefined);
     return;
   }
+  const uid = tokens.userId ? String(tokens.userId) : undefined;
   inMemorySocialSession = {
     accessToken: cleanAccess,
     refreshToken: typeof tokens.refreshToken === 'string' ? tokens.refreshToken.replace(/[\r\n]+/g, '').trim() : '',
-    userId: tokens.userId ? String(tokens.userId) : undefined,
+    userId: uid,
   };
+  socialWsClient.handleSessionChange(cleanAccess, uid);
 }
 
 function emitRefreshedSession(nextSession: any): void {
@@ -581,18 +585,78 @@ class SocialWebSocketClient {
   private attempt = 0;
   private shouldRun = false;
   private connected = false;
+  private activeToken = '';
+  private activeUserId: string | undefined = undefined;
 
   public start() {
     if (typeof window === 'undefined') return;
     this.shouldRun = true;
+    const { accessToken, userId } = getSessionTokens();
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
+      if (userId && this.activeUserId && userId !== this.activeUserId) {
+        this.reconnectNow();
+        return;
+      }
+      if (accessToken && accessToken !== this.activeToken && this.ws.readyState === WebSocket.OPEN) {
+        this.activeToken = accessToken;
+        this.activeUserId = userId;
+        try {
+          this.ws.send(JSON.stringify({ type: 'auth', token: accessToken }));
+        } catch (_) {}
+      }
       return;
     }
     this.connect();
   }
 
+  public handleSessionChange(accessToken: string | null, userId?: string) {
+    if (!this.shouldRun) return;
+    if (!accessToken) {
+      this.activeToken = '';
+      this.activeUserId = undefined;
+      return;
+    }
+    if (userId && this.activeUserId && userId !== this.activeUserId) {
+      this.reconnectNow();
+      return;
+    }
+    if (this.ws && this.ws.readyState === WebSocket.OPEN && accessToken !== this.activeToken) {
+      this.activeToken = accessToken;
+      this.activeUserId = userId || this.activeUserId;
+      try {
+        this.ws.send(JSON.stringify({ type: 'auth', token: accessToken }));
+      } catch (_) {}
+    } else if (!this.ws && !this.reconnectTimer) {
+      this.connect();
+    }
+  }
+
+  private reconnectNow() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch (_) {}
+      this.ws = null;
+    }
+    this.setConnected(false);
+    this.attempt = 0;
+    if (this.shouldRun) {
+      this.connect();
+    }
+  }
+
   public stop() {
     this.shouldRun = false;
+    this.activeToken = '';
+    this.activeUserId = undefined;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -658,14 +722,20 @@ class SocialWebSocketClient {
 
   private connect() {
     if (!this.shouldRun) return;
-    const token = getAuthToken();
+    const { accessToken: token, userId } = getSessionTokens();
     if (!token) {
       this.scheduleReconnect();
       return;
     }
 
+    this.activeToken = token;
+    this.activeUserId = userId;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const url = `${protocol}//${window.location.host}/ws/chat?token=${encodeURIComponent(token)}`;
+    // Avoid putting oversized legacy JWTs into the HTTP Upgrade URL query string; auth frame handles all token sizes
+    const url =
+      token.length <= 1500
+        ? `${protocol}//${window.location.host}/ws/chat?token=${encodeURIComponent(token)}`
+        : `${protocol}//${window.location.host}/ws/chat`;
 
     try {
       const ws = new WebSocket(url);
@@ -675,7 +745,11 @@ class SocialWebSocketClient {
         this.attempt = 0;
         this.setConnected(true);
         try {
-          ws.send(JSON.stringify({ type: 'auth', token }));
+          const latest = getSessionTokens();
+          const authTok = latest.accessToken || token;
+          this.activeToken = authTok;
+          this.activeUserId = latest.userId || userId;
+          ws.send(JSON.stringify({ type: 'auth', token: authTok }));
         } catch (_) {}
 
         if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
@@ -692,6 +766,9 @@ class SocialWebSocketClient {
         try {
           const payload = JSON.parse(event.data);
           if (!payload || typeof payload !== 'object' || payload.type === 'pong') return;
+          if (payload.type === 'auth:ok' && payload.userId) {
+            this.activeUserId = String(payload.userId);
+          }
           for (const fn of this.listeners) {
             try {
               fn(payload as SocialWsEvent);
@@ -705,12 +782,14 @@ class SocialWebSocketClient {
           clearInterval(this.heartbeatTimer);
           this.heartbeatTimer = null;
         }
-        this.ws = null;
-        this.setConnected(false);
+        if (this.ws === ws) {
+          this.ws = null;
+          this.setConnected(false);
+        }
         if (ev?.code === 4001) {
           void refreshSocialSessionIfPossible();
         }
-        if (this.shouldRun) {
+        if (this.shouldRun && !this.ws) {
           this.scheduleReconnect();
         }
       };

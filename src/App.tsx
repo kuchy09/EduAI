@@ -83,7 +83,11 @@ import {
   setGlobalBookCovers,
 } from './lib/globalBookCoversService';
 import { isSystemBookConfigRow } from '../shared/canonicalBookCovers';
-import { socialWsClient } from './lib/socialChatClient';
+import {
+  fetchSocialBootstrap,
+  pushPeerActivityNotification,
+  socialWsClient,
+} from './lib/socialChatClient';
 import {
   AchievementBadgeDefinition,
   EDU_POINTS_AWARDED_EVENT,
@@ -235,6 +239,8 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSageSidebarOpen, setIsSageSidebarOpen] = useState(false);
+  const [pendingFriendRequestsCount, setPendingFriendRequestsCount] = useState(0);
+  const [pendingSocialBadgeCount, setPendingSocialBadgeCount] = useState(0);
   const getPersistedBooks = useCallback((baseBooks: Book[], userIdOverride?: string): Book[] => {
     const uid = userIdOverride || getPersistedDeviceSession()?.user?.id;
     const scopedProgress = uid
@@ -1145,6 +1151,69 @@ export default function App() {
     window.addEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
     window.addEventListener(GLOBAL_BOOK_COVERS_EVENT, handleGlobalCoversEvent);
 
+    let lastSocialSyncAt = 0;
+    const syncSocialSummary = async (minIntervalMs = 0) => {
+      const now = Date.now();
+      if (now - lastSocialSyncAt < minIntervalMs) return;
+      lastSocialSyncAt = now;
+      try {
+        const data = await fetchSocialBootstrap();
+        if (!isMounted) return;
+        const usersList = Array.isArray(data?.users) ? data.users : [];
+        const reqsList = Array.isArray(data?.friendRequests) ? data.friendRequests : [];
+        const incomingUsers = usersList.filter(
+          (u) => u.id !== userId && u.friendStatus === 'pending_received'
+        );
+        const incomingReqs = reqsList.filter(
+          (r) => r.receiverId === userId && r.status === 'pending'
+        );
+        const unreadMessages = (data?.conversations || []).reduce(
+          (sum, c) => sum + Number(c.unreadCount || 0),
+          0
+        );
+        const incomingCount = Math.max(incomingUsers.length, incomingReqs.length);
+        setPendingFriendRequestsCount(incomingCount);
+        setPendingSocialBadgeCount(incomingCount + unreadMessages);
+
+        // Ensure every pending incoming request also has a persistent peer notification
+        for (const req of incomingReqs) {
+          const sender = usersList.find((u) => u.id === req.senderId);
+          const senderName = sender?.name || sender?.email?.split('@')[0] || 'A classmate';
+          pushPeerActivityNotification({
+            id: `fr_${req.id}`,
+            userId,
+            title: `Friend Request from ${senderName}`,
+            message: req.note || `${senderName} sent you a connection request on Edu AI.`,
+            authorName: senderName,
+            authorRole: sender?.role === 'teacher' || sender?.role === 'educator' ? 'Teacher' : 'Classmate',
+            actionLabel: 'Review Request',
+            actionView: 'users-portal',
+            tags: ['Friend Request', 'Social'],
+          });
+        }
+
+        window.dispatchEvent(
+          new CustomEvent('eduai_social_updated', {
+            detail: { userId, incomingCount, unreadMessages },
+          })
+        );
+      } catch (_) {}
+    };
+
+    void syncSocialSummary(0);
+
+    const handleLocalSocialCountsUpdate = (e: Event) => {
+      const detail = (e as CustomEvent)?.detail;
+      if (detail && typeof detail.incomingCount === 'number') {
+        setPendingFriendRequestsCount(detail.incomingCount);
+        const unread = typeof detail.unreadMessages === 'number' ? detail.unreadMessages : 0;
+        setPendingSocialBadgeCount(detail.incomingCount + unread);
+      } else {
+        void syncSocialSummary(500);
+      }
+    };
+    window.addEventListener('eduai_social_counts_updated', handleLocalSocialCountsUpdate);
+
     // Re-hydrate on tab focus or returning from background (throttled >= 8s) so PC and Phone stay in live sync
     let lastRefreshAt = Date.now();
     const refreshOnResume = (minIntervalMs = 8000) => {
@@ -1152,21 +1221,30 @@ export default function App() {
       if (now - lastRefreshAt < minIntervalMs) return;
       lastRefreshAt = now;
       void syncUserData();
+      void syncSocialSummary(3000);
     };
-    const handleFocusRefresh = () => refreshOnResume(8000);
+    const handleFocusRefresh = () => refreshOnResume(3000);
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
-        refreshOnResume(8000);
+        refreshOnResume(3000);
       }
     };
     window.addEventListener('focus', handleFocusRefresh);
     document.addEventListener('visibilitychange', handleVisibility);
 
+    const socialPollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void syncSocialSummary(14000);
+      }
+    }, 15000);
+
     // Live WebSocket sync across all connected clients (per-user & system-wide updates)
     socialWsClient.start();
     const unsubSocialWs = socialWsClient.subscribe((ev) => {
       if (!isMounted) return;
-      if (ev.type === 'system:books-updated') {
+      if (ev.type === 'auth:ok') {
+        void syncSocialSummary(1000);
+      } else if (ev.type === 'system:books-updated') {
         void loadUnifiedCatalog();
       } else if (ev.type === 'system:covers-updated' && ev.covers && typeof ev.covers === 'object') {
         setGlobalBookCovers(ev.covers, { notify: true });
@@ -1176,6 +1254,37 @@ export default function App() {
         if (!ev.userId || ev.userId === userId) {
           refreshOnResume(1000);
         }
+      } else if (ev.type === 'friend:request') {
+        const senderName = ev.sender?.name || 'A classmate';
+        pushPeerActivityNotification({
+          id: `fr_${ev.request.id}`,
+          userId,
+          title: `Friend Request from ${senderName}`,
+          message: ev.request.note || `${senderName} sent you a connection request on Edu AI.`,
+          authorName: senderName,
+          authorRole: ev.sender?.role === 'teacher' || ev.sender?.role === 'educator' ? 'Teacher' : 'Classmate',
+          actionLabel: 'Review Request',
+          actionView: 'users-portal',
+          tags: ['Friend Request', 'Social'],
+        });
+        void syncSocialSummary(0);
+      } else if (ev.type === 'friend:responded') {
+        if (ev.action === 'accept' && ev.actor?.id && ev.actor.id !== userId) {
+          pushPeerActivityNotification({
+            id: `fr_acc_${ev.request.id}`,
+            userId,
+            title: `${ev.actor.name || 'Member'} accepted your friend request`,
+            message: 'You can now message directly or form a study group.',
+            authorName: ev.actor.name || 'Academic Peer',
+            authorRole: ev.actor.role === 'teacher' ? 'Teacher' : 'Classmate',
+            actionLabel: 'Start Chat',
+            actionView: 'chat',
+            tags: ['Friend Request', 'Connected'],
+          });
+        }
+        void syncSocialSummary(0);
+      } else if (ev.type === 'friend:removed' || ev.type === 'social:directory-updated' || ev.type === 'chat:message') {
+        void syncSocialSummary(0);
       }
     });
 
@@ -1223,6 +1332,8 @@ export default function App() {
 
     return () => {
       isMounted = false;
+      window.clearInterval(socialPollTimer);
+      window.removeEventListener('eduai_social_counts_updated', handleLocalSocialCountsUpdate);
       window.removeEventListener(ACCOUNT_SYNC_EVENT, handleAccountSyncEvent);
       window.removeEventListener(GLOBAL_BOOK_COVERS_EVENT, handleGlobalCoversEvent);
       window.removeEventListener('focus', handleFocusRefresh);
@@ -1503,6 +1614,7 @@ export default function App() {
               profile={profile}
               isGuest={isGuest}
               onSignOut={handleSignOut}
+              pendingRequestsCount={pendingFriendRequestsCount}
             />
             
             <main className="flex-1 flex flex-col min-w-0 max-w-full w-full relative overflow-x-hidden">
@@ -1518,6 +1630,7 @@ export default function App() {
                 onToggleSageSidebar={() => setIsSageSidebarOpen(prev => !prev)}
                 isSageSidebarOpen={isSageSidebarOpen}
                 onSignOut={handleSignOut}
+                pendingChatBadgeCount={pendingSocialBadgeCount}
               />
 
               <OfflineBanner onNavigate={(view) => changeView(view as any)} />

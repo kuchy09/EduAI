@@ -15,7 +15,7 @@ import {
   syncCurrentUserToSupabase 
 } from '../lib/userDirectoryService';
 import { socialWsClient, SocialWsEvent, SOCIAL_SESSION_REFRESHED_EVENT } from '../lib/socialChatClient';
-import { getPersistedDeviceSession } from '../lib/supabase';
+import { getPersistedDeviceSession, getSupabaseClient, supabase } from '../lib/supabase';
 import { getStoredUserAvatar, useUserAvatar } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
 import { getPeerCurrentUserStorageKey, pushAccountSyncPatch } from '../lib/accountSyncService';
@@ -212,11 +212,16 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     initPortal();
   }, [user?.id, currentUser.role, liveAvatarUrl, profile?.avatar_url, profile?.full_name]);
 
-  // Realtime subscription for WebSocket friend, directory & presence updates & auth session refreshes
+  // Realtime subscription for WebSocket + Supabase friend_requests + focus/poll updates
   useEffect(() => {
+    const activeId = user?.id || getPersistedDeviceSession()?.user?.id || currentUser.id;
     socialWsClient.start();
     const unsub = socialWsClient.subscribe((ev: SocialWsEvent) => {
-      if (ev.type === 'presence:update' || ev.type === 'auth:ok') {
+      if (ev.type === 'auth:ok') {
+        void reloadUsersRef.current(false);
+        const onlineSet = new Set(ev.onlineUserIds || []);
+        setUsersList(prev => prev.map(u => ({ ...u, status: onlineSet.has(u.id) ? 'online' : 'offline' })));
+      } else if (ev.type === 'presence:update') {
         const onlineSet = new Set(ev.onlineUserIds || []);
         setUsersList(prev => prev.map(u => ({ ...u, status: onlineSet.has(u.id) ? 'online' : 'offline' })));
       } else if (
@@ -228,15 +233,65 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
         void reloadUsersRef.current(false);
       }
     });
+
     const onSessionRefreshed = () => {
       void reloadUsersRef.current(false);
     };
+    const onSocialUpdated = () => {
+      void reloadUsersRef.current(false);
+    };
+    const onFocusOrVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void reloadUsersRef.current(false);
+      }
+    };
+
     window.addEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onSessionRefreshed);
+    window.addEventListener('eduai_social_updated', onSocialUpdated);
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+
+    const pollTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void reloadUsersRef.current(false);
+      }
+    }, 12000);
+
+    // Supabase Realtime subscription on friend_requests table for instant cross-instance sync
+    let sbChannel: any = null;
+    const sbClient = getSupabaseClient() || supabase;
+    if (sbClient && activeId && activeId !== 'me') {
+      try {
+        sbChannel = sbClient
+          .channel(`portal_friend_requests_${activeId}`)
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'friend_requests' },
+            (payload: any) => {
+              const row = payload?.new || payload?.old;
+              if (!row || row.sender_id === activeId || row.receiver_id === activeId) {
+                void reloadUsersRef.current(false);
+              }
+            }
+          )
+          .subscribe();
+      } catch (_) {}
+    }
+
     return () => {
       unsub();
+      window.clearInterval(pollTimer);
       window.removeEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onSessionRefreshed);
+      window.removeEventListener('eduai_social_updated', onSocialUpdated);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
+      if (sbChannel && sbClient) {
+        try {
+          void sbClient.removeChannel(sbChannel);
+        } catch (_) {}
+      }
     };
-  }, []);
+  }, [user?.id, currentUser.id]);
 
   // If user types a search query while directory failed or hasn't loaded yet, retry loading automatically (rate-limited)
   const lastSearchRetryAtRef = useRef(0);
@@ -300,8 +355,20 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
     });
   }, [usersList, currentUser.id, searchQuery, roleFilter, selectedSubject]);
 
-  const pendingReceivedCount = usersList.filter(u => u.id !== currentUser.id && u.friendStatus === 'pending_received').length;
+  const pendingReceivedUsers = useMemo(
+    () => usersList.filter(u => u.id !== currentUser.id && u.friendStatus === 'pending_received'),
+    [usersList, currentUser.id]
+  );
+  const pendingReceivedCount = pendingReceivedUsers.length;
   const friendsCount = usersList.filter(u => u.id !== currentUser.id && u.friendStatus === 'friends').length;
+
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent('eduai_social_counts_updated', {
+        detail: { incomingCount: pendingReceivedCount },
+      })
+    );
+  }, [pendingReceivedCount]);
 
   // Handlers
   const handleOpenSendRequest = (target: ChatUser) => {
@@ -606,6 +673,72 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
             ))}
           </div>
         </div>
+
+        {/* Incoming Friend Requests Spotlight Banner */}
+        {pendingReceivedUsers.length > 0 && roleFilter !== 'pending' && (
+          <div className="bg-indigo-50/90 dark:bg-indigo-950/35 rounded-3xl p-4 sm:p-5 border border-indigo-200/80 dark:border-indigo-800/70 space-y-3">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
+              <div>
+                <h2 className="text-sm font-bold text-indigo-950 dark:text-indigo-100">
+                  Incoming Friend {pendingReceivedUsers.length === 1 ? 'Request' : 'Requests'} ({pendingReceivedUsers.length})
+                </h2>
+                <p className="text-xs text-indigo-700 dark:text-indigo-300">
+                  Accept a request to add them to your Friends list and start messaging immediately.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setRoleFilter('pending')}
+                className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 text-xs font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100/70 dark:hover:bg-indigo-900/50 transition-colors cursor-pointer"
+              >
+                View All Requests
+              </button>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {pendingReceivedUsers.map((sender) => (
+                <div
+                  key={`incoming_${sender.id}`}
+                  className="bg-white dark:bg-slate-900 rounded-2xl p-3.5 border border-indigo-200/70 dark:border-indigo-800/60 flex items-center justify-between gap-3"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <AvatarBadge
+                      name={sender.name}
+                      avatarUrl={sender.avatar}
+                      role={sender.role}
+                      isOnline={sender.status === 'online'}
+                      size="md"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                        {sender.name}
+                      </p>
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                        {sender.email || sender.institution || sender.title}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void handleAcceptRequest(sender)}
+                      className="px-3 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center gap-1 transition-colors cursor-pointer"
+                    >
+                      <Check className="w-3.5 h-3.5" /> Accept
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleDeclineRequest(sender)}
+                      className="p-1.5 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors cursor-pointer"
+                      title="Decline request"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Directory Grid */}
         {isLoading ? (

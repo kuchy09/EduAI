@@ -184,7 +184,17 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       if (data.currentUser) {
         setCurrentUser((prev) => ({ ...prev, ...data.currentUser, status: 'online' }));
       }
-      setAllUsers(data.users || []);
+      const incomingSenderIds = new Set(
+        (data.friendRequests || [])
+          .filter((r) => r.receiverId === (data.currentUser?.id || user.id) && r.status === 'pending')
+          .map((r) => r.senderId)
+      );
+      const normalizedUsers = (data.users || []).map((u) =>
+        incomingSenderIds.has(u.id) && u.friendStatus === 'none'
+          ? { ...u, friendStatus: 'pending_received' as const }
+          : u
+      );
+      setAllUsers(normalizedUsers);
       setFriendRequests(data.friendRequests || []);
       setConversations(data.conversations || []);
       setMessagesMap(data.messagesByConv || {});
@@ -250,7 +260,20 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       if (!mounted) return;
       const myId = currentUserRef.current.id;
 
-      if (ev.type === 'auth:ok' || ev.type === 'presence:update') {
+      if (ev.type === 'auth:ok') {
+        const onlineSet = new Set(ev.onlineUserIds || []);
+        setAllUsers((prev) =>
+          prev.map((u) => ({
+            ...u,
+            status: onlineSet.has(u.id) ? 'online' : 'offline',
+            lastSeen: onlineSet.has(u.id) ? 'Active now' : u.lastSeen,
+          }))
+        );
+        void hydrateFromServer();
+        return;
+      }
+
+      if (ev.type === 'presence:update') {
         const onlineSet = new Set(ev.onlineUserIds || []);
         setAllUsers((prev) =>
           prev.map((u) => ({
@@ -459,13 +482,34 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
     const onSessionRefreshed = () => {
       if (mounted) void hydrateFromServer();
     };
+    const onSocialUpdated = () => {
+      if (mounted) void hydrateFromServer();
+    };
+    const onFocusOrVisible = () => {
+      if (mounted && document.visibilityState === 'visible') {
+        void hydrateFromServer();
+      }
+    };
     window.addEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onSessionRefreshed);
+    window.addEventListener('eduai_social_updated', onSocialUpdated);
+    window.addEventListener('focus', onFocusOrVisible);
+    document.addEventListener('visibilitychange', onFocusOrVisible);
+
+    const pollTimer = window.setInterval(() => {
+      if (mounted && document.visibilityState === 'visible') {
+        void hydrateFromServer();
+      }
+    }, 12000);
 
     return () => {
       mounted = false;
+      window.clearInterval(pollTimer);
       unsubStatus();
       unsubEvents();
       window.removeEventListener(SOCIAL_SESSION_REFRESHED_EVENT, onSessionRefreshed);
+      window.removeEventListener('eduai_social_updated', onSocialUpdated);
+      window.removeEventListener('focus', onFocusOrVisible);
+      document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
   }, [user?.id, buildCurrentUser, hydrateFromServer, showToast]);
 
@@ -863,6 +907,15 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
     () => allUsers.filter((u) => u.id !== currentUser.id && u.friendStatus === 'pending_received').length,
     [allUsers, currentUser.id]
   );
+
+  useEffect(() => {
+    const unreadMessages = conversations.reduce((sum, c) => sum + Number(c.unreadCount || 0), 0);
+    window.dispatchEvent(
+      new CustomEvent('eduai_social_counts_updated', {
+        detail: { incomingCount: pendingRequestsCount, unreadMessages },
+      })
+    );
+  }, [pendingRequestsCount, conversations]);
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-slate-50 dark:bg-slate-950 relative">

@@ -16,9 +16,10 @@ interface SidebarProps {
   profile?: any;
   isGuest?: boolean;
   onSignOut?: () => void;
+  pendingRequestsCount?: number;
 }
 
-export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: propUser, profile, isGuest, onSignOut }: SidebarProps) {
+export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: propUser, profile, isGuest, onSignOut, pendingRequestsCount = 0 }: SidebarProps) {
   const [user, setUser] = useState<any>(propUser || null);
   const avatarUrl = useUserAvatar(user, profile);
   const [avatarFailed, setAvatarFailed] = useState(false);
@@ -179,6 +180,11 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
                     </div>
                     <span>{item.label}</span>
                   </div>
+                  {item.id === 'users-portal' && pendingRequestsCount > 0 && (
+                    <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold tabular-nums flex items-center justify-center">
+                      {pendingRequestsCount > 99 ? '99+' : pendingRequestsCount}
+                    </span>
+                  )}
                 </button>
 
                 {/* Sub-items (Support and Developer in Setting) */}

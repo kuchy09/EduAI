@@ -29,6 +29,7 @@ interface HeaderProps {
   onToggleSageSidebar?: () => void;
   isSageSidebarOpen?: boolean;
   onSignOut?: () => void;
+  pendingChatBadgeCount?: number;
 }
 
 export function SideNavToggleIcon({
@@ -83,7 +84,8 @@ export function Header({
   profile,
   onToggleSageSidebar,
   isSageSidebarOpen: propIsSageSidebarOpen,
-  onSignOut
+  onSignOut,
+  pendingChatBadgeCount = 0
 }: HeaderProps) {
   const [internalSageSidebarOpen, setInternalSageSidebarOpen] = useState(false);
 
@@ -505,6 +507,11 @@ export function Header({
         >
           <div className="absolute top-0 inset-x-2 h-[1px] bg-gradient-to-r from-transparent via-white/80 dark:via-white/30 to-transparent pointer-events-none rounded-full" />
           <MessageCircle className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
+          {pendingChatBadgeCount > 0 && (
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
+              {pendingChatBadgeCount > 9 ? '9+' : pendingChatBadgeCount}
+            </span>
+          )}
         </button>
 
         {/* Hovering Notification Bell Button */}

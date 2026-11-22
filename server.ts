@@ -49,6 +49,7 @@ import {
   sendChatMessageAction,
   sendFriendRequestAction,
   syncUserProfileToStoreAndSupabase,
+  backfillFriendRequestsToSupabase,
   toggleCommunityPostLikeAction,
   toggleMessageReactionAction,
   parseSubjectsList,
@@ -3192,6 +3193,10 @@ app.post("/api/social/friend-requests", async (req, res) => {
         });
       }
     } else {
+      const compactAvatar =
+        typeof senderProfile.avatar === "string" && !senderProfile.avatar.startsWith("data:") && senderProfile.avatar.length < 2048
+          ? senderProfile.avatar
+          : "";
       sendWsPayloadToUser(receiverId, {
         type: "friend:request",
         request: result.request,
@@ -3201,7 +3206,7 @@ app.post("/api/social/friend-requests", async (req, res) => {
           role: senderProfile.role,
           title: senderProfile.title,
           institution: senderProfile.institution,
-          avatar: senderProfile.avatar,
+          avatar: compactAvatar,
         },
       });
     }
@@ -5008,6 +5013,19 @@ function attachSocialWebSocketServer(httpServer: http.Server): void {
       }
 
       const uid = verified.user.id;
+      if (authedUserId === uid && socialSocketsByUser.get(uid)?.has(ws)) {
+        return;
+      }
+      if (authedUserId && authedUserId !== uid) {
+        const oldSet = socialSocketsByUser.get(authedUserId);
+        if (oldSet) {
+          oldSet.delete(ws);
+          if (oldSet.size === 0) {
+            socialSocketsByUser.delete(authedUserId);
+          }
+        }
+      }
+
       authedUserId = uid;
       const prof = await syncUserProfileToStoreAndSupabase(verified.user, verified.sb);
       authedUserName = prof.name;
@@ -5200,9 +5218,11 @@ async function reconcileAdminProfilesOnBoot() {
     }
   } catch (_) {}
 
-  // Pre-hydrate ALL registered users into the social directory & backfill Supabase public.profiles directory on boot
+  // Pre-hydrate ALL registered users into the social directory & backfill Supabase public.profiles + friend_requests on boot
   try {
-    await hydrateDirectoryFromSupabase(getServerSupabase(), { backfillProfiles: true });
+    const bootSb = getServerSupabase();
+    await hydrateDirectoryFromSupabase(bootSb, { backfillProfiles: true });
+    await backfillFriendRequestsToSupabase(bootSb, true);
   } catch (_) {}
 }
 
