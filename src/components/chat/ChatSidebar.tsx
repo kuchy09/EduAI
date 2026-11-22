@@ -57,6 +57,17 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<SidebarTab>('all');
+  const [busyPeerId, setBusyPeerId] = useState<string | null>(null);
+
+  const runPeerAction = async (userId: string, fn: () => unknown) => {
+    try {
+      setBusyPeerId(userId);
+      await fn();
+    } catch (_) {
+    } finally {
+      setBusyPeerId(null);
+    }
+  };
 
   const incomingRequests = useMemo(() => {
     return users.filter((u) => u.id !== currentUser.id && u.friendStatus === 'pending_received');
@@ -524,8 +535,9 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                     {peer.friendStatus === 'friends' ? (
                       <button
                         type="button"
+                        disabled={busyPeerId === peer.id}
                         onClick={() => onStartDirectChat(peer.id)}
-                        className="h-7 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+                        className="h-7 px-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-60"
                       >
                         <MessageSquare className="w-3 h-3" />
                         <span>Chat</span>
@@ -533,34 +545,37 @@ export const ChatSidebar: React.FC<ChatSidebarProps> = ({
                     ) : peer.friendStatus === 'pending_received' ? (
                       <button
                         type="button"
-                        onClick={() => onAcceptFriendRequest(peer.id)}
-                        className="h-7 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer"
+                        disabled={busyPeerId === peer.id}
+                        onClick={() => void runPeerAction(peer.id, () => onAcceptFriendRequest(peer.id))}
+                        className="h-7 px-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-semibold flex items-center gap-1 shrink-0 cursor-pointer disabled:opacity-60"
                       >
                         <Check className="w-3 h-3" />
-                        <span>Accept</span>
+                        <span>{busyPeerId === peer.id ? '...' : 'Accept'}</span>
                       </button>
                     ) : peer.friendStatus === 'pending_sent' ? (
                       <button
                         type="button"
-                        onClick={() => onCancelFriendRequest(peer.id)}
-                        className="h-7 px-2.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold shrink-0 cursor-pointer"
+                        disabled={busyPeerId === peer.id}
+                        onClick={() => void runPeerAction(peer.id, () => onCancelFriendRequest(peer.id))}
+                        className="h-7 px-2.5 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 text-[11px] font-semibold shrink-0 cursor-pointer disabled:opacity-60"
                       >
-                        Pending
+                        {busyPeerId === peer.id ? '...' : 'Pending'}
                       </button>
                     ) : (
                       <button
                         type="button"
+                        disabled={busyPeerId === peer.id}
                         onClick={() => {
                           if (onSendFriendRequest) {
-                            onSendFriendRequest(peer.id);
+                            void runPeerAction(peer.id, () => onSendFriendRequest(peer.id));
                           } else {
                             onOpenFindFriends();
                           }
                         }}
-                        className="h-7 px-2.5 rounded-lg bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white dark:bg-indigo-950/60 dark:hover:bg-indigo-600 dark:text-indigo-300 dark:hover:text-white border border-indigo-200 dark:border-indigo-800 text-[11px] font-semibold flex items-center gap-1 shrink-0 transition-colors cursor-pointer"
+                        className="h-7 px-2.5 rounded-lg bg-indigo-50 hover:bg-indigo-600 text-indigo-700 hover:text-white dark:bg-indigo-950/60 dark:hover:bg-indigo-600 dark:text-indigo-300 dark:hover:text-white border border-indigo-200 dark:border-indigo-800 text-[11px] font-semibold flex items-center gap-1 shrink-0 transition-colors cursor-pointer disabled:opacity-60"
                       >
                         <UserPlus className="w-3 h-3" />
-                        <span>Connect</span>
+                        <span>{busyPeerId === peer.id ? 'Sending...' : 'Connect'}</span>
                       </button>
                     )}
                   </div>

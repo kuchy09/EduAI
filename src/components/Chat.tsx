@@ -685,6 +685,9 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
   const handleSendFriendRequest = async (targetUserId: string, note?: string) => {
     try {
       const res = await sendFriendRequestApi(targetUserId, note);
+      if (!res?.ok) {
+        throw new Error('Could not send friend request.');
+      }
       setAllUsers((prev) =>
         prev.map((u) =>
           u.id === targetUserId
@@ -692,6 +695,12 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
             : u
         )
       );
+      if (res.request) {
+        setFriendRequests((prev) => [
+          res.request,
+          ...prev.filter((r) => r.id !== res.request.id),
+        ]);
+      }
       if (res.conversation) {
         setConversations((prev) => [
           res.conversation!,
@@ -706,6 +715,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       );
     } catch (err: any) {
       showToast(err?.message || 'Could not send friend request.', 'error');
+      throw err;
     }
   };
 
@@ -715,6 +725,11 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       setAllUsers((prev) =>
         prev.map((u) => (u.id === senderId ? { ...u, friendStatus: 'friends' } : u))
       );
+      if (res.request) {
+        setFriendRequests((prev) =>
+          prev.map((r) => (r.id === res.request.id || (r.senderId === senderId && r.receiverId === currentUser.id) ? res.request : r))
+        );
+      }
       if (res.conversation) {
         setConversations((prev) => [
           res.conversation!,
@@ -726,18 +741,25 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       showToast('Connection accepted. Direct messaging unlocked.', 'success');
     } catch (err: any) {
       showToast(err?.message || 'Could not accept friend request.', 'error');
+      throw err;
     }
   };
 
   const handleDeclineFriendRequest = async (senderId: string) => {
     try {
-      await respondFriendRequestApi(senderId, 'decline');
+      const res = await respondFriendRequestApi(senderId, 'decline');
       setAllUsers((prev) =>
         prev.map((u) => (u.id === senderId ? { ...u, friendStatus: 'none' } : u))
       );
+      if (res.request) {
+        setFriendRequests((prev) =>
+          prev.map((r) => (r.id === res.request.id || (r.senderId === senderId && r.receiverId === currentUser.id) ? res.request : r))
+        );
+      }
       showToast('Friend request declined.', 'info');
     } catch (err: any) {
       showToast(err?.message || 'Could not decline friend request.', 'error');
+      throw err;
     }
   };
 
@@ -747,9 +769,19 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       setAllUsers((prev) =>
         prev.map((u) => (u.id === targetUserId ? { ...u, friendStatus: 'none' } : u))
       );
+      setFriendRequests((prev) =>
+        prev.filter(
+          (r) =>
+            !(
+              (r.senderId === currentUser.id && r.receiverId === targetUserId) ||
+              (r.senderId === targetUserId && r.receiverId === currentUser.id)
+            )
+        )
+      );
       showToast('Connection updated.', 'info');
     } catch (err: any) {
       showToast(err?.message || 'Could not update connection.', 'error');
+      throw err;
     }
   };
 
@@ -936,10 +968,10 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
           onStartDirectChat={handleStartDirectChat}
           users={allUsers}
           friendRequests={friendRequests}
-          onSendFriendRequest={(uid) => handleSendFriendRequest(uid)}
-          onAcceptFriendRequest={handleAcceptFriendRequest}
-          onDeclineFriendRequest={handleDeclineFriendRequest}
-          onCancelFriendRequest={handleCancelOrRemoveFriend}
+          onSendFriendRequest={(uid) => void handleSendFriendRequest(uid).catch(() => {})}
+          onAcceptFriendRequest={(uid) => void handleAcceptFriendRequest(uid).catch(() => {})}
+          onDeclineFriendRequest={(uid) => void handleDeclineFriendRequest(uid).catch(() => {})}
+          onCancelFriendRequest={(uid) => void handleCancelOrRemoveFriend(uid).catch(() => {})}
           onOpenFindFriends={() => {
             setIsFindFriendsOpen(true);
             void hydrateFromServer();
@@ -973,9 +1005,9 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
               setActiveConversationId('');
               setMobileView('list');
             }}
-            onSendFriendRequest={(uid) => handleSendFriendRequest(uid)}
-            onAcceptFriendRequest={handleAcceptFriendRequest}
-            onDeclineFriendRequest={handleDeclineFriendRequest}
+            onSendFriendRequest={(uid) => void handleSendFriendRequest(uid).catch(() => {})}
+            onAcceptFriendRequest={(uid) => void handleAcceptFriendRequest(uid).catch(() => {})}
+            onDeclineFriendRequest={(uid) => void handleDeclineFriendRequest(uid).catch(() => {})}
             isPartnerTyping={activeTypingUsers.length > 0}
             typingUserName={activeTypingUsers[0]}
             onTyping={(isTyping) => socialWsClient.sendTyping(activeConversation.id, isTyping)}
@@ -1004,7 +1036,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
           allUsers={allUsers}
           messages={activeMessages}
           onStartCall={handleStartCall}
-          onUnfriend={activePartner ? handleCancelOrRemoveFriend : undefined}
+          onUnfriend={activePartner ? (uid) => void handleCancelOrRemoveFriend(uid).catch(() => {}) : undefined}
           onAddGroupMember={handleAddGroupMember}
           onOpenSharedNotes={() => {
             setIsInfoDrawerOpen(false);

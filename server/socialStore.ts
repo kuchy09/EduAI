@@ -2,6 +2,10 @@ import fs from "fs";
 import path from "path";
 import crypto from "crypto";
 import { SupabaseClient } from "@supabase/supabase-js";
+import {
+  GLOBAL_SOCIAL_GRAPH_ROW_ID,
+  GLOBAL_SOCIAL_GRAPH_ROW_TITLE,
+} from "../shared/canonicalBookCovers";
 
 export type SocialRole = "teacher" | "student" | "educator" | "admin";
 export type FriendRelationStatus = "friends" | "pending_sent" | "pending_received" | "none";
@@ -94,6 +98,7 @@ export interface CommunityPostRecord {
 interface SocialStateDisk {
   users: Record<string, SocialUserProfile>;
   friendRequests: FriendRequestRecord[];
+  removedFriendPairs?: Record<string, string>;
   conversations: Record<string, SocialConversationRecord>;
   messages: Record<string, SocialMessageRecord[]>;
   unreadCounts: Record<string, Record<string, number>>; // convId -> { userId: count }
@@ -104,6 +109,8 @@ interface SocialStateDisk {
 const UPLOADS_DIR = process.env.VERCEL ? path.join("/tmp", "uploads") : path.join(process.cwd(), "uploads");
 const USER_SYNC_DIR = path.join(UPLOADS_DIR, "user-sync");
 const SOCIAL_STATE_FILE = path.join(UPLOADS_DIR, "social-state.json");
+const CLOUD_SOCIAL_BUCKET = "workspace-files";
+const CLOUD_SOCIAL_OBJECT_KEY = "_system/social-state.json";
 
 function createInitialCommunityPosts(): CommunityPostRecord[] {
   const now = Date.now();
@@ -137,6 +144,7 @@ function getDefaultState(): SocialStateDisk {
   return {
     users: {},
     friendRequests: [],
+    removedFriendPairs: {},
     conversations: {},
     messages: {},
     unreadCounts: {},
@@ -146,6 +154,13 @@ function getDefaultState(): SocialStateDisk {
 }
 
 let cachedState: SocialStateDisk | null = null;
+let registeredSocialSb: SupabaseClient | null = null;
+
+export function registerSocialSupabaseClient(sb?: SupabaseClient | null): void {
+  if (sb) {
+    registeredSocialSb = sb;
+  }
+}
 
 function readDiskState(): SocialStateDisk {
   if (cachedState) return cachedState;
@@ -160,6 +175,10 @@ function readDiskState(): SocialStateDisk {
         cachedState = {
           users: parsed.users && typeof parsed.users === "object" ? parsed.users : {},
           friendRequests: Array.isArray(parsed.friendRequests) ? parsed.friendRequests : [],
+          removedFriendPairs:
+            parsed.removedFriendPairs && typeof parsed.removedFriendPairs === "object"
+              ? parsed.removedFriendPairs
+              : {},
           conversations: parsed.conversations && typeof parsed.conversations === "object" ? parsed.conversations : {},
           messages: parsed.messages && typeof parsed.messages === "object" ? parsed.messages : {},
           unreadCounts: parsed.unreadCounts && typeof parsed.unreadCounts === "object" ? parsed.unreadCounts : {},
@@ -192,6 +211,377 @@ function writeDiskState(state: SocialStateDisk): void {
   } catch (err) {
     console.warn("[SocialStore] Failed writing social-state.json:", err);
   }
+}
+
+function buildFriendPairKey(idA: string, idB: string): string {
+  return [String(idA || ""), String(idB || "")].sort().join("::");
+}
+
+function safeTimestampMs(iso?: string): number {
+  if (!iso) return 0;
+  const ts = Date.parse(iso);
+  return Number.isFinite(ts) ? ts : 0;
+}
+
+let friendRequestsTableAvailable: boolean | null = null;
+let friendRequestsTableCheckedAt = 0;
+let loggedMissingFriendRequestsNotice = false;
+const FRIEND_REQUESTS_RECHECK_MS = 5 * 60 * 1000;
+
+function isMissingFriendRequestsTableError(err: any): boolean {
+  if (!err) return false;
+  const code = String(err.code || "").trim();
+  const msg = String(err.message || err || "").toLowerCase();
+  return (
+    code === "PGRST205" ||
+    code === "42P01" ||
+    msg.includes("could not find the table") ||
+    msg.includes("schema cache") ||
+    (msg.includes("friend_requests") && msg.includes("does not exist"))
+  );
+}
+
+function markFriendRequestsTableUnavailable(): void {
+  friendRequestsTableAvailable = false;
+  friendRequestsTableCheckedAt = Date.now();
+  if (!loggedMissingFriendRequestsNotice) {
+    loggedMissingFriendRequestsNotice = true;
+    console.info("[SocialStore] public.friend_requests table not present; using Supabase cloud snapshot persistence.");
+  }
+}
+
+function canQueryFriendRequestsTable(): boolean {
+  if (friendRequestsTableAvailable === null) return true;
+  if (friendRequestsTableAvailable === true) return true;
+  return Date.now() - friendRequestsTableCheckedAt >= FRIEND_REQUESTS_RECHECK_MS;
+}
+
+let cloudBucketEnsured = false;
+let lastCloudHydrateAt = 0;
+let inFlightCloudHydrate: Promise<void> | null = null;
+let cloudSyncDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+function mergeCloudSnapshotIntoState(state: SocialStateDisk, snapshot: any): boolean {
+  if (!snapshot || typeof snapshot !== "object") return false;
+  let changed = false;
+
+  if (!state.removedFriendPairs) state.removedFriendPairs = {};
+  if (snapshot.removedFriendPairs && typeof snapshot.removedFriendPairs === "object") {
+    for (const [pairKey, delIso] of Object.entries(snapshot.removedFriendPairs)) {
+      if (!pairKey || typeof delIso !== "string") continue;
+      const existingDel = state.removedFriendPairs[pairKey];
+      if (!existingDel || safeTimestampMs(delIso) > safeTimestampMs(existingDel)) {
+        state.removedFriendPairs[pairKey] = delIso;
+        changed = true;
+      }
+    }
+  }
+
+  // Prune any local friend requests older than a merged deletion marker
+  const beforePruneLen = state.friendRequests.length;
+  state.friendRequests = state.friendRequests.filter((fr) => {
+    const pairKey = buildFriendPairKey(fr.senderId, fr.receiverId);
+    const delMs = safeTimestampMs(state.removedFriendPairs?.[pairKey]);
+    if (!delMs) return true;
+    return safeTimestampMs(fr.updatedAt || fr.createdAt) > delMs;
+  });
+  if (state.friendRequests.length !== beforePruneLen) {
+    changed = true;
+  }
+
+  if (Array.isArray(snapshot.friendRequests)) {
+    for (const rawFr of snapshot.friendRequests) {
+      if (!rawFr?.senderId || !rawFr?.receiverId) continue;
+      const pairKey = buildFriendPairKey(rawFr.senderId, rawFr.receiverId);
+      const delMs = safeTimestampMs(state.removedFriendPairs?.[pairKey]);
+      const rawUpdatedAt = rawFr.updatedAt || rawFr.createdAt || new Date().toISOString();
+      const rawUpdatedMs = safeTimestampMs(rawUpdatedAt);
+      if (delMs && rawUpdatedMs <= delMs) continue;
+
+      const status: FriendRequestRecord["status"] =
+        rawFr.status === "accepted" || rawFr.status === "declined" ? rawFr.status : "pending";
+
+      const existing = state.friendRequests.find(
+        (fr) => buildFriendPairKey(fr.senderId, fr.receiverId) === pairKey
+      );
+      if (!existing) {
+        state.friendRequests.push({
+          id: rawFr.id || `fr_${crypto.randomUUID()}`,
+          senderId: rawFr.senderId,
+          receiverId: rawFr.receiverId,
+          status,
+          note: typeof rawFr.note === "string" && rawFr.note.trim() ? rawFr.note.trim() : undefined,
+          createdAt: rawFr.createdAt || rawUpdatedAt,
+          updatedAt: rawUpdatedAt,
+        });
+        changed = true;
+      } else {
+        const exUpdatedMs = safeTimestampMs(existing.updatedAt || existing.createdAt);
+        if (
+          rawUpdatedMs > exUpdatedMs ||
+          (rawUpdatedMs === exUpdatedMs && status === "accepted" && existing.status !== "accepted")
+        ) {
+          existing.senderId = rawFr.senderId;
+          existing.receiverId = rawFr.receiverId;
+          existing.status = status;
+          if (typeof rawFr.note === "string" && rawFr.note.trim()) {
+            existing.note = rawFr.note.trim();
+          }
+          existing.updatedAt = rawUpdatedAt;
+          changed = true;
+        }
+      }
+
+      if (status === "accepted") {
+        const dmId = buildDirectConvId(rawFr.senderId, rawFr.receiverId);
+        if (!state.conversations[dmId]) {
+          ensureDirectConversationInState(state, rawFr.senderId, rawFr.receiverId, rawFr.createdAt, rawUpdatedAt);
+          changed = true;
+        }
+      }
+    }
+  }
+
+  if (snapshot.conversations && typeof snapshot.conversations === "object") {
+    for (const [convId, rawConv] of Object.entries<any>(snapshot.conversations)) {
+      if (!convId || !rawConv || typeof rawConv !== "object") continue;
+      const existing = state.conversations[convId];
+      if (!existing) {
+        state.conversations[convId] = { ...rawConv };
+        changed = true;
+      } else {
+        const unionParticipants = Array.from(
+          new Set([...(existing.participants || []), ...(Array.isArray(rawConv.participants) ? rawConv.participants : [])])
+        );
+        if (unionParticipants.length !== (existing.participants || []).length) {
+          existing.participants = unionParticipants;
+          changed = true;
+        }
+        if (safeTimestampMs(rawConv.updatedAt) > safeTimestampMs(existing.updatedAt)) {
+          existing.updatedAt = rawConv.updatedAt;
+          if (rawConv.name) existing.name = rawConv.name;
+          if (rawConv.description) existing.description = rawConv.description;
+          changed = true;
+        }
+      }
+    }
+  }
+
+  if (snapshot.messages && typeof snapshot.messages === "object") {
+    for (const [convId, rawList] of Object.entries<any>(snapshot.messages)) {
+      if (!Array.isArray(rawList) || rawList.length === 0) continue;
+      const currentList = state.messages[convId] || [];
+      const byId = new Map<string, SocialMessageRecord>();
+      for (const m of currentList) {
+        if (m?.id) byId.set(m.id, m);
+      }
+      let addedOrUpdated = false;
+      for (const m of rawList) {
+        if (!m?.id) continue;
+        const prev = byId.get(m.id);
+        if (!prev) {
+          byId.set(m.id, m);
+          addedOrUpdated = true;
+        } else {
+          const prevRead = Array.isArray(prev.readBy) ? prev.readBy.length : 0;
+          const nextRead = Array.isArray(m.readBy) ? m.readBy.length : 0;
+          if (nextRead > prevRead || (m.status === "read" && prev.status !== "read")) {
+            byId.set(m.id, { ...prev, ...m });
+            addedOrUpdated = true;
+          }
+        }
+      }
+      if (addedOrUpdated) {
+        state.messages[convId] = Array.from(byId.values()).sort(
+          (a, b) => safeTimestampMs(a.createdAt) - safeTimestampMs(b.createdAt)
+        );
+        changed = true;
+      }
+    }
+  }
+
+  if (snapshot.unreadCounts && typeof snapshot.unreadCounts === "object") {
+    for (const [convId, rawMap] of Object.entries<any>(snapshot.unreadCounts)) {
+      if (!rawMap || typeof rawMap !== "object") continue;
+      if (!state.unreadCounts[convId]) {
+        state.unreadCounts[convId] = { ...rawMap };
+        changed = true;
+      } else {
+        for (const [uid, cnt] of Object.entries(rawMap)) {
+          if (state.unreadCounts[convId][uid] === undefined && typeof cnt === "number") {
+            state.unreadCounts[convId][uid] = cnt;
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  if (Array.isArray(snapshot.communityPosts)) {
+    const existingIds = new Set(state.communityPosts.map((p) => p.id));
+    for (const post of snapshot.communityPosts) {
+      if (!post?.id) continue;
+      if (!existingIds.has(post.id)) {
+        state.communityPosts.push(post);
+        existingIds.add(post.id);
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
+async function ensureSocialStorageBucket(sb: SupabaseClient): Promise<void> {
+  if (cloudBucketEnsured || !sb.storage?.createBucket) return;
+  cloudBucketEnsured = true;
+  try {
+    await sb.storage.createBucket(CLOUD_SOCIAL_BUCKET, { public: false }).catch(() => {});
+  } catch (_) {}
+}
+
+export async function persistSocialCloudState(
+  sb?: SupabaseClient | null,
+  stateOverride?: SocialStateDisk
+): Promise<void> {
+  const client = sb || registeredSocialSb;
+  if (!client) return;
+  if (sb) registeredSocialSb = sb;
+  const state = stateOverride || readDiskState();
+
+  const compactGraph = {
+    friendRequests: state.friendRequests,
+    removedFriendPairs: state.removedFriendPairs || {},
+    updatedAt: state.updatedAt || new Date().toISOString(),
+  };
+
+  const fullPayload = {
+    friendRequests: state.friendRequests,
+    removedFriendPairs: state.removedFriendPairs || {},
+    conversations: state.conversations,
+    messages: state.messages,
+    unreadCounts: state.unreadCounts,
+    communityPosts: state.communityPosts,
+    updatedAt: state.updatedAt || new Date().toISOString(),
+  };
+
+  // 1. Persist full social state JSON to Supabase Storage (durable across container restarts)
+  const storageWrite = (async () => {
+    try {
+      await ensureSocialStorageBucket(client);
+      const buf = Buffer.from(JSON.stringify(fullPayload), "utf-8");
+      const { error: upErr } = await client.storage
+        .from(CLOUD_SOCIAL_BUCKET)
+        .upload(CLOUD_SOCIAL_OBJECT_KEY, buf, {
+          contentType: "application/json",
+          upsert: true,
+        });
+      if (upErr && String(upErr.message || "").toLowerCase().includes("bucket")) {
+        cloudBucketEnsured = false;
+        await ensureSocialStorageBucket(client);
+        await client.storage.from(CLOUD_SOCIAL_BUCKET).upload(CLOUD_SOCIAL_OBJECT_KEY, buf, {
+          contentType: "application/json",
+          upsert: true,
+        });
+      }
+    } catch (_) {}
+  })();
+
+  // 2. Persist compact friendRequests graph in Postgres books __SYSTEM_CONFIG__ row
+  const dbWrite = (async () => {
+    try {
+      await client.from("books").upsert(
+        {
+          id: GLOBAL_SOCIAL_GRAPH_ROW_ID,
+          title: GLOBAL_SOCIAL_GRAPH_ROW_TITLE,
+          author: "Edu AI System",
+          category: "__SYSTEM_CONFIG__",
+          description: JSON.stringify(compactGraph),
+          cover_image: "",
+        },
+        { onConflict: "id" }
+      );
+    } catch (_) {}
+  })();
+
+  await Promise.allSettled([storageWrite, dbWrite]);
+}
+
+function scheduleCloudSocialSync(sb?: SupabaseClient | null): void {
+  const client = sb || registeredSocialSb;
+  if (!client) return;
+  if (cloudSyncDebounceTimer) clearTimeout(cloudSyncDebounceTimer);
+  cloudSyncDebounceTimer = setTimeout(() => {
+    cloudSyncDebounceTimer = null;
+    void persistSocialCloudState(client);
+  }, 600);
+}
+
+export async function hydrateSocialCloudState(
+  sb?: SupabaseClient | null,
+  options?: { force?: boolean; minIntervalMs?: number }
+): Promise<void> {
+  const client = sb || registeredSocialSb;
+  if (!client) return;
+  if (sb) registeredSocialSb = sb;
+
+  const minInterval = options?.minIntervalMs ?? 3000;
+  if (!options?.force && Date.now() - lastCloudHydrateAt < minInterval) {
+    return;
+  }
+  if (inFlightCloudHydrate) {
+    return inFlightCloudHydrate;
+  }
+
+  inFlightCloudHydrate = (async () => {
+    lastCloudHydrateAt = Date.now();
+    try {
+      const state = readDiskState();
+      let changed = false;
+
+      const [storageRes, dbRes] = await Promise.allSettled([
+        client.storage.from(CLOUD_SOCIAL_BUCKET).download(CLOUD_SOCIAL_OBJECT_KEY),
+        client
+          .from("books")
+          .select("description")
+          .eq("id", GLOBAL_SOCIAL_GRAPH_ROW_ID)
+          .maybeSingle(),
+      ]);
+
+      if (storageRes.status === "fulfilled") {
+        const { data: blobData, error: dlErr } = storageRes.value;
+        if (!dlErr && blobData) {
+          try {
+            const parsed = JSON.parse(await blobData.text());
+            if (mergeCloudSnapshotIntoState(state, parsed)) {
+              changed = true;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (dbRes.status === "fulfilled") {
+        const { data: rowData, error: rowErr } = dbRes.value;
+        if (!rowErr && rowData?.description) {
+          try {
+            const parsed = JSON.parse(rowData.description);
+            if (mergeCloudSnapshotIntoState(state, parsed)) {
+              changed = true;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (changed) {
+        writeDiskState(state);
+      }
+    } catch (_) {
+    } finally {
+      inFlightCloudHydrate = null;
+    }
+  })();
+
+  return inFlightCloudHydrate;
 }
 
 export function normalizeRole(rawRole: any, email?: string): SocialRole {
@@ -709,24 +1099,44 @@ export async function hydrateDirectoryFromSupabase(
   }
 }
 
-export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: SupabaseClient | null): Promise<void> {
-  if (!sb || !userId) return;
+export async function hydrateFriendRequestsFromSupabase(
+  userId: string,
+  sb?: SupabaseClient | null,
+  options?: { forceCloudRead?: boolean }
+): Promise<void> {
+  const client = sb || registeredSocialSb;
+  if (!client || !userId) return;
+  if (sb) registeredSocialSb = sb;
+
+  // Always hydrate durable Supabase cloud snapshot first (Storage + system config row)
+  await hydrateSocialCloudState(client, { force: options?.forceCloudRead });
+
+  if (!canQueryFriendRequestsTable()) return;
+
   try {
     let data: any[] | null = null;
-    const { data: richData, error: richErr } = await sb
+    const { data: richData, error: richErr } = await client
       .from("friend_requests")
       .select("id, sender_id, receiver_id, status, note, created_at, updated_at")
       .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
 
     if (!richErr && Array.isArray(richData)) {
+      friendRequestsTableAvailable = true;
       data = richData;
+    } else if (richErr && isMissingFriendRequestsTableError(richErr)) {
+      markFriendRequestsTableUnavailable();
+      return;
     } else {
-      const { data: minData, error: minErr } = await sb
+      const { data: minData, error: minErr } = await client
         .from("friend_requests")
         .select("*")
         .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`);
       if (!minErr && Array.isArray(minData)) {
+        friendRequestsTableAvailable = true;
         data = minData;
+      } else if (minErr && isMissingFriendRequestsTableError(minErr)) {
+        markFriendRequestsTableUnavailable();
+        return;
       }
     }
 
@@ -736,9 +1146,13 @@ export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: Sup
 
     for (const row of data) {
       if (!row?.sender_id || !row?.receiver_id) continue;
+      const pairKey = buildFriendPairKey(row.sender_id, row.receiver_id);
+      const delMs = safeTimestampMs(state.removedFriendPairs?.[pairKey]);
       const status: FriendRequestRecord["status"] =
         row.status === "accepted" || row.status === "declined" ? row.status : "pending";
       const rowUpdatedAt = row.updated_at || row.created_at || new Date().toISOString();
+      const rowUpdatedMs = rowUpdatedAt ? Date.parse(rowUpdatedAt) : 0;
+      if (delMs && rowUpdatedMs <= delMs) continue;
 
       const existing = state.friendRequests.find(
         (fr) =>
@@ -747,7 +1161,6 @@ export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: Sup
       );
 
       const existingUpdatedMs = existing?.updatedAt ? Date.parse(existing.updatedAt) : 0;
-      const rowUpdatedMs = rowUpdatedAt ? Date.parse(rowUpdatedAt) : 0;
 
       if (!existing) {
         state.friendRequests.push({
@@ -785,7 +1198,11 @@ export async function hydrateFriendRequestsFromSupabase(userId: string, sb?: Sup
       writeDiskState(state);
     }
   } catch (err) {
-    console.warn("[SocialStore] hydrateFriendRequestsFromSupabase warning:", err);
+    if (isMissingFriendRequestsTableError(err)) {
+      markFriendRequestsTableUnavailable();
+    } else {
+      console.warn("[SocialStore] hydrateFriendRequestsFromSupabase warning:", err);
+    }
   }
 }
 
@@ -795,21 +1212,35 @@ export async function backfillFriendRequestsToSupabase(
   sb?: SupabaseClient | null,
   force = false
 ): Promise<void> {
-  if (!sb) return;
+  const client = sb || registeredSocialSb;
+  if (!client) return;
+  if (sb) registeredSocialSb = sb;
+
   const nowMs = Date.now();
   if (!force && nowMs - lastFriendReqBackfillAt < 60_000) return;
   lastFriendReqBackfillAt = nowMs;
 
   try {
+    await hydrateSocialCloudState(client, { force });
     const state = readDiskState();
-    if (!state.friendRequests.length) return;
+    if (state.friendRequests.length > 0 || Object.keys(state.conversations).length > 0) {
+      await persistSocialCloudState(client, state);
+    }
 
-    const { data: existingRows, error: fetchErr } = await sb
+    if (!state.friendRequests.length || !canQueryFriendRequestsTable()) return;
+
+    const { data: existingRows, error: fetchErr } = await client
       .from("friend_requests")
       .select("sender_id, receiver_id, status");
 
     if (fetchErr) {
+      if (isMissingFriendRequestsTableError(fetchErr)) {
+        markFriendRequestsTableUnavailable();
+        return;
+      }
       console.warn("[SocialStore] backfillFriendRequestsToSupabase read warning:", fetchErr.message);
+    } else {
+      friendRequestsTableAvailable = true;
     }
 
     const existingPairs = new Set<string>();
@@ -825,7 +1256,8 @@ export async function backfillFriendRequestsToSupabase(
     for (const fr of state.friendRequests) {
       if (!fr.senderId || !fr.receiverId || fr.status === "declined") continue;
       if (existingPairs.has(`${fr.senderId}:${fr.receiverId}`)) continue;
-      await upsertFriendRequestInSupabase(sb, {
+      if (!canQueryFriendRequestsTable()) break;
+      await upsertFriendRequestInSupabase(client, {
         senderId: fr.senderId,
         receiverId: fr.receiverId,
         status: fr.status,
@@ -834,7 +1266,11 @@ export async function backfillFriendRequestsToSupabase(
       });
     }
   } catch (err) {
-    console.warn("[SocialStore] backfillFriendRequestsToSupabase warning:", err);
+    if (isMissingFriendRequestsTableError(err)) {
+      markFriendRequestsTableUnavailable();
+    } else {
+      console.warn("[SocialStore] backfillFriendRequestsToSupabase warning:", err);
+    }
   }
 }
 
@@ -1030,7 +1466,7 @@ async function upsertFriendRequestInSupabase(
   sb: SupabaseClient | null | undefined,
   record: { senderId: string; receiverId: string; status: string; note?: string; updatedAt: string }
 ): Promise<boolean> {
-  if (!sb) return false;
+  if (!sb || !canQueryFriendRequestsTable()) return false;
   try {
     const withNote: Record<string, any> = {
       sender_id: record.senderId,
@@ -1046,7 +1482,15 @@ async function upsertFriendRequestInSupabase(
       .from("friend_requests")
       .upsert(withNote, { onConflict: "sender_id,receiver_id" });
 
-    if (!error) return true;
+    if (!error) {
+      friendRequestsTableAvailable = true;
+      return true;
+    }
+
+    if (isMissingFriendRequestsTableError(error)) {
+      markFriendRequestsTableUnavailable();
+      return false;
+    }
 
     console.warn("[SocialStore] upsertFriendRequestInSupabase primary error:", error.message);
 
@@ -1063,16 +1507,28 @@ async function upsertFriendRequestInSupabase(
           },
           { onConflict: "sender_id,receiver_id" }
         );
-      if (!noNoteErr) return true;
+      if (!noNoteErr) {
+        friendRequestsTableAvailable = true;
+        return true;
+      }
+      if (isMissingFriendRequestsTableError(noNoteErr)) {
+        markFriendRequestsTableUnavailable();
+        return false;
+      }
     }
 
     // Fallback 2: SELECT -> UPDATE / INSERT (works even without UNIQUE (sender_id, receiver_id))
-    const { data: existingRow } = await sb
+    const { data: existingRow, error: selErr } = await sb
       .from("friend_requests")
       .select("id")
       .eq("sender_id", record.senderId)
       .eq("receiver_id", record.receiverId)
       .maybeSingle();
+
+    if (selErr && isMissingFriendRequestsTableError(selErr)) {
+      markFriendRequestsTableUnavailable();
+      return false;
+    }
 
     if (existingRow?.id) {
       const { error: updErr } = await sb
@@ -1083,17 +1539,31 @@ async function upsertFriendRequestInSupabase(
           ...(record.note ? { note: record.note } : {}),
         })
         .eq("id", existingRow.id);
-      if (!updErr) return true;
+      if (!updErr) {
+        friendRequestsTableAvailable = true;
+        return true;
+      }
 
       const { error: minUpdErr } = await sb
         .from("friend_requests")
         .update({ status: record.status })
         .eq("id", existingRow.id);
-      return !minUpdErr;
+      if (!minUpdErr) {
+        friendRequestsTableAvailable = true;
+        return true;
+      }
+      return false;
     }
 
     const { error: insErr } = await sb.from("friend_requests").insert(withNote);
-    if (!insErr) return true;
+    if (!insErr) {
+      friendRequestsTableAvailable = true;
+      return true;
+    }
+    if (isMissingFriendRequestsTableError(insErr)) {
+      markFriendRequestsTableUnavailable();
+      return false;
+    }
 
     const { error: minInsErr } = await sb.from("friend_requests").insert({
       sender_id: record.senderId,
@@ -1101,12 +1571,21 @@ async function upsertFriendRequestInSupabase(
       status: record.status,
     });
     if (minInsErr) {
-      console.warn("[SocialStore] upsertFriendRequestInSupabase insert fallback failed:", minInsErr.message);
+      if (isMissingFriendRequestsTableError(minInsErr)) {
+        markFriendRequestsTableUnavailable();
+      } else {
+        console.warn("[SocialStore] upsertFriendRequestInSupabase insert fallback failed:", minInsErr.message);
+      }
       return false;
     }
+    friendRequestsTableAvailable = true;
     return true;
   } catch (err) {
-    console.warn("[SocialStore] upsertFriendRequestInSupabase exception:", err);
+    if (isMissingFriendRequestsTableError(err)) {
+      markFriendRequestsTableUnavailable();
+    } else {
+      console.warn("[SocialStore] upsertFriendRequestInSupabase exception:", err);
+    }
     return false;
   }
 }
@@ -1120,15 +1599,52 @@ export async function sendFriendRequestAction(
   if (!senderId || !receiverId || senderId === receiverId) {
     return { ok: false, status: "pending", request: null as any, error: "Invalid recipient." };
   }
+  const client = sb || registeredSocialSb;
+  if (sb) registeredSocialSb = sb;
+
   let state = readDiskState();
   if (!state.users[receiverId]) {
-    await hydrateDirectoryFromSupabase(sb);
+    await hydrateDirectoryFromSupabase(client);
+    state = readDiskState();
   }
-  await hydrateFriendRequestsFromSupabase(senderId, sb);
+  if (!state.users[receiverId] && client) {
+    try {
+      const { data: singleProf } = await client
+        .from("profiles")
+        .select("*")
+        .eq("id", receiverId)
+        .maybeSingle();
+      if (singleProf?.id) {
+        state.users[singleProf.id] = {
+          id: singleProf.id,
+          name: pickNonEmpty(singleProf.full_name, singleProf.username, singleProf.email?.split("@")?.[0]) || "Edu AI Scholar",
+          email: pickNonEmpty(singleProf.email),
+          avatar: cleanAvatarString(singleProf.avatar_url),
+          role: normalizeRole(singleProf.role || "student", singleProf.email),
+          title: pickNonEmpty(singleProf.title) || "Academic Member",
+          institution: pickNonEmpty(singleProf.institution) || "Edu AI Network",
+          subjects: parseSubjectsList(singleProf.subjects),
+          bio: pickNonEmpty(singleProf.bio) || "Active Edu AI learner.",
+          location: pickNonEmpty(singleProf.location, singleProf.country),
+          lastSeen: singleProf.updated_at || new Date().toISOString(),
+          updatedAt: singleProf.updated_at || new Date().toISOString(),
+        };
+        writeDiskState(state);
+      }
+    } catch (_) {}
+  }
+
+  await hydrateFriendRequestsFromSupabase(senderId, client, { forceCloudRead: true });
   state = readDiskState();
 
   if (!state.users[receiverId]) {
     return { ok: false, status: "pending", request: null as any, error: "User not found." };
+  }
+
+  // Clear deletion marker for this pair if previously removed
+  const pairKey = buildFriendPairKey(senderId, receiverId);
+  if (state.removedFriendPairs?.[pairKey]) {
+    delete state.removedFriendPairs[pairKey];
   }
 
   // Check if reverse request already pending — if so, auto-accept!
@@ -1136,7 +1652,7 @@ export async function sendFriendRequestAction(
     (fr) => fr.senderId === receiverId && fr.receiverId === senderId && fr.status === "pending"
   );
   if (reverse) {
-    const res = await respondToFriendRequestAction(senderId, receiverId, "accept", sb);
+    const res = await respondToFriendRequestAction(senderId, receiverId, "accept", client);
     return {
       ok: res.ok,
       status: "accepted",
@@ -1157,6 +1673,7 @@ export async function sendFriendRequestAction(
     if (existing.status === "accepted") {
       const conv = ensureDirectConversationInState(state, existing.senderId, existing.receiverId, existing.createdAt, existing.updatedAt);
       writeDiskState(state);
+      await persistSocialCloudState(client, state);
       return {
         ok: true,
         status: "accepted",
@@ -1189,13 +1706,16 @@ export async function sendFriendRequestAction(
 
   writeDiskState(state);
 
-  await upsertFriendRequestInSupabase(sb, {
-    senderId,
-    receiverId,
-    status: "pending",
-    note: request.note,
-    updatedAt: now,
-  });
+  await Promise.all([
+    persistSocialCloudState(client, state),
+    upsertFriendRequestInSupabase(client, {
+      senderId,
+      receiverId,
+      status: "pending",
+      note: request.note,
+      updatedAt: now,
+    }),
+  ]);
 
   return { ok: true, status: "pending", request };
 }
@@ -1206,6 +1726,10 @@ export async function respondToFriendRequestAction(
   action: "accept" | "decline",
   sb?: SupabaseClient | null
 ): Promise<{ ok: boolean; request?: FriendRequestRecord; conversation?: any; error?: string }> {
+  const client = sb || registeredSocialSb;
+  if (sb) registeredSocialSb = sb;
+
+  await hydrateFriendRequestsFromSupabase(responderId, client, { forceCloudRead: true });
   let state = readDiskState();
 
   let reqRecord =
@@ -1216,18 +1740,6 @@ export async function respondToFriendRequestAction(
       (fr) => fr.senderId === senderId && fr.receiverId === responderId
     );
 
-  if (!reqRecord && sb) {
-    await hydrateFriendRequestsFromSupabase(responderId, sb);
-    state = readDiskState();
-    reqRecord =
-      state.friendRequests.find(
-        (fr) => fr.senderId === senderId && fr.receiverId === responderId && fr.status === "pending"
-      ) ||
-      state.friendRequests.find(
-        (fr) => fr.senderId === senderId && fr.receiverId === responderId
-      );
-  }
-
   if (!reqRecord) {
     return { ok: false, error: "Incoming friend request not found." };
   }
@@ -1235,6 +1747,11 @@ export async function respondToFriendRequestAction(
   const now = new Date().toISOString();
   reqRecord.status = action === "accept" ? "accepted" : "declined";
   reqRecord.updatedAt = now;
+
+  const pairKey = buildFriendPairKey(reqRecord.senderId, reqRecord.receiverId);
+  if (action === "accept" && state.removedFriendPairs?.[pairKey]) {
+    delete state.removedFriendPairs[pairKey];
+  }
 
   let conversation: any = undefined;
   if (action === "accept") {
@@ -1248,13 +1765,16 @@ export async function respondToFriendRequestAction(
 
   writeDiskState(state);
 
-  await upsertFriendRequestInSupabase(sb, {
-    senderId: reqRecord.senderId,
-    receiverId: reqRecord.receiverId,
-    status: reqRecord.status,
-    note: reqRecord.note,
-    updatedAt: now,
-  });
+  await Promise.all([
+    persistSocialCloudState(client, state),
+    upsertFriendRequestInSupabase(client, {
+      senderId: reqRecord.senderId,
+      receiverId: reqRecord.receiverId,
+      status: reqRecord.status,
+      note: reqRecord.note,
+      updatedAt: now,
+    }),
+  ]);
 
   return { ok: true, request: reqRecord, conversation };
 }
@@ -1264,7 +1784,14 @@ export async function removeFriendshipAction(
   targetId: string,
   sb?: SupabaseClient | null
 ): Promise<{ ok: boolean }> {
+  const client = sb || registeredSocialSb;
+  if (sb) registeredSocialSb = sb;
+
+  await hydrateSocialCloudState(client, { force: true });
   const state = readDiskState();
+  const pairKey = buildFriendPairKey(actorId, targetId);
+  if (!state.removedFriendPairs) state.removedFriendPairs = {};
+  state.removedFriendPairs[pairKey] = new Date().toISOString();
   state.friendRequests = state.friendRequests.filter(
     (fr) =>
       !(
@@ -1274,12 +1801,17 @@ export async function removeFriendshipAction(
   );
   writeDiskState(state);
 
-  if (sb) {
+  await persistSocialCloudState(client, state);
+
+  if (client && canQueryFriendRequestsTable()) {
     try {
-      await sb
+      const { error: delErr } = await client
         .from("friend_requests")
         .delete()
         .or(`and(sender_id.eq.${actorId},receiver_id.eq.${targetId}),and(sender_id.eq.${targetId},receiver_id.eq.${actorId})`);
+      if (delErr && isMissingFriendRequestsTableError(delErr)) {
+        markFriendRequestsTableUnavailable();
+      }
     } catch (_) {}
   }
 
@@ -1304,6 +1836,7 @@ export function openOrCreateDirectConversation(
   const conv = ensureDirectConversationInState(state, requesterId, partnerId);
   if (!hadConv) {
     writeDiskState(state);
+    scheduleCloudSocialSync();
   }
 
   const msgs = state.messages[dmId] || [];
@@ -1382,6 +1915,7 @@ export function createGroupConversationAction(
   }
 
   writeDiskState(state);
+  scheduleCloudSocialSync();
 
   return {
     ok: true,
@@ -1413,6 +1947,7 @@ export function addGroupMemberAction(
     conv.participants.push(memberId);
     conv.updatedAt = new Date().toISOString();
     writeDiskState(state);
+    scheduleCloudSocialSync();
   }
   return {
     ok: true,
@@ -1520,6 +2055,7 @@ export function sendChatMessageAction(
   }
 
   writeDiskState(state);
+  scheduleCloudSocialSync();
 
   return {
     ok: true,
@@ -1558,6 +2094,7 @@ export function markConversationReadAction(
   }
 
   writeDiskState(state);
+  scheduleCloudSocialSync();
   return {
     ok: true,
     updatedMessageIds,
@@ -1598,6 +2135,7 @@ export function toggleMessageReactionAction(
         msg.reactions[cleanEmoji] = [...existing, actorId];
       }
       writeDiskState(state);
+      scheduleCloudSocialSync();
       return {
         ok: true,
         conversationId: convId,
@@ -1649,6 +2187,7 @@ export function createCommunityPostAction(
 
   state.communityPosts.unshift(post);
   writeDiskState(state);
+  scheduleCloudSocialSync();
   return { ok: true, post };
 }
 
@@ -1666,6 +2205,7 @@ export function toggleCommunityPostLikeAction(
     post.likedBy.push(userId);
   }
   writeDiskState(state);
+  scheduleCloudSocialSync();
   return { ok: true, post };
 }
 
@@ -1693,5 +2233,6 @@ export function addCommunityReplyAction(
 
   post.replies.push(reply);
   writeDiskState(state);
+  scheduleCloudSocialSync();
   return { ok: true, post, reply };
 }

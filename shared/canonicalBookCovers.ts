@@ -13,6 +13,8 @@ export const GLOBAL_BOOK_COVERS_ROW_ID = '00000000-0000-4000-8000-00000000c001';
 export const GLOBAL_BOOK_COVERS_ROW_TITLE = '__EDU_GLOBAL_BOOK_COVERS_V1__';
 export const SYSTEM_NOTIFICATIONS_ROW_ID = '00000000-0000-4000-8000-00000000c002';
 export const SYSTEM_NOTIFICATIONS_ROW_TITLE = '__EDU_SYSTEM_NOTIFICATIONS_V1__';
+export const GLOBAL_SOCIAL_GRAPH_ROW_ID = '00000000-0000-4000-8000-00000000c003';
+export const GLOBAL_SOCIAL_GRAPH_ROW_TITLE = '__EDU_GLOBAL_SOCIAL_GRAPH_V1__';
 
 export function normalizeBookCoverTitleKey(title?: string): string {
   return String(title || '')
@@ -26,8 +28,10 @@ export function isSystemBookConfigRow(book: any): boolean {
   return (
     book.id === GLOBAL_BOOK_COVERS_ROW_ID ||
     book.id === SYSTEM_NOTIFICATIONS_ROW_ID ||
+    book.id === GLOBAL_SOCIAL_GRAPH_ROW_ID ||
     book.title === GLOBAL_BOOK_COVERS_ROW_TITLE ||
     book.title === SYSTEM_NOTIFICATIONS_ROW_TITLE ||
+    book.title === GLOBAL_SOCIAL_GRAPH_ROW_TITLE ||
     book.category === '__SYSTEM_CONFIG__'
   );
 }

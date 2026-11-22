@@ -128,13 +128,22 @@ export async function searchSupabaseDirectory(
     // Fallback to querying Supabase public.profiles directly if browser client is active
     if (supabase) {
       try {
-        const [{ data: profileRows, error: profErr }, { data: reqRows }] = await Promise.all([
-          supabase.from('profiles').select('*').neq('id', currentUserId).limit(500),
-          supabase
+        const { data: profileRows, error: profErr } = await supabase
+          .from('profiles')
+          .select('*')
+          .neq('id', currentUserId)
+          .limit(500);
+
+        let reqRows: any[] | null = null;
+        try {
+          const { data: fqData, error: fqErr } = await supabase
             .from('friend_requests')
             .select('sender_id, receiver_id, status')
-            .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`),
-        ]);
+            .or(`sender_id.eq.${currentUserId},receiver_id.eq.${currentUserId}`);
+          if (!fqErr && Array.isArray(fqData)) {
+            reqRows = fqData;
+          }
+        } catch (_) {}
 
         if (!profErr && Array.isArray(profileRows) && profileRows.length > 0) {
           const reqList = Array.isArray(reqRows) ? reqRows : [];

@@ -143,6 +143,7 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
   // Send request note modal
   const [requestTargetUser, setRequestTargetUser] = useState<ChatUser | null>(null);
   const [customRequestNote, setCustomRequestNote] = useState('');
+  const [isSendingRequest, setIsSendingRequest] = useState(false);
 
   // Realtime avatar updates
   useEffect(() => {
@@ -377,22 +378,27 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
   };
 
   const handleConfirmSendRequest = async () => {
-    if (!requestTargetUser) return;
+    if (!requestTargetUser || isSendingRequest) return;
     const target = requestTargetUser;
-    setRequestTargetUser(null);
-    const res = await sendSupabaseFriendRequest(target.id, currentUser.id, customRequestNote);
-    if (res.success) {
-      const nextStatus = res.status === 'accepted' ? 'friends' : 'pending_sent';
-      showToast(
-        nextStatus === 'friends'
-          ? `Connected with ${target.name}!`
-          : `Friend request sent to ${target.name}!`,
-        'success'
-      );
-      setUsersList(prev => prev.map(u => u.id === target.id ? { ...u, friendStatus: nextStatus } : u));
-      void reloadUsers(false);
-    } else {
-      showToast(res.error || 'Could not send friend request.', 'error');
+    setIsSendingRequest(true);
+    try {
+      const res = await sendSupabaseFriendRequest(target.id, currentUser.id, customRequestNote);
+      if (res.success) {
+        const nextStatus = res.status === 'accepted' ? 'friends' : 'pending_sent';
+        setRequestTargetUser(null);
+        showToast(
+          nextStatus === 'friends'
+            ? `Connected with ${target.name}!`
+            : `Friend request sent to ${target.name}!`,
+          'success'
+        );
+        setUsersList(prev => prev.map(u => u.id === target.id ? { ...u, friendStatus: nextStatus } : u));
+        void reloadUsers(false);
+      } else {
+        showToast(res.error || 'Could not send friend request.', 'error');
+      }
+    } finally {
+      setIsSendingRequest(false);
     }
   };
 
@@ -965,16 +971,20 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
 
             <div className="flex items-center justify-end gap-2.5 pt-2">
               <button
+                type="button"
+                disabled={isSendingRequest}
                 onClick={() => setRequestTargetUser(null)}
-                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
+                type="button"
+                disabled={isSendingRequest}
                 onClick={handleConfirmSendRequest}
-                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm shadow-indigo-500/20 cursor-pointer"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm shadow-indigo-500/20 cursor-pointer disabled:opacity-60"
               >
-                <Send className="w-3.5 h-3.5" /> Send Request
+                <Send className="w-3.5 h-3.5" /> {isSendingRequest ? 'Sending...' : 'Send Request'}
               </button>
             </div>
           </div>

@@ -40,10 +40,12 @@ import {
   getMessagesForConversation,
   hydrateDirectoryFromSupabase,
   hydrateFriendRequestsFromSupabase,
+  hydrateSocialCloudState,
   listCommunityPosts,
   markConversationReadAction,
   matchesDirectorySearchQuery,
   openOrCreateDirectConversation,
+  registerSocialSupabaseClient,
   removeFriendshipAction,
   respondToFriendRequestAction,
   sendChatMessageAction,
@@ -3077,6 +3079,7 @@ async function handleSocialBootstrap(req: express.Request, res: express.Response
   if (!auth) return;
   try {
     const privSb = getServerSupabase() || auth.sb;
+    registerSocialSupabaseClient(privSb);
     await syncUserProfileToStoreAndSupabase(auth.user, privSb);
     await hydrateDirectoryFromSupabase(privSb);
     await hydrateFriendRequestsFromSupabase(auth.user.id, privSb);
@@ -5218,10 +5221,12 @@ async function reconcileAdminProfilesOnBoot() {
     }
   } catch (_) {}
 
-  // Pre-hydrate ALL registered users into the social directory & backfill Supabase public.profiles + friend_requests on boot
+  // Pre-hydrate ALL registered users into the social directory & sync Supabase cloud social graph on boot
   try {
     const bootSb = getServerSupabase();
+    registerSocialSupabaseClient(bootSb);
     await hydrateDirectoryFromSupabase(bootSb, { backfillProfiles: true });
+    await hydrateSocialCloudState(bootSb, { force: true });
     await backfillFriendRequestsToSupabase(bootSb, true);
   } catch (_) {}
 }
