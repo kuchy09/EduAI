@@ -429,10 +429,10 @@ export function HomeSearchBar({
           }
         }}
         placeholder={isListening ? 'Listening... Speak now' : 'Search books, syllabus, topics...'}
-        className={`w-full h-11 sm:h-12 pl-10 sm:pl-11 ${query ? 'pr-16 sm:pr-18' : 'pr-10 sm:pr-11'} bg-white dark:bg-[#1a1a1d] border rounded-full text-sm text-slate-900 dark:text-[#ededed] outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-[#8e8e93] placeholder:truncate shadow-sm focus:shadow-md min-w-0 ${
+        className={`w-full h-11 sm:h-12 pl-10 sm:pl-11 ${query ? 'pr-16 sm:pr-18' : 'pr-10 sm:pr-11'} bg-white dark:bg-[#171E24] border rounded-full text-sm text-slate-900 dark:text-white outline-none transition-all placeholder:text-slate-400 dark:placeholder:text-slate-400 placeholder:truncate shadow-2xs focus:shadow-sm min-w-0 ${
           isListening
             ? 'border-red-500 ring-2 ring-red-500/30'
-            : 'border-slate-200/90 dark:border-[#2e2e32] focus:border-brand-500 dark:focus:border-brand-500 focus:ring-2 focus:ring-brand-500/20'
+            : 'border-[#E2DDD3] dark:border-[#26313A] focus:border-brand-500 dark:focus:border-brand-400 focus:ring-2 focus:ring-brand-500/20'
         }`}
       />
 
@@ -452,23 +452,23 @@ export function HomeSearchBar({
         onClick={handleToggleVoiceSearch}
         className={`absolute right-2 sm:right-2.5 top-1/2 -translate-y-1/2 p-1.5 rounded-full transition-all cursor-pointer flex items-center justify-center ${
           isListening
-            ? 'bg-red-500 text-white shadow-md shadow-red-500/40 ring-2 ring-red-400/60 animate-pulse scale-105'
+            ? 'bg-red-500 text-white shadow-md shadow-red-500/40 ring-2 ring-red-400/60 scale-105'
             : 'text-slate-400 hover:text-brand-600 dark:hover:text-brand-400 hover:bg-slate-200/50 dark:hover:bg-slate-700/50 active:scale-95'
         }`}
         title={isListening ? 'Listening... Click to stop' : 'Voice search (Click and speak)'}
         aria-label={isListening ? 'Stop listening' : 'Search by voice'}
       >
         {isListening ? (
-          <Mic className="w-4 h-4 text-white animate-bounce" />
+          <Mic className="w-4 h-4 text-white" />
         ) : (
           <Mic className="w-4 h-4" />
         )}
       </button>
 
       {voiceNotice && (
-        <div className="absolute top-full left-0 mt-1.5 px-2.5 py-1 bg-slate-900/90 dark:bg-slate-950/95 text-white text-[11px] rounded-lg shadow-xl backdrop-blur-md z-[120] flex items-center gap-1.5 border border-white/10 animate-in fade-in slide-in-from-top-1">
+        <div className="absolute top-full left-0 mt-1.5 px-2.5 py-1 bg-[#182026] text-white text-[11px] rounded-lg shadow-xl z-[120] flex items-center gap-1.5 border border-[#26313A] animate-in fade-in slide-in-from-top-1">
           {isListening ? (
-            <span className="w-2 h-2 rounded-full bg-red-500 animate-ping shrink-0" />
+            <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" />
           ) : (
             <MicOff className="w-3 h-3 text-slate-400 shrink-0" />
           )}
@@ -480,7 +480,7 @@ export function HomeSearchBar({
         <div
           ref={dropdownRef}
           style={dropdownStyle}
-          className="bg-white/95 dark:bg-[#161616]/90 dark:backdrop-blur-2xl rounded-2xl shadow-2xl border border-slate-200/80 dark:border-white/10 max-h-[460px] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150"
+          className="bg-white dark:bg-[#171E24] rounded-2xl shadow-2xl border border-[#E2DDD3] dark:border-[#26313A] max-h-[460px] overflow-y-auto overflow-x-hidden animate-in fade-in zoom-in-95 duration-150"
         >
           {!searchLow ? (
             <div className="p-4 space-y-4">
@@ -549,20 +549,20 @@ export function HomeSearchBar({
                 </div>
               )}
 
-              <div className="pt-3 border-t border-slate-100 dark:border-slate-800 grid grid-cols-2 gap-2">
+              <div className="pt-3 border-t border-[#E2DDD3] dark:border-[#26313A] grid grid-cols-2 gap-2">
                 <button
                   onClick={() => {
                     onNavigate('library');
                     setIsFocused(false);
                   }}
-                  className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors flex items-center gap-2.5 group cursor-pointer"
+                  className="p-2.5 rounded-xl bg-[#FAF8F4] dark:bg-[#11161A] hover:bg-brand-50 dark:hover:bg-brand-100/50 text-left transition-colors flex items-center gap-2.5 group cursor-pointer border border-[#E2DDD3] dark:border-[#26313A]"
                 >
-                  <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-900/50 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold">
+                  <div className="w-8 h-8 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold">
                     <BookIcon className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-emerald-600">Your Library</div>
-                    <div className="text-[10px] text-slate-400">{personalizedLibraryBooks.length} tailored books</div>
+                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-emerald-700 dark:group-hover:text-emerald-400">Your Library</div>
+                    <div className="text-[10px] font-mono text-slate-400">{personalizedLibraryBooks.length} books</div>
                   </div>
                 </button>
 
@@ -571,21 +571,21 @@ export function HomeSearchBar({
                     onNavigate('book-store');
                     setIsFocused(false);
                   }}
-                  className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 hover:bg-slate-100 dark:hover:bg-slate-800 text-left transition-colors flex items-center gap-2.5 group cursor-pointer"
+                  className="p-2.5 rounded-xl bg-[#FAF8F4] dark:bg-[#11161A] hover:bg-brand-50 dark:hover:bg-brand-100/50 text-left transition-colors flex items-center gap-2.5 group cursor-pointer border border-[#E2DDD3] dark:border-[#26313A]"
                 >
-                  <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/50 text-indigo-600 dark:text-indigo-400 flex items-center justify-center font-bold">
+                  <div className="w-8 h-8 rounded-lg bg-brand-50 dark:bg-brand-100 text-brand-600 dark:text-brand-400 flex items-center justify-center font-bold">
                     <ShoppingBag className="w-4 h-4" />
                   </div>
                   <div>
-                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-indigo-600">Bookstore Catalog</div>
-                    <div className="text-[10px] text-slate-400">{personalizedStoreCatalog.length} intake syllabuses</div>
+                    <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 group-hover:text-brand-600 dark:group-hover:text-brand-400">Bookstore Catalog</div>
+                    <div className="text-[10px] font-mono text-slate-400">{personalizedStoreCatalog.length} titles</div>
                   </div>
                 </button>
               </div>
             </div>
           ) : (
             <>
-              <div className="p-3 bg-gradient-to-r from-slate-50 to-brand-50/40 dark:from-slate-800/80 dark:to-slate-800/40 border-b border-slate-200/60 dark:border-slate-700/60">
+              <div className="p-3 bg-[#FAF8F4] dark:bg-[#11161A] border-b border-[#E2DDD3] dark:border-[#26313A]">
                 <div className="flex items-center justify-between gap-2 text-xs">
                   <div className="flex items-center gap-1.5 font-medium text-slate-700 dark:text-slate-200">
                     <Compass className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400" />
@@ -593,13 +593,13 @@ export function HomeSearchBar({
                       Platform Search: <strong>"{query}"</strong>
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 text-[11px] text-slate-500 dark:text-slate-400">
-                    <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                      {directLibraryBooks.length} In Library
+                  <div className="flex items-center gap-2 text-[11px] font-mono text-slate-500 dark:text-slate-400">
+                    <span className="text-emerald-700 dark:text-emerald-400 font-semibold">
+                      {directLibraryBooks.length} Library
                     </span>
                     <span>·</span>
-                    <span className="flex items-center gap-1 text-indigo-600 dark:text-indigo-400 font-semibold">
-                      {directStoreBooks.length} in Bookstore
+                    <span className="text-brand-600 dark:text-brand-400 font-semibold">
+                      {directStoreBooks.length} Bookstore
                     </span>
                   </div>
                 </div>

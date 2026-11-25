@@ -20,8 +20,10 @@ import {
 } from '../lib/bookPersonalization';
 import { pushAccountSyncPatch } from '../lib/accountSyncService';
 import { isAdminLoginEmail } from '../../shared/adminAuth';
-import { Mail, Phone, Lock, Hash, Loader2, BookOpen, CheckCircle2, ShieldAlert, Eye, EyeOff, X, ShieldCheck, FileText, Scale } from 'lucide-react';
+import { Mail, Phone, Lock, Hash, Loader2, CheckCircle2, ShieldAlert, Eye, EyeOff, X, ShieldCheck, FileText, Scale, Compass, FlaskConical, BookMarked } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { EduAiBrandMark } from './icons/EduAiBrandMark';
+import authAtelierImg from '../assets/images/eduai_auth_atelier_1795602312642.jpg';
 
 type AuthMode = 'email' | 'phone';
 type AuthState = 'sign_in' | 'sign_up' | 'verify_otp';
@@ -599,33 +601,94 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-[#121212] flex items-center justify-center p-4 transition-colors">
+    <div className="min-h-screen bg-[#F7F5F0] dark:bg-[#11161A] atelier-grid-bg flex items-center justify-center p-4 sm:p-6 lg:p-8 transition-colors">
       <motion.div 
-        initial={{ opacity: 0, y: 20 }}
+        initial={{ opacity: 0, y: 16 }}
         animate={{ opacity: 1, y: 0 }}
-        className="max-w-md w-full bg-white dark:bg-[#1A1A1A] rounded-3xl shadow-xl border border-slate-100 dark:border-white/10 overflow-hidden"
+        className="max-w-5xl w-full bg-white dark:bg-[#171E24] rounded-2xl sm:rounded-3xl shadow-xl border border-[#E2DDD3] dark:border-[#26313A] overflow-hidden grid grid-cols-1 lg:grid-cols-[1.02fr_1fr]"
       >
-        <div className="p-8 pb-6 text-center border-b border-slate-100 dark:border-white/10">
-          <div className="w-12 h-12 bg-brand-600 text-white rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-brand-500/30">
-            <BookOpen className="w-6 h-6" />
+        {/* Left Column: Scholarly Atelier Showcase (visible on desktop, compact strip on mobile) */}
+        <div className="relative hidden lg:flex flex-col justify-between bg-[#0C4A59] text-white overflow-hidden border-r border-[#E2DDD3] dark:border-[#26313A]">
+          <img
+            src={authAtelierImg}
+            alt="Sunlit scholarly library atelier with oak bookshelves, brass reading lamp, and open textbook"
+            referrerPolicy="no-referrer"
+            className="absolute inset-0 w-full h-full object-cover opacity-85"
+          />
+          <div className="absolute inset-0 bg-gradient-to-t from-[#09242C] via-[#09242C]/55 to-[#09242C]/35" />
+
+          {/* Top Brand Lockup */}
+          <div className="relative z-10 p-8 flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-white/15 backdrop-blur-sm border border-white/25 text-white flex items-center justify-center shrink-0">
+              <EduAiBrandMark className="w-6 h-6" />
+            </div>
+            <div>
+              <span className="font-display font-semibold text-lg tracking-tight block leading-none">
+                Edu AI
+              </span>
+              <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-amber-300">
+                Scholarly Atelier
+              </span>
+            </div>
           </div>
-          <h2 className="text-2xl font-display font-bold text-slate-900 dark:text-white mb-2">
+
+          {/* Bottom Editorial Statement */}
+          <div className="relative z-10 p-8 space-y-5">
+            <div className="space-y-2.5">
+              <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-amber-300">
+                Curated Textbooks · Guided Inquiry · Labs
+              </p>
+              <h1 className="text-3xl font-display font-semibold leading-tight text-white">
+                Built for deep comprehension, not shortcuts.
+              </h1>
+              <p className="text-sm text-slate-200/90 leading-relaxed max-w-md">
+                Read syllabus-aligned texts, derive formulas step-by-step with Sage, and test conceptual mastery in interactive science practicals.
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-white/15 grid grid-cols-3 gap-3 text-xs">
+              <div className="space-y-1">
+                <BookMarked className="w-4 h-4 text-amber-300" />
+                <div className="font-semibold text-white">Textbooks</div>
+                <div className="text-[11px] text-slate-300">Offline-ready reader</div>
+              </div>
+              <div className="space-y-1">
+                <FlaskConical className="w-4 h-4 text-amber-300" />
+                <div className="font-semibold text-white">EduLab</div>
+                <div className="text-[11px] text-slate-300">Virtual apparatus</div>
+              </div>
+              <div className="space-y-1">
+                <Compass className="w-4 h-4 text-amber-300" />
+                <div className="font-semibold text-white">Roadmaps</div>
+                <div className="text-[11px] text-slate-300">Weekly study goals</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Right Column: Sign In / Sign Up Panel */}
+        <div className="flex flex-col">
+        <div className="p-6 sm:p-8 pb-5 text-center border-b border-[#E2DDD3] dark:border-[#26313A]">
+          <div className="w-12 h-12 bg-brand-600 dark:bg-brand-500 text-white rounded-xl flex items-center justify-center mx-auto mb-4 shadow-sm lg:hidden">
+            <EduAiBrandMark className="w-7 h-7" />
+          </div>
+          <h2 className="text-2xl font-display font-semibold text-slate-900 dark:text-white mb-1.5">
             {state === 'sign_up' ? 'Create Your Edu AI Account' : 'Welcome to Edu AI'}
           </h2>
           <p className="text-slate-500 dark:text-slate-400 text-sm">
             {state === 'sign_up'
-              ? 'Sign up to unlock your personalized learning platform'
-              : 'Sign in or create an account to access the platform'}
+              ? 'Tailor your library, curriculum, and weekly study goals'
+              : 'Sign in to resume your reading shelf and study sessions'}
           </p>
 
           {state !== 'verify_otp' && (
-            <div className="grid grid-cols-2 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl mt-5">
+            <div className="grid grid-cols-2 bg-[#EFECE4] dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A] p-1 rounded-xl mt-5">
               <button
                 type="button"
                 onClick={() => { setState('sign_in'); setShowPassword(false); setError(null); setInfoMessage(null); }}
                 className={`py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
                   state === 'sign_in'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                    ? 'bg-white dark:bg-[#1E272E] text-slate-900 dark:text-white shadow-2xs'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                 }`}
               >
@@ -636,7 +699,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
                 onClick={() => { setMode('email'); setState('sign_up'); setShowPassword(false); setError(null); setInfoMessage(null); }}
                 className={`py-2 text-sm font-semibold rounded-lg transition-all cursor-pointer ${
                   state === 'sign_up'
-                    ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-sm'
+                    ? 'bg-white dark:bg-[#1E272E] text-slate-900 dark:text-white shadow-2xs'
                     : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
                 }`}
               >
@@ -646,7 +709,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           )}
         </div>
 
-        <div className="p-8">
+        <div className="p-6 sm:p-8 flex-1">
           {securityNotice && !infoMessage && !error && (
             <div className="mb-6 p-3.5 bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 text-xs sm:text-sm rounded-xl border border-amber-200 dark:border-amber-800/60 flex items-start gap-2.5">
               <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
@@ -1100,6 +1163,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
               </p>
             </div>
           )}
+        </div>
         </div>
       </motion.div>
 

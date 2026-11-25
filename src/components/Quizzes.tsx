@@ -352,7 +352,7 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           prompt: generationPrompt,
-          provider: 'gemini',
+          provider: 'qwen3',
           allowDataCollection: true
         })
       });
@@ -365,8 +365,10 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
       const data = await response.json();
       const reply = data.reply || '';
 
-      // Extract JSON array from Markdown codeblock
-      const match = reply.match(/\[\s*\{[\s\S]*\}\s*\]/);
+      // Extract JSON array from Markdown codeblock safely
+      const fencedMatch = reply.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidate = fencedMatch ? fencedMatch[1].trim() : reply;
+      const match = candidate.match(/\[\s*\{[\s\S]*\}\s*\]/);
       if (!match) {
         throw new Error("Could not parse JSON format from model reply");
       }
@@ -430,9 +432,9 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
           {!quizCompleted && !viewingReview ? (
             <div>
               {/* Question progress dot bar */}
-              <div className="w-full bg-slate-100 dark:bg-[#2a2a30] h-1.5 rounded-full mb-8 overflow-hidden">
+              <div className="w-full bg-[#EFECE4] dark:bg-[#222B33] h-1.5 rounded-full mb-8 overflow-hidden">
                 <div 
-                  className="h-full bg-brand-600 dark:bg-[#8a70d6] transition-all duration-300"
+                  className="h-full bg-brand-600 dark:bg-brand-500 transition-all duration-300"
                   style={{ width: `${((currentIdx + 1) / activeQuiz.questions.length) * 100}%` }}
                 ></div>
               </div>
@@ -505,7 +507,7 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
                       </div>
                     </div>
                     <div className="text-right space-y-1">
-                      <div className="text-sm font-semibold text-brand-600 dark:text-[#b8a5f0]">
+                      <div className="text-sm font-semibold text-brand-700 dark:text-brand-400">
                         {(quizzes.find(q => q.id === activeQuiz.id)?.score ?? 0) >= 70 ? 'Passed' : 'Study More'}
                       </div>
                       <div className="text-xs text-slate-500 dark:text-[#a1a1aa] tabular-nums">
@@ -629,10 +631,10 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
           </div>
 
           {/* Dynamic Subject Reading Tracker Progress Indicator Screen */}
-          <div className="bg-white dark:bg-[#1a1a1d] p-6 rounded-2xl border border-slate-200 dark:border-[#2e2e32] shadow-sm relative overflow-hidden">
+          <div className="bg-white dark:bg-[#171E24] p-6 rounded-2xl border border-[#E2DDD3] dark:border-[#26313A] shadow-sm relative overflow-hidden">
             <div className="flex items-center gap-2.5 mb-6">
-              <BookOpen className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
-              <h3 className="text-lg font-bold text-slate-800 dark:text-[#ededed] font-display">Reading Progress per Subject</h3>
+              <BookOpen className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+              <h3 className="text-lg font-bold text-slate-800 dark:text-[#F2EFE9] font-display">Reading Progress per Subject</h3>
             </div>
 
             {subjectStats.length === 0 ? (
@@ -647,17 +649,17 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
                       key={index} 
                       className={`p-4 rounded-xl border flex flex-col justify-between transition-colors min-h-[125px] ${
                         sub.isActive 
-                          ? 'border-indigo-200/80 dark:border-indigo-500/30 bg-indigo-50/30 dark:bg-indigo-950/20' 
-                          : 'border-slate-100 dark:border-[#2a2a30] bg-slate-50/40 dark:bg-[#222226] opacity-75'
+                          ? 'border-brand-200/80 dark:border-brand-500/35 bg-brand-50/40 dark:bg-[#14232A]' 
+                          : 'border-[#E2DDD3] dark:border-[#26313A] bg-[#FAF8F4] dark:bg-[#1F2830] opacity-80'
                       }`}
                     >
                       <div>
                         <div className="flex items-start justify-between gap-2">
-                          <span className="font-bold text-slate-800 dark:text-[#ededed] text-sm truncate max-w-[140px]" title={sub.name}>
+                          <span className="font-bold text-slate-800 dark:text-[#F2EFE9] text-sm truncate max-w-[140px]" title={sub.name}>
                             {sub.name}
                           </span>
                           {sub.isActive ? (
-                            <span className="text-xs font-semibold text-brand-700 dark:text-[#b8a5f0]">
+                            <span className="text-xs font-mono font-semibold text-brand-700 dark:text-brand-400">
                               Active
                             </span>
                           ) : (
@@ -666,19 +668,19 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
                             </span>
                           )}
                         </div>
-                        <span className="text-xs text-slate-400 dark:text-[#a1a1aa] font-medium block mt-1 tabular-nums">
+                        <span className="text-xs text-slate-500 dark:text-[#98A4AF] font-medium block mt-1 tabular-nums">
                           {sub.totalBooks} {sub.totalBooks === 1 ? 'Textbook' : 'Textbooks'}
                         </span>
                       </div>
 
                       <div className="mt-4">
-                        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-[#a1a1aa] font-medium mb-1">
+                        <div className="flex items-center justify-between text-xs text-slate-500 dark:text-[#98A4AF] font-medium mb-1">
                           <span>Reading Progress</span>
-                          <span className="font-bold text-slate-700 dark:text-[#ededed] tabular-nums">{sub.avgProgress}%</span>
+                          <span className="font-mono font-bold text-slate-700 dark:text-[#F2EFE9] tabular-nums">{sub.avgProgress}%</span>
                         </div>
-                        <div className="w-full bg-slate-100 dark:bg-[#2e2e34] h-1.5 rounded-full overflow-hidden">
+                        <div className="w-full bg-[#EFECE4] dark:bg-[#222B33] h-1.5 rounded-full overflow-hidden">
                           <div 
-                            className={`h-full rounded-full ${sub.isActive ? 'bg-indigo-500 dark:bg-[#8a70d6]' : 'bg-slate-300 dark:bg-slate-700'}`}
+                            className={`h-full rounded-full ${sub.isActive ? 'bg-brand-600 dark:bg-brand-500' : 'bg-slate-300 dark:bg-slate-600'}`}
                             style={{ width: `${sub.avgProgress}%` }}
                           ></div>
                         </div>

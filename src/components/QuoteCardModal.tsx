@@ -473,16 +473,16 @@ export function QuoteCardModal({
           className="relative z-10 w-full max-w-4xl bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200/80 dark:border-slate-800 flex flex-col max-h-[92vh] overflow-hidden"
         >
           {/* Header Bar */}
-          <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/40 shrink-0">
+          <div className="px-5 py-4 border-b border-[#E2DDD3] dark:border-[#26313A] flex items-center justify-between bg-[#FAF8F4] dark:bg-[#141A20] shrink-0">
             <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-indigo-500 to-violet-600 text-white flex items-center justify-center shadow-sm">
+              <div className="w-8 h-8 rounded-xl bg-brand-600 text-white flex items-center justify-center shadow-sm">
                 <QuoteIcon className="w-4 h-4 fill-current" />
               </div>
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white leading-tight flex items-center gap-2">
+                <h3 className="text-base font-display font-bold text-slate-900 dark:text-[#F2EFE9] leading-tight flex items-center gap-2">
                   Shareable Quote Card
-                  <span className="text-[10px] font-semibold uppercase px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 border border-indigo-200/50 dark:border-indigo-800/50">
-                    HD Export
+                  <span className="text-[10px] font-mono font-semibold uppercase tracking-wider text-brand-700 dark:text-brand-400">
+                    · HD Export
                   </span>
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400">Transform your book highlights into curated visual cards.</p>

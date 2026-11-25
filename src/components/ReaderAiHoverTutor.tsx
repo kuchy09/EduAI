@@ -355,7 +355,7 @@ export function ReaderAiHoverTutor({
         signal: controller.signal,
         body: JSON.stringify({
           prompt: promptToSend,
-          provider: 'gemini',
+          provider: 'qwen3',
           speedMode: 'fast',
           stream: true,
           allowDataCollection,

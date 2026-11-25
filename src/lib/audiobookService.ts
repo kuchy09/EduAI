@@ -48,7 +48,7 @@ export interface AudiobookChapterScript {
   chaptersMeta: AudiobookChapterMeta[];
   sourceMode: 'library-text' | 'epub-curriculum';
   tutorModel: string;
-  engine?: 'gemini-tutor' | 'textbook-concept-parser';
+  engine?: 'qwen3-tutor' | 'gemini-tutor' | 'textbook-concept-parser';
   ttsAvailable?: boolean;
   aiNotice?: string;
   segments: AudiobookSegment[];

@@ -196,9 +196,9 @@ export function BadgesShowcase({ achievements, onNavigate }: BadgesShowcaseProps
               {rank.progressPercent}%
             </span>
           </div>
-          <div className="h-2 w-full bg-slate-100 dark:bg-[#26262b] rounded-full overflow-hidden">
+          <div className="h-2 w-full bg-[#EFECE4] dark:bg-[#222B33] rounded-full overflow-hidden">
             <div
-              className="h-full bg-brand-600 dark:bg-[#8a70d6] rounded-full transition-all duration-500"
+              className="h-full bg-brand-600 dark:bg-brand-500 rounded-full transition-all duration-500"
               style={{ width: `${rank.progressPercent}%` }}
             />
           </div>
@@ -317,7 +317,7 @@ export function BadgesShowcase({ achievements, onNavigate }: BadgesShowcaseProps
                         <span aria-hidden="true">·</span>
                         <span>{tierStyle.label}</span>
                         <span aria-hidden="true">·</span>
-                        <span className="font-semibold text-brand-600 dark:text-[#b8a5f0] tabular-nums">
+                        <span className="font-mono font-semibold text-brand-600 dark:text-brand-400 tabular-nums">
                           +{badge.pointsReward} EP
                         </span>
                       </div>
@@ -354,9 +354,9 @@ export function BadgesShowcase({ achievements, onNavigate }: BadgesShowcaseProps
                             {badge.requirementUnit}
                           </span>
                         </div>
-                        <div className="h-1.5 w-full bg-slate-200/80 dark:bg-[#2c2c34] rounded-full overflow-hidden">
+                        <div className="h-1.5 w-full bg-[#EFECE4] dark:bg-[#222B33] rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-brand-500 dark:bg-[#8a70d6] rounded-full transition-all duration-300"
+                            className="h-full bg-brand-600 dark:bg-brand-500 rounded-full transition-all duration-300"
                             style={{ width: `${pct}%` }}
                           />
                         </div>

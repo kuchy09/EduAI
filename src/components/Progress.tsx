@@ -284,14 +284,14 @@ export function Progress({ user, books, onNavigate }: ProgressProps) {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.3 }}
-            className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm plan-card transition-colors"
+            className="bg-white dark:bg-[#171E24] p-6 rounded-2xl border border-[#E2DDD3] dark:border-[#26313A] shadow-sm plan-card transition-colors"
           >
             <div className="flex items-center justify-between mb-6">
-              <h3 className="text-lg font-bold text-slate-800 dark:text-[#EDEDED] flex items-center gap-2">
-                <Activity className="w-5 h-5 text-brand-500 dark:text-[#8a70d6]" />
+              <h3 className="text-lg font-display font-bold text-slate-800 dark:text-[#F2EFE9] flex items-center gap-2">
+                <Activity className="w-5 h-5 text-brand-600 dark:text-brand-400" />
                 Learning Activity (Last 7 Days)
               </h3>
-              <span className="text-xs font-medium text-slate-500 dark:text-[#A0A0A0] tabular-nums">
+              <span className="text-xs font-mono font-medium text-slate-500 dark:text-[#98A4AF] tabular-nums">
                 Today: {stats.todayMinutes} mins
               </span>
             </div>
@@ -299,20 +299,20 @@ export function Progress({ user, books, onNavigate }: ProgressProps) {
             <div className="h-64 flex items-end justify-between gap-2">
               {weeklyActivity.map((item, idx) => (
                 <div key={`${item.day}-${idx}`} className="flex flex-col items-center flex-1 gap-2 h-full">
-                  <div className="w-full bg-slate-100 dark:bg-[#242424] rounded-t-lg relative group h-full flex items-end">
+                  <div className="w-full bg-[#EFECE4] dark:bg-[#1F2830] rounded-t-lg relative group h-full flex items-end">
                     <div
                       className={`w-full rounded-t-lg transition-all duration-700 ${
                         item.mins > 0
-                          ? 'bg-brand-500 dark:bg-[#8a70d6]'
-                          : 'bg-slate-200 dark:bg-[#2f2f2f]'
+                          ? 'bg-brand-600 dark:bg-brand-500'
+                          : 'bg-[#E2DDD3] dark:bg-[#2B3742]'
                       }`}
                       style={{ height: `${item.pct}%` }}
                     ></div>
-                    <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-800 dark:bg-[#111111] text-white text-xs px-2 py-1 rounded whitespace-nowrap transition-opacity border border-white/10 tabular-nums pointer-events-none">
+                    <div className="opacity-0 group-hover:opacity-100 absolute -top-8 left-1/2 -translate-x-1/2 bg-slate-900 dark:bg-[#11161A] text-white text-xs px-2 py-1 rounded whitespace-nowrap transition-opacity border border-white/10 tabular-nums pointer-events-none font-mono">
                       {item.mins} mins
                     </div>
                   </div>
-                  <span className="text-xs text-slate-500 dark:text-[#A0A0A0] font-medium">
+                  <span className="text-xs text-slate-500 dark:text-[#98A4AF] font-mono font-medium">
                     {item.day}
                   </span>
                 </div>
@@ -327,39 +327,39 @@ export function Progress({ user, books, onNavigate }: ProgressProps) {
           <motion.div
             initial={{ opacity: 0, x: 10 }}
             animate={{ opacity: 1, x: 0 }}
-            className="bg-white dark:bg-[#1a1a1a] p-6 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm relative overflow-hidden plan-card transition-colors"
+            className="bg-white dark:bg-[#171E24] p-6 rounded-2xl border border-[#E2DDD3] dark:border-[#26313A] shadow-sm relative overflow-hidden plan-card transition-colors"
           >
             <div className="absolute top-0 right-0 p-6 opacity-5 text-slate-900 dark:text-white">
               <Brain className="w-24 h-24" />
             </div>
-            <h3 className="text-lg font-bold text-slate-800 dark:text-[#EDEDED] mb-4 flex items-center gap-2 relative z-10">
-              <Sparkles className="w-5 h-5 text-indigo-500 dark:text-indigo-400" />
+            <h3 className="text-lg font-display font-bold text-slate-800 dark:text-[#F2EFE9] mb-4 flex items-center gap-2 relative z-10">
+              <Sparkles className="w-5 h-5 text-brand-600 dark:text-brand-400" />
               AI Tutor Usage (Free Tier)
             </h3>
 
             <div className="space-y-4 relative z-10">
               <div className="flex justify-between items-end">
                 <div>
-                  <span className="text-3xl font-bold text-slate-900 dark:text-[#EDEDED] tabular-nums">
+                  <span className="text-3xl font-bold font-mono text-slate-900 dark:text-[#F2EFE9] tabular-nums">
                     {tokenUsage.total.toLocaleString()}
                   </span>
-                  <span className="text-sm text-slate-500 dark:text-[#A0A0A0] font-medium ml-1 tabular-nums">
+                  <span className="text-sm text-slate-500 dark:text-[#98A4AF] font-medium ml-1 tabular-nums">
                     / {tokenUsage.limit.toLocaleString()} tokens
                   </span>
                 </div>
-                <div className="text-sm font-semibold text-indigo-600 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-500/15 border border-indigo-100 dark:border-indigo-500/30 px-2 py-1 rounded-md tabular-nums">
+                <div className="text-xs font-mono font-semibold text-brand-700 dark:text-brand-300 tabular-nums">
                   {usagePercent}% utilized
                 </div>
               </div>
 
-              <div className="relative h-2.5 w-full bg-slate-100 dark:bg-[#242424] rounded-full overflow-hidden">
+              <div className="relative h-2.5 w-full bg-[#EFECE4] dark:bg-[#1F2830] rounded-full overflow-hidden">
                 <div
                   className={`absolute top-0 left-0 h-full rounded-full transition-all duration-1000 ${
                     usagePercent > 90
                       ? 'bg-red-500'
                       : usagePercent > 75
-                        ? 'bg-amber-400 dark:bg-amber-500'
-                        : 'bg-indigo-500 dark:bg-[#8a70d6]'
+                        ? 'bg-ochre-500'
+                        : 'bg-brand-600 dark:bg-brand-500'
                   }`}
                   style={{ width: `${usagePercent}%` }}
                 ></div>

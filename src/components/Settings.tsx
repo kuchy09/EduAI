@@ -285,36 +285,36 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
         <div className="md:col-span-2 space-y-6">
           {activeTab === 'appearance' && (
             <>
-              <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] settings-overlay-card">
-                 <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mb-2">Theme & Appearance</h3>
-                 <p className="text-xs text-slate-500 dark:text-[#A0A0A0] mb-4">Choose your preferred reading and interface mode. Dark theme uses obsidian deep gray #121212 canvas with semi-transparent overlay panes.</p>
+              <div className="bg-white dark:bg-[#171E24] rounded-2xl border border-[#E2DDD3] dark:border-[#26313A] p-6 shadow-sm settings-overlay-card">
+                 <h3 className="text-lg font-display font-bold text-slate-900 dark:text-[#F2EFE9] mb-2">Theme &amp; Appearance</h3>
+                 <p className="text-xs text-slate-500 dark:text-[#98A4AF] mb-4">Choose your preferred reading and interface mode. Archival Light uses warm paper tones while Ink Dark sets a deep slate study canvas.</p>
                   <div className="grid grid-cols-3 gap-4">
                     <button 
                       onClick={() => selectTheme('light')}
-                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'light' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'light' ? 'border-brand-600 bg-brand-50/70 dark:bg-brand-950/30' : 'border-[#E2DDD3] dark:border-[#26313A] bg-[#FAF8F4] dark:bg-[#11161A] hover:border-brand-300 dark:hover:border-[#344350]'}`}
                     >
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'light' ? 'bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300' : 'bg-slate-100 dark:bg-[#282828] text-slate-600 dark:text-[#A0A0A0]'}`}><User className="w-4 h-4" /></div>
-                      <span className={`text-sm font-medium ${theme === 'light' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>Light</span>
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'light' ? 'bg-brand-100 dark:bg-brand-900 text-brand-700 dark:text-brand-300' : 'bg-[#EFECE4] dark:bg-[#1F2830] text-slate-600 dark:text-[#98A4AF]'}`}><User className="w-4 h-4" /></div>
+                      <span className={`text-sm font-medium ${theme === 'light' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#F2EFE9]'}`}>Archival Light</span>
                     </button>
                     <button 
                       onClick={() => selectTheme('dark')}
-                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'dark' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'dark' ? 'border-brand-600 bg-brand-50/70 dark:bg-brand-950/30' : 'border-[#E2DDD3] dark:border-[#26313A] bg-[#FAF8F4] dark:bg-[#11161A] hover:border-brand-300 dark:hover:border-[#344350]'}`}
                     >
                       <div className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${theme === 'dark' ? 'bg-slate-900 text-white' : 'bg-slate-800 text-white'}`}><Moon className="w-4 h-4" /></div>
-                      <span className={`text-sm font-medium ${theme === 'dark' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>Deep Gray #121212</span>
+                      <span className={`text-sm font-medium ${theme === 'dark' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#F2EFE9]'}`}>Ink Dark</span>
                     </button>
                     <button 
                       onClick={() => selectTheme('system')}
-                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'system' ? 'border-brand-500 bg-brand-50 dark:bg-white/10' : 'border-slate-100 dark:border-white/10 bg-white dark:bg-[#1E1E1E]/60 hover:border-slate-200 dark:hover:border-white/20'}`}
+                      className={`p-4 rounded-xl border-2 flex flex-col items-center gap-3 transition-colors cursor-pointer ${theme === 'system' ? 'border-brand-600 bg-brand-50/70 dark:bg-brand-950/30' : 'border-[#E2DDD3] dark:border-[#26313A] bg-[#FAF8F4] dark:bg-[#11161A] hover:border-brand-300 dark:hover:border-[#344350]'}`}
                     >
-                      <div className="w-8 h-8 rounded-full bg-slate-200 dark:bg-[#282828] flex items-center justify-center text-slate-600 dark:text-[#A0A0A0] shrink-0"><Smartphone className="w-4 h-4" /></div>
-                      <span className={`text-sm font-medium ${theme === 'system' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#EDEDED]'}`}>System</span>
+                      <div className="w-8 h-8 rounded-full bg-[#EFECE4] dark:bg-[#1F2830] flex items-center justify-center text-slate-600 dark:text-[#98A4AF] shrink-0"><Smartphone className="w-4 h-4" /></div>
+                      <span className={`text-sm font-medium ${theme === 'system' ? 'text-brand-700 dark:text-brand-300' : 'text-slate-700 dark:text-[#F2EFE9]'}`}>System</span>
                     </button>
                   </div>
                </div>
 
-               <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] settings-overlay-card">
-                  <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mb-4">Reading Preferences</h3>
+               <div className="bg-white dark:bg-[#171E24] rounded-2xl border border-[#E2DDD3] dark:border-[#26313A] p-6 shadow-sm settings-overlay-card">
+                  <h3 className="text-lg font-display font-bold text-slate-900 dark:text-[#F2EFE9] mb-4">Reading Preferences</h3>
                   <div className="space-y-4">
                     <div className="flex items-center justify-between p-4 border border-slate-100 dark:border-white/10 rounded-xl bg-slate-50/50 dark:bg-white/5">
                        <div className="flex items-center gap-3">

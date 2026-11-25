@@ -790,13 +790,13 @@ export function Notifications({ onNavigate, user }: NotificationsProps) {
               onClick={() => handleMarkAsRead(notif.id)}
               className={`p-5 rounded-3xl border transition-all relative overflow-hidden group cursor-pointer ${
                 notif.isRead
-                  ? 'bg-white/90 dark:bg-slate-900/90 border-slate-200/80 dark:border-slate-800/80 shadow-xs'
-                  : 'bg-white dark:bg-slate-900 border-indigo-300/80 dark:border-indigo-800 shadow-md shadow-indigo-500/5 ring-1 ring-indigo-500/20'
+                  ? 'bg-white/95 dark:bg-[#171E24] border-[#E2DDD3] dark:border-[#26313A] shadow-xs'
+                  : 'bg-white dark:bg-[#171E24] border-brand-400/70 dark:border-brand-500/60 shadow-md shadow-brand-600/5 ring-1 ring-brand-500/20'
               }`}
             >
               {/* Left Accent Bar for unread items */}
               {!notif.isRead && (
-                <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-gradient-to-b from-indigo-500 to-violet-600" />
+                <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-brand-600 dark:bg-brand-500" />
               )}
 
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">

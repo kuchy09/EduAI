@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
-import { BookOpen, Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut, FlaskConical } from 'lucide-react';
+import { Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut, FlaskConical } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { useUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
 import { safeStorage } from '../lib/safeStorage';
 import { isAdminLoginEmail } from '../../shared/adminAuth';
+import { EduAiBrandMark } from './icons/EduAiBrandMark';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -124,26 +125,21 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
         />
       )}
 
-      {/* Sidebar content - Semi-transparent dark overlay pane */}
-      <aside className={`fixed top-0 left-0 h-screen w-72 max-w-[85vw] bg-white dark:bg-[#161616]/75 dark:backdrop-blur-2xl border-r border-slate-200 dark:border-white/10 flex flex-col z-[10001] transition-transform duration-300 ease-out shadow-2xl dark:shadow-[0_25px_60px_rgba(0,0,0,0.85)] sidebar-pane ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+      {/* Sidebar content */}
+      <aside className={`fixed top-0 left-0 h-screen w-72 max-w-[85vw] bg-[#FAF8F4] dark:bg-[#151B20] border-r border-[#E2DDD3] dark:border-[#26313A] flex flex-col z-[10001] transition-transform duration-300 ease-out shadow-2xl sidebar-pane ${isOpen ? 'translate-x-0' : '-translate-x-full'}`}>
         {/* Brand Logo Header */}
-        <div className="p-5 border-b border-slate-100 dark:border-white/10 flex items-center justify-between">
+        <div className="p-5 border-b border-[#E2DDD3] dark:border-[#26313A] flex items-center justify-between">
           <div className="flex items-center gap-3 text-left select-none">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 via-indigo-600 to-violet-700 p-0.5 shadow-sm shadow-indigo-500/20 flex items-center justify-center relative overflow-hidden">
-              <div className="w-full h-full bg-gradient-to-br from-indigo-500 to-violet-700 rounded-[10px] flex items-center justify-center relative">
-                <BookOpen className="w-5 h-5 text-white stroke-[2.2]" />
-              </div>
+            <div className="w-10 h-10 rounded-xl bg-brand-600 dark:bg-brand-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+              <EduAiBrandMark className="w-6 h-6" />
             </div>
             <div>
-              <div className="flex items-center gap-1.5">
-                <span className="text-lg font-display font-black tracking-tight text-slate-900 dark:text-[#EDEDED]">
-                  Edu AI
-                </span>
-                <span className="text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded-full bg-indigo-50 dark:bg-white/10 text-indigo-600 dark:text-indigo-300 border border-indigo-200/60 dark:border-white/10">
-                  Core
-                </span>
-              </div>
-              <p className="text-[11px] text-slate-400 dark:text-[#A0A0A0] font-medium">Smart Reading & Study Suite</p>
+              <span className="text-lg font-display font-semibold tracking-tight text-slate-900 dark:text-white block leading-tight">
+                Edu AI
+              </span>
+              <p className="text-[11px] font-mono uppercase tracking-[0.08em] text-slate-400 dark:text-slate-400 mt-0.5">
+                Study Atelier
+              </p>
             </div>
           </div>
 
@@ -169,28 +165,28 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
                   onClick={() => onChangeView(item.id)}
                   className={`w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer ${
                     isSelfActive
-                      ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-600 dark:text-[#EDEDED] dark:border dark:border-indigo-500/30 font-semibold shadow-xs'
+                      ? 'bg-brand-50 dark:bg-brand-100/70 text-brand-700 dark:text-brand-400 border border-brand-200 dark:border-brand-300/30 font-semibold'
                       : isHighlighted
-                      ? 'bg-slate-50 dark:bg-white/5 text-slate-900 dark:text-[#EDEDED] font-medium'
-                      : 'text-slate-600 dark:text-[#A0A0A0] hover:bg-slate-50 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-[#EDEDED]'
+                      ? 'bg-slate-100 dark:bg-white/5 text-slate-900 dark:text-white font-medium'
+                      : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white'
                   }`}
                 >
                   <div className="flex items-center gap-3">
-                    <div className={`p-1 rounded-lg ${isHighlighted ? 'text-indigo-600 dark:text-indigo-300' : 'text-slate-400 dark:text-[#8E8E93]'}`}>
+                    <div className={`p-1 rounded-lg ${isHighlighted ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-400'}`}>
                       {item.icon}
                     </div>
                     <span>{item.label}</span>
                   </div>
                   {item.id === 'users-portal' && pendingRequestsCount > 0 && (
-                    <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-indigo-600 text-white text-[10px] font-bold tabular-nums flex items-center justify-center">
+                    <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-brand-600 text-white text-[10px] font-mono font-bold tabular-nums flex items-center justify-center">
                       {pendingRequestsCount > 99 ? '99+' : pendingRequestsCount}
                     </span>
                   )}
                 </button>
 
-                {/* Sub-items (Support and Developer in Setting) */}
+                {/* Sub-items */}
                 {item.subItems && (
-                  <div className="ml-5 pl-3 border-l-2 border-slate-100 dark:border-white/10 space-y-1 pt-0.5 pb-1">
+                  <div className="ml-6 pl-3 border-l border-[#E2DDD3] dark:border-[#26313A] space-y-1 pt-0.5 pb-1">
                     {item.subItems.map((sub) => {
                       const isThisSubActive = currentView === sub.id;
                       return (
@@ -199,11 +195,11 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
                           onClick={() => onChangeView(sub.id)}
                           className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors cursor-pointer ${
                             isThisSubActive
-                              ? 'bg-indigo-50 dark:bg-indigo-500/15 text-indigo-600 dark:text-[#EDEDED] font-semibold'
-                              : 'text-slate-500 dark:text-[#A0A0A0] hover:text-slate-900 dark:hover:text-[#EDEDED] hover:bg-slate-50 dark:hover:bg-white/5'
+                              ? 'bg-brand-50 dark:bg-brand-100/60 text-brand-700 dark:text-brand-400 font-semibold'
+                              : 'text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100/80 dark:hover:bg-white/5'
                           }`}
                         >
-                          <span className={isThisSubActive ? 'text-indigo-600 dark:text-indigo-300' : 'text-slate-400 dark:text-[#8E8E93]'}>
+                          <span className={isThisSubActive ? 'text-brand-600 dark:text-brand-400' : 'text-slate-400 dark:text-slate-400'}>
                             {sub.icon}
                           </span>
                           <span>{sub.label}</span>
@@ -217,32 +213,32 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
           })}
         </nav>
 
-        {/* User profile & Theme footer - Semi-transparent dark overlay pane */}
-        <div className="p-3.5 border-t border-slate-100 dark:border-white/10 space-y-2">
+        {/* User profile & Theme footer */}
+        <div className="p-3.5 border-t border-[#E2DDD3] dark:border-[#26313A] space-y-2">
           <button
             onClick={toggleTheme}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-50 dark:bg-[#181818]/70 dark:backdrop-blur-md border border-slate-100 dark:border-white/10 text-slate-700 dark:text-[#EDEDED] hover:bg-slate-100 dark:hover:bg-white/10 transition-all cursor-pointer text-xs font-medium"
+            className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-100/80 dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-white/5 transition-all cursor-pointer text-xs font-medium"
             title="Toggle theme"
           >
             <div className="flex items-center gap-2">
-              {isDark ? <Moon className="w-4 h-4 text-indigo-300" /> : <Sun className="w-4 h-4 text-amber-500" />}
-              <span>{isDark ? 'Deep Gray Dark' : 'Light Mode'}</span>
+              {isDark ? <Moon className="w-4 h-4 text-brand-400" /> : <Sun className="w-4 h-4 text-amber-600" />}
+              <span>{isDark ? 'Ink Dark' : 'Archival Light'}</span>
             </div>
-            <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-md bg-white dark:bg-[#141414]/90 border border-slate-200/60 dark:border-white/10 text-slate-500 dark:text-[#A0A0A0]">
-              {isDark ? 'Deep Gray #121212' : 'Light'}
+            <span className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+              {isDark ? 'Dark' : 'Light'}
             </span>
           </button>
 
           <div className="flex items-center gap-1.5 w-full">
             <button 
               onClick={() => onChangeView('profile')}
-              className={`flex-1 flex items-center gap-2.5 px-3 py-2 rounded-2xl text-xs sm:text-sm font-medium transition-all cursor-pointer min-w-0 ${
+              className={`flex-1 flex items-center gap-2.5 px-3 py-2 rounded-xl text-xs sm:text-sm font-medium transition-all cursor-pointer min-w-0 ${
                 currentView === 'profile'
-                  ? 'bg-indigo-50 dark:bg-white/10 text-indigo-600 dark:text-[#EDEDED] dark:border dark:border-white/10 shadow-xs'
-                  : 'text-slate-600 dark:text-[#A0A0A0] hover:bg-slate-50 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-[#EDEDED]'
+                  ? 'bg-brand-50 dark:bg-white/10 text-brand-700 dark:text-white border border-brand-200 dark:border-white/10'
+                  : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/5 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-600 to-violet-600 text-white flex items-center justify-center shrink-0 font-bold text-xs shadow-sm overflow-hidden">
+              <div className="w-8 h-8 rounded-full bg-brand-600 dark:bg-brand-500 text-white flex items-center justify-center shrink-0 font-semibold text-xs shadow-sm overflow-hidden">
                 {avatarUrl && !avatarFailed ? (
                   <img 
                     src={avatarUrl} 

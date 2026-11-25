@@ -33,42 +33,37 @@ interface HeaderProps {
 }
 
 export function SideNavToggleIcon({
-  className = "w-8 h-8 sm:w-8.5 sm:h-8.5",
+  className = "w-5 h-5 sm:w-5.5 sm:h-5.5",
   title,
   ...props
 }: React.SVGProps<SVGSVGElement> & { className?: string; title?: string }) {
   return (
     <svg
-      viewBox="0 0 100 100"
+      viewBox="0 0 24 24"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
       {...props}
     >
       {title && <title>{title}</title>}
-      <defs>
-        <linearGradient id="sideNavIconGradient" x1="0%" y1="0%" x2="0%" y2="100%">
-          <stop offset="0%" stopColor="#8A95FF" />
-          <stop offset="48%" stopColor="#5863FE" />
-          <stop offset="100%" stopColor="#242CFE" />
-        </linearGradient>
-      </defs>
-      {/* Left panel of split icon */}
-      <path
-        d="M 34,8 L 60,8 Q 63,8 63,11 L 63,89 Q 63,92 60,92 L 34,92 Q 8,92 8,66 L 8,34 Q 8,8 34,8 Z"
-        fill="url(#sideNavIconGradient)"
+      <rect
+        x="3"
+        y="4"
+        width="18"
+        height="16"
+        rx="3.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
       />
-      {/* Right panel of split icon */}
       <path
-        d="M 69,11 Q 69,8 72,8 Q 92,8 92,34 L 92,66 Q 92,92 72,92 Q 69,92 69,89 Z"
-        fill="url(#sideNavIconGradient)"
+        d="M9.5 4.5V19.5"
+        stroke="currentColor"
+        strokeWidth="1.8"
       />
-      {/* Right-pointing chevron in left panel */}
       <path
-        d="M 36,37.5 L 49.5,50 L 36,62.5"
-        fill="none"
-        stroke="#FFFFFF"
-        strokeWidth="9.2"
+        d="M13 9.5L15.75 12L13 14.5"
+        stroke="#C27D1A"
+        strokeWidth="1.9"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
@@ -248,12 +243,11 @@ export function Header({
             triggerCapsuleFeedback({ pitch: 540, volume: 0.16, hapticDuration: 12 });
             onMenuClick();
           }}
-          className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-105 active:scale-95 flex items-center justify-center transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer text-slate-700 dark:text-slate-200 shrink-0 pointer-events-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 select-none"
+          className="relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-[1.03] active:scale-95 flex items-center justify-center transition-all duration-200 cursor-pointer text-brand-700 dark:text-brand-400 shrink-0 pointer-events-auto focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 select-none"
           title="Open Navigation"
           aria-label="Open Navigation Menu"
         >
-          <div className="absolute top-0 inset-x-2 h-[1px] bg-gradient-to-r from-transparent via-white/80 dark:via-white/30 to-transparent pointer-events-none rounded-full" />
-          <SideNavToggleIcon className="w-5 h-5 sm:w-5.5 sm:h-5.5 drop-shadow-[0_2px_6px_rgba(36,44,254,0.28)]" />
+          <SideNavToggleIcon className="w-5 h-5" />
         </button>
 
         {currentView === 'ai-tutor' && (
@@ -295,9 +289,9 @@ export function Header({
               triggerCapsuleFeedback({ pitch: 650, volume: 0.16, hapticDuration: 12 });
               setIsProfileMenuOpen(prev => !prev);
             }}
-            className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-105 active:scale-95 flex items-center justify-center transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer text-slate-700 dark:text-slate-200 shrink-0 overflow-hidden p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+            className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-[1.03] active:scale-95 flex items-center justify-center transition-all duration-200 cursor-pointer text-slate-700 dark:text-slate-200 shrink-0 overflow-hidden p-0.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
               isProfileMenuOpen || currentView === 'profile'
-                ? 'ring-2 ring-indigo-500/80 border-indigo-400 dark:border-indigo-500'
+                ? 'ring-2 ring-brand-500/80 border-brand-400 dark:border-brand-400'
                 : ''
             }`}
             title={`User Profile (${user?.user_metadata?.full_name || user?.email || 'Learner Account'})`}
@@ -319,7 +313,7 @@ export function Header({
                   }}
                 />
               ) : (
-                <div className="w-full h-full bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-xs sm:text-sm font-display shadow-inner rounded-full">
+                <div className="w-full h-full bg-brand-600 dark:bg-brand-500 text-white flex items-center justify-center font-semibold text-xs sm:text-sm font-display rounded-full">
                   {userInitial}
                 </div>
               )}
@@ -328,12 +322,12 @@ export function Header({
 
           {/* User Profile Dropdown Card */}
           {isProfileMenuOpen && (
-            <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-3xl liquid-glass-dock border border-white/80 dark:border-white/10 shadow-[0_20px_50px_rgba(0,0,0,0.6)] p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
+            <div className="absolute right-0 mt-2 w-72 sm:w-80 rounded-2xl bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] shadow-xl p-4 z-50 animate-in fade-in zoom-in-95 duration-200">
               {/* Header profile identity */}
-              <div className="flex items-center gap-3 pb-3 border-b border-slate-200/60 dark:border-slate-800">
+              <div className="flex items-center gap-3 pb-3 border-b border-[#E2DDD3] dark:border-[#26313A]">
                 <div
                   onClick={() => headerFileInputRef.current?.click()}
-                  className="group relative w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 via-brand-600 to-violet-600 text-white flex items-center justify-center font-bold text-base shadow-sm shrink-0 overflow-hidden cursor-pointer"
+                  className="group relative w-12 h-12 rounded-xl bg-brand-600 dark:bg-brand-500 text-white flex items-center justify-center font-semibold text-base shrink-0 overflow-hidden cursor-pointer"
                   title="Click to change photo"
                 >
                   {userAvatarUrl && !avatarImgFailed ? (
@@ -362,18 +356,18 @@ export function Header({
                   </div>
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="font-bold text-slate-900 dark:text-white text-sm truncate font-display">
+                  <p className="font-semibold text-slate-900 dark:text-white text-sm truncate font-display">
                     {user?.user_metadata?.full_name || 'Edu AI Learner'}
                   </p>
                   <p className="text-slate-500 dark:text-slate-400 text-xs truncate">
                     {user?.email || 'Active Account'}
                   </p>
                   <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-600 dark:text-slate-300">
-                    <span className="font-semibold text-indigo-600 dark:text-indigo-400 truncate">
+                    <span className="font-medium text-brand-600 dark:text-brand-400 truncate">
                       {user?.user_metadata?.field_of_study || 'Active Scholar'}
                     </span>
-                    <span className="text-slate-300 dark:text-slate-600">•</span>
-                    <span className="font-bold text-amber-600 dark:text-amber-400 tabular-nums shrink-0">
+                    <span className="text-slate-300 dark:text-slate-600">·</span>
+                    <span className="font-mono font-semibold text-amber-700 dark:text-amber-400 tabular-nums shrink-0">
                       {achievements.totalEduPoints.toLocaleString()} EP
                     </span>
                   </div>
@@ -385,18 +379,18 @@ export function Header({
                 <button
                   onClick={() => headerFileInputRef.current?.click()}
                   disabled={isUploadingPhoto}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer group"
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer group"
                 >
                   <div className="flex items-center gap-2.5">
                     {isUploadingPhoto ? (
-                      <Loader2 className="w-4 h-4 text-indigo-500 animate-spin" />
+                      <Loader2 className="w-4 h-4 text-brand-500 animate-spin" />
                     ) : (
-                      <Camera className="w-4 h-4 text-indigo-500" />
+                      <Camera className="w-4 h-4 text-brand-600 dark:text-brand-400" />
                     )}
                     <span>{isUploadingPhoto ? 'Uploading photo...' : 'Upload / Change Photo'}</span>
                   </div>
-                  <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/80 px-2 py-0.5 rounded-full border border-indigo-200/60 dark:border-indigo-800/60">
-                    Upload
+                  <span className="text-[11px] font-mono text-brand-600 dark:text-brand-400">
+                    Edit
                   </span>
                 </button>
 
@@ -405,13 +399,13 @@ export function Header({
                     setIsProfileMenuOpen(false);
                     onNavigate('profile');
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer group"
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer group"
                 >
                   <div className="flex items-center gap-2.5">
-                    <User className="w-4 h-4 text-indigo-500" />
+                    <User className="w-4 h-4 text-brand-600 dark:text-brand-400" />
                     <span>View Profile &amp; Badges</span>
                   </div>
-                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                  <div className="flex items-center gap-1.5 text-[11px] font-mono font-semibold text-amber-700 dark:text-amber-400 tabular-nums">
                     <Award className="w-3.5 h-3.5" />
                     <span>
                       {Object.keys(achievements.earnedBadges).length}/{ACHIEVEMENT_BADGES.length}
@@ -425,11 +419,11 @@ export function Header({
                     setIsProfileMenuOpen(false);
                     onNavigate('workspace');
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2.5">
-                    <BookmarkCheck className="w-4 h-4 text-brand-500" />
-                    <span>My Notes & Workspace</span>
+                    <BookmarkCheck className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+                    <span>My Notes &amp; Workspace</span>
                   </div>
                 </button>
 
@@ -438,11 +432,11 @@ export function Header({
                     setIsProfileMenuOpen(false);
                     onNavigate('settings');
                   }}
-                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100/80 dark:hover:bg-slate-800/60 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-colors cursor-pointer"
+                  className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800/70 text-slate-700 dark:text-slate-200 text-xs font-medium transition-colors cursor-pointer"
                 >
                   <div className="flex items-center gap-2.5">
                     <MoreHorizontal className="w-4 h-4 text-slate-400" />
-                    <span>Preferences & Settings</span>
+                    <span>Preferences &amp; Settings</span>
                   </div>
                 </button>
 
@@ -452,7 +446,7 @@ export function Header({
                       setIsProfileMenuOpen(false);
                       onSignOut();
                     }}
-                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-semibold transition-colors cursor-pointer"
+                    className="w-full flex items-center justify-between px-3 py-2 rounded-xl hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 dark:text-red-400 text-xs font-medium transition-colors cursor-pointer"
                   >
                     <div className="flex items-center gap-2.5">
                       <LogOut className="w-4 h-4 text-red-500" />
@@ -462,27 +456,27 @@ export function Header({
                 )}
               </div>
 
-              {/* Theme Locality: Dark & Light Mode Toggle inside User Profile Locality */}
-              <div className="pt-2.5 border-t border-slate-200/60 dark:border-slate-800">
-                <div className="flex items-center justify-between p-2 rounded-2xl bg-white/60 dark:bg-black/40 border border-slate-200/60 dark:border-white/10">
+              {/* Theme Locality */}
+              <div className="pt-2.5 border-t border-[#E2DDD3] dark:border-[#26313A]">
+                <div className="flex items-center justify-between p-2 rounded-xl bg-slate-100/70 dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A]">
                   <div className="flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-300">
                     {isDarkTheme ? (
-                      <Moon className="w-4 h-4 text-indigo-400" />
+                      <Moon className="w-4 h-4 text-brand-400" />
                     ) : (
-                      <Sun className="w-4 h-4 text-amber-500" />
+                      <Sun className="w-4 h-4 text-amber-600" />
                     )}
-                    <span>{isDarkTheme ? 'Dark Mode' : 'Light Mode'}</span>
+                    <span>{isDarkTheme ? 'Ink Dark' : 'Archival Light'}</span>
                   </div>
 
                   <button
                     onClick={handleToggleTheme}
                     className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                      isDarkTheme ? 'bg-indigo-600' : 'bg-slate-300'
+                      isDarkTheme ? 'bg-brand-500' : 'bg-slate-300'
                     }`}
                     title={isDarkTheme ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
                   >
                     <span
-                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-lg ring-0 transition duration-200 ease-in-out ${
+                      className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow-sm ring-0 transition duration-200 ease-in-out ${
                         isDarkTheme ? 'translate-x-5' : 'translate-x-0'
                       }`}
                     />
@@ -500,18 +494,17 @@ export function Header({
             triggerCapsuleFeedback({ pitch: 620, volume: 0.18, hapticDuration: 12 });
             onNavigate('chat');
           }}
-          className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-105 active:scale-95 flex items-center justify-center transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+          className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-[1.03] active:scale-95 flex items-center justify-center transition-all duration-200 cursor-pointer shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
             currentView === 'chat'
-              ? 'ring-2 ring-indigo-500/80 text-indigo-600 dark:text-indigo-400 border-indigo-400 dark:border-indigo-500'
-              : 'text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400'
+              ? 'ring-2 ring-brand-500/80 text-brand-600 dark:text-brand-400'
+              : 'text-slate-700 dark:text-slate-200 hover:text-brand-600 dark:hover:text-brand-400'
           }`}
           title="Student Chat & Study Groups"
           aria-label="Open Student Chat"
         >
-          <div className="absolute top-0 inset-x-2 h-[1px] bg-gradient-to-r from-transparent via-white/80 dark:via-white/30 to-transparent pointer-events-none rounded-full" />
           <MessageCircle className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
           {pendingChatBadgeCount > 0 && (
-            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-indigo-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-brand-600 text-white text-[10px] font-mono font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-[#171E24]">
               {pendingChatBadgeCount > 9 ? '9+' : pendingChatBadgeCount}
             </span>
           )}
@@ -524,18 +517,17 @@ export function Header({
             triggerCapsuleFeedback({ pitch: 580, volume: 0.18, hapticDuration: 12 });
             onNavigate('notifications');
           }}
-          className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-105 active:scale-95 flex items-center justify-center transition-all duration-200 shadow-lg hover:shadow-xl cursor-pointer shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
+          className={`relative w-10 h-10 sm:w-11 sm:h-11 rounded-full liquid-glass-dock hover:scale-[1.03] active:scale-95 flex items-center justify-center transition-all duration-200 cursor-pointer shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-500 ${
             currentView === 'notifications'
-              ? 'ring-2 ring-indigo-500/80 text-indigo-600 dark:text-indigo-400 border-indigo-400 dark:border-indigo-500'
-              : 'text-slate-700 dark:text-slate-200 hover:text-indigo-600 dark:hover:text-indigo-400'
+              ? 'ring-2 ring-brand-500/80 text-brand-600 dark:text-brand-400'
+              : 'text-slate-700 dark:text-slate-200 hover:text-brand-600 dark:hover:text-brand-400'
           }`}
           title="Notifications & Broadcasts Page"
           aria-label="Open Notifications"
         >
-          <div className="absolute top-0 inset-x-2 h-[1px] bg-gradient-to-r from-transparent via-white/80 dark:via-white/30 to-transparent pointer-events-none rounded-full" />
           <Bell className="w-4.5 h-4.5 sm:w-5 sm:h-5" />
           {unreadNotifCount > 0 && (
-            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-slate-900 shadow-xs">
+            <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[10px] font-mono font-bold rounded-full flex items-center justify-center ring-2 ring-white dark:ring-[#171E24]">
               {unreadNotifCount > 9 ? '9+' : unreadNotifCount}
             </span>
           )}

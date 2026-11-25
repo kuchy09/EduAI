@@ -203,7 +203,7 @@ export function BookDetail({ book, onClose, onDiscuss, onRead, onListen, onMarkC
                <div className="w-px h-8 bg-slate-100 dark:bg-white/10"></div>
                <div className="flex flex-col items-center gap-1">
                  <div className="flex items-center text-slate-900 dark:text-[#EDEDED] font-semibold text-sm gap-1.5">
-                   <BookOpen className="w-4 h-4 text-brand-500 dark:text-[#8a70d6]" />
+                   <BookOpen className="w-4 h-4 text-brand-600 dark:text-brand-400" />
                    {(book.readProgress || 0) >= 100 ? 'Completed' : book.readProgress ? 'Reading' : 'Unread'}
                  </div>
                  <span className="text-xs text-slate-500 dark:text-[#A0A0A0] font-medium tabular-nums">{book.readProgress || 0}% Done</span>

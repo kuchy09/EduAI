@@ -4,6 +4,7 @@ import crypto from "crypto";
 import JSZip from "jszip";
 import { GoogleGenAI, Type } from "@google/genai";
 import { generateEducationalEpub } from "./epubBuilder";
+import { generateQwenCompletion, isQwenConfigured } from "./qwenClient";
 
 export interface AudiobookDiagramNode {
   label: string;
@@ -45,7 +46,7 @@ export interface AudiobookChapterScript {
   chaptersMeta: AudiobookChapterMeta[];
   sourceMode: "library-text" | "epub-curriculum";
   tutorModel: string;
-  engine?: "gemini-tutor" | "textbook-concept-parser";
+  engine?: "qwen3-tutor" | "gemini-tutor" | "textbook-concept-parser";
   ttsAvailable: boolean;
   aiNotice?: string;
   segments: AudiobookSegment[];
@@ -494,6 +495,7 @@ export async function generateAudiobookChapterScript(params: {
   const cacheFile = path.join(scriptsDir, `${cacheKey}.json`);
 
   const keyState = getUsableGeminiKey();
+  const qwenReady = isQwenConfigured();
 
   if (!params.forceRefresh && fs.existsSync(cacheFile)) {
     try {
@@ -508,7 +510,7 @@ export async function generateAudiobookChapterScript(params: {
     } catch (_) {}
   }
 
-  if (!keyState.apiKey) {
+  if (!qwenReady && !keyState.apiKey) {
     return {
       bookId: params.bookId,
       bookTitle: params.title,
@@ -519,7 +521,8 @@ export async function generateAudiobookChapterScript(params: {
       tutorModel: "textbook-concept-parser",
       engine: "textbook-concept-parser",
       ttsAvailable: false,
-      aiNotice: keyState.reason,
+      aiNotice:
+        "Add GROQ_API_KEY in Settings > Secrets for Qwen 3 narration. Playing extracted Library chapter narration with Device Voice.",
       segments: buildDeterministicChapterSegments({
         title: params.title,
         category: params.category,
@@ -530,11 +533,6 @@ export async function generateAudiobookChapterScript(params: {
       generatedAt: new Date().toISOString(),
     };
   }
-
-  const ai = new GoogleGenAI({
-    apiKey: keyState.apiKey,
-    httpOptions: { headers: { "User-Agent": "aistudio-build" } },
-  });
 
   const curriculumContext = [
     params.curriculum?.length ? `Curriculum: ${params.curriculum.join(", ")}` : "",
@@ -567,112 +565,175 @@ STRICT GOALS & CONSTRAINTS:
    - keyTakeaways: 2 to 3 crisp, zero-loss key points
    - diagramNodes: 3 to 4 labeled visual parts (label + detail + role) so the learner can inspect an interactive concept diagram immediately while listening.
 
+Return ONLY a valid JSON object matching this exact structure (no surrounding prose or markdown):
+{
+  "segments": [
+    {
+      "id": "seg-1",
+      "heading": "Section heading",
+      "sourceExcerpt": "Original textbook excerpt covered in this segment",
+      "narration": "Warm spoken tutor narration",
+      "estimatedSeconds": 25,
+      "isComplexConcept": true,
+      "complexConcept": {
+        "conceptTitle": "...",
+        "complexityReason": "...",
+        "visualizationPrompt": "...",
+        "diagramType": "process",
+        "formulaOrRule": "...",
+        "keyTakeaways": ["...", "..."],
+        "diagramNodes": [{ "label": "...", "detail": "...", "role": "..." }]
+      }
+    }
+  ]
+}
+
 TEXTBOOK CHAPTER CONTENT:
 """
 ${truncatedSource}
 """`;
 
-  const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
   let generated: any = null;
-  let usedModel = modelsToTry[0];
+  let usedModel = "qwen3";
+  let usedEngine: "qwen3-tutor" | "gemini-tutor" = "qwen3-tutor";
   let lastError: any = null;
 
-  for (const modelName of modelsToTry) {
+  if (qwenReady) {
     try {
-      const response = await ai.models.generateContent({
-        model: modelName,
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              segments: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    id: { type: Type.STRING },
-                    heading: { type: Type.STRING },
-                    sourceExcerpt: { type: Type.STRING },
-                    narration: { type: Type.STRING },
-                    estimatedSeconds: { type: Type.NUMBER },
-                    isComplexConcept: { type: Type.BOOLEAN },
-                    complexConcept: {
-                      type: Type.OBJECT,
-                      properties: {
-                        conceptTitle: { type: Type.STRING },
-                        complexityReason: { type: Type.STRING },
-                        visualizationPrompt: { type: Type.STRING },
-                        diagramType: { type: Type.STRING },
-                        formulaOrRule: { type: Type.STRING },
-                        keyTakeaways: {
-                          type: Type.ARRAY,
-                          items: { type: Type.STRING },
-                        },
-                        diagramNodes: {
-                          type: Type.ARRAY,
-                          items: {
-                            type: Type.OBJECT,
-                            properties: {
-                              label: { type: Type.STRING },
-                              detail: { type: Type.STRING },
-                              role: { type: Type.STRING },
-                            },
-                            required: ["label", "detail"],
-                          },
-                        },
-                      },
-                      required: [
-                        "conceptTitle",
-                        "complexityReason",
-                        "visualizationPrompt",
-                        "diagramType",
-                        "keyTakeaways",
-                        "diagramNodes",
-                      ],
-                    },
-                  },
-                  required: [
-                    "id",
-                    "heading",
-                    "sourceExcerpt",
-                    "narration",
-                    "estimatedSeconds",
-                    "isComplexConcept",
-                  ],
-                },
-              },
-            },
-            required: ["segments"],
-          },
-        },
+      const qwenRes = await generateQwenCompletion({
+        systemPrompt:
+          "You are an educational audiobook scriptwriter and curriculum designer. Respond strictly with valid JSON containing a 'segments' array.",
+        messages: [{ role: "user", content: prompt }],
+        jsonMode: true,
+        speedMode: "fast",
+        maxTokens: 4096,
       });
-
-      const rawText = response.text?.trim() || "";
-      const parsedJson = JSON.parse(rawText);
+      const cleaned = qwenRes.text
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/i, "")
+        .trim();
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      const parsedJson = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
       if (Array.isArray(parsedJson?.segments) && parsedJson.segments.length > 0) {
         generated = parsedJson;
-        usedModel = modelName;
-        break;
+        usedModel = qwenRes.model;
+        usedEngine = "qwen3-tutor";
       }
-    } catch (err: any) {
-      lastError = err;
-      if (isAuthKeyError(err)) {
-        lastRejectedKeyHash = keyState.keyHash;
-        break;
-      }
-      if (isBillingOrQuotaError(err)) {
-        break;
+    } catch (qwenErr: any) {
+      lastError = qwenErr;
+      console.info("[Audiobook] Qwen 3 script notice:", qwenErr?.status || qwenErr?.message);
+    }
+  }
+
+  if (!generated && keyState.apiKey) {
+    const ai = new GoogleGenAI({
+      apiKey: keyState.apiKey,
+      httpOptions: { headers: { "User-Agent": "aistudio-build" } },
+    });
+
+    const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+    usedModel = modelsToTry[0];
+
+    for (const modelName of modelsToTry) {
+      try {
+        const response = await ai.models.generateContent({
+          model: modelName,
+          contents: prompt,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                segments: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      id: { type: Type.STRING },
+                      heading: { type: Type.STRING },
+                      sourceExcerpt: { type: Type.STRING },
+                      narration: { type: Type.STRING },
+                      estimatedSeconds: { type: Type.NUMBER },
+                      isComplexConcept: { type: Type.BOOLEAN },
+                      complexConcept: {
+                        type: Type.OBJECT,
+                        properties: {
+                          conceptTitle: { type: Type.STRING },
+                          complexityReason: { type: Type.STRING },
+                          visualizationPrompt: { type: Type.STRING },
+                          diagramType: { type: Type.STRING },
+                          formulaOrRule: { type: Type.STRING },
+                          keyTakeaways: {
+                            type: Type.ARRAY,
+                            items: { type: Type.STRING },
+                          },
+                          diagramNodes: {
+                            type: Type.ARRAY,
+                            items: {
+                              type: Type.OBJECT,
+                              properties: {
+                                label: { type: Type.STRING },
+                                detail: { type: Type.STRING },
+                                role: { type: Type.STRING },
+                              },
+                              required: ["label", "detail"],
+                            },
+                          },
+                        },
+                        required: [
+                          "conceptTitle",
+                          "complexityReason",
+                          "visualizationPrompt",
+                          "diagramType",
+                          "keyTakeaways",
+                          "diagramNodes",
+                        ],
+                      },
+                    },
+                    required: [
+                      "id",
+                      "heading",
+                      "sourceExcerpt",
+                      "narration",
+                      "estimatedSeconds",
+                      "isComplexConcept",
+                    ],
+                  },
+                },
+              },
+              required: ["segments"],
+            },
+          },
+        });
+
+        const rawText = response.text?.trim() || "";
+        const parsedJson = JSON.parse(rawText);
+        if (Array.isArray(parsedJson?.segments) && parsedJson.segments.length > 0) {
+          generated = parsedJson;
+          usedModel = modelName;
+          usedEngine = "gemini-tutor";
+          break;
+        }
+      } catch (err: any) {
+        lastError = err;
+        if (isAuthKeyError(err)) {
+          lastRejectedKeyHash = keyState.keyHash;
+          break;
+        }
+        if (isBillingOrQuotaError(err)) {
+          break;
+        }
       }
     }
   }
 
   if (!generated) {
-    const notice = isAuthKeyError(lastError)
+    const notice = qwenReady
+      ? "Qwen 3 script generation is temporarily busy. Playing full extracted textbook chapter with local concept diagrams."
+      : isAuthKeyError(lastError)
       ? "Configured GEMINI_API_KEY was rejected by Google AI. Using extracted Library chapter narration with Device Voice."
       : isBillingOrQuotaError(lastError)
-      ? "AI Studio credits or quota are currently depleted. Using extracted Library chapter narration with Device Voice."
+      ? "AI Studio credits or quota are currently depleted. Add GROQ_API_KEY in Settings > Secrets for Qwen 3, or use Device Voice."
       : "Cloud AI Tutor narration is temporarily busy. Playing full extracted textbook chapter with local concept diagrams.";
     return {
       bookId: params.bookId,
@@ -683,7 +744,7 @@ ${truncatedSource}
       sourceMode: resolved.sourceMode,
       tutorModel: "textbook-concept-parser",
       engine: "textbook-concept-parser",
-      ttsAvailable: !isAuthKeyError(lastError),
+      ttsAvailable: Boolean(keyState.apiKey) && !isAuthKeyError(lastError),
       aiNotice: notice,
       segments: buildDeterministicChapterSegments({
         title: params.title,
@@ -750,8 +811,8 @@ ${truncatedSource}
     chaptersMeta: resolved.chaptersMeta,
     sourceMode: resolved.sourceMode,
     tutorModel: usedModel,
-    engine: "gemini-tutor",
-    ttsAvailable: true,
+    engine: usedEngine,
+    ttsAvailable: Boolean(keyState.apiKey),
     segments: normalizedSegments,
     generatedAt: new Date().toISOString(),
   };

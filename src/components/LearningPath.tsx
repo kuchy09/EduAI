@@ -208,16 +208,14 @@ export function LearningPath({ user, profile }: LearningPathProps) {
       {/* Header and Controls */}
       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 mb-1.5">
-            <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-[#EDEDED] tracking-tight">
-              Study Plan & Roadmap
-            </h2>
-            <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 border border-indigo-200/60 dark:border-indigo-500/30">
-              Plan Mode
-            </span>
-          </div>
-          <p className="text-slate-500 dark:text-[#A0A0A0] text-sm">
-            Curated syllabus curriculum and weekly academic milestones tailored to your study cadence.
+          <p className="text-[11px] font-mono uppercase tracking-[0.14em] text-brand-700 dark:text-brand-400 font-semibold mb-1.5">
+            Syllabus Curriculum &amp; Weekly Milestones
+          </p>
+          <h2 className="text-2xl sm:text-3xl font-display font-bold text-slate-900 dark:text-[#F2EFE9] tracking-tight">
+            Study Plan &amp; Roadmap
+          </h2>
+          <p className="text-slate-500 dark:text-[#98A4AF] text-sm mt-1">
+            Structured reading sequence and weekly academic milestones tailored to your study cadence.
           </p>
         </div>
 
@@ -225,7 +223,7 @@ export function LearningPath({ user, profile }: LearningPathProps) {
           <button 
             onClick={generatePersonalizedPath}
             disabled={isGenerating}
-            className="bg-brand-600 dark:bg-indigo-600/80 hover:bg-brand-700 dark:hover:bg-indigo-600 text-white rounded-xl px-4 py-2.5 flex items-center justify-center gap-2 font-medium text-xs sm:text-sm transition-all shadow-sm cursor-pointer disabled:opacity-75"
+            className="bg-brand-600 hover:bg-brand-700 text-white rounded-xl px-4 py-2.5 flex items-center justify-center gap-2 font-medium text-xs sm:text-sm transition-all shadow-sm cursor-pointer disabled:opacity-75"
           >
             {isGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             <span>{isGenerating ? 'Analyzing...' : 'Regenerate Plan'}</span>
@@ -240,26 +238,26 @@ export function LearningPath({ user, profile }: LearningPathProps) {
       )}
 
       {/* Plan Mode View Toggle & Progress Overview Card */}
-      <div className="plan-card rounded-2xl p-5 border border-slate-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1a1a1a] transition-colors">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200/70 dark:border-[#262626]">
+      <div className="plan-card rounded-2xl p-5 border border-[#E2DDD3] dark:border-[#26313A] bg-white dark:bg-[#171E24] transition-colors">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#E2DDD3]/70 dark:border-[#26313A]">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-indigo-50 dark:bg-indigo-500/15 text-indigo-600 dark:text-indigo-300 flex items-center justify-center border border-indigo-100 dark:border-indigo-500/25">
+            <div className="w-10 h-10 rounded-xl bg-brand-50 dark:bg-brand-950/40 text-brand-700 dark:text-brand-300 flex items-center justify-center border border-brand-200/70 dark:border-brand-700/30">
               <Target className="w-5 h-5" />
             </div>
             <div>
-              <div className="text-xs uppercase tracking-wider font-bold text-slate-500 dark:text-[#A0A0A0]">Plan Completion</div>
-              <div className="text-lg font-bold text-slate-900 dark:text-[#EDEDED]">{completedCount} of {steps.length} Milestones Cleared ({progressPercent}%)</div>
+              <div className="text-[11px] font-mono uppercase tracking-wider font-semibold text-slate-500 dark:text-[#98A4AF]">Plan Completion</div>
+              <div className="text-lg font-display font-bold text-slate-900 dark:text-[#F2EFE9] tabular-nums">{completedCount} of {steps.length} Milestones Cleared ({progressPercent}%)</div>
             </div>
           </div>
 
           {/* Segmented Mode Selector */}
-          <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-[#141414] rounded-xl border border-slate-200/60 dark:border-white/10 self-start sm:self-auto">
+          <div className="flex items-center gap-1 p-1 bg-[#EFECE4] dark:bg-[#11161A] rounded-xl border border-[#E2DDD3] dark:border-[#26313A] self-start sm:self-auto">
             <button
               onClick={() => setPlanMode('roadmap')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 planMode === 'roadmap'
-                  ? 'bg-white dark:bg-[#252525] text-slate-900 dark:text-[#EDEDED] shadow-xs border border-slate-200/60 dark:border-white/10'
-                  : 'text-slate-500 dark:text-[#A0A0A0] hover:text-slate-800 dark:hover:text-[#EDEDED]'
+                  ? 'bg-white dark:bg-[#1F2830] text-slate-900 dark:text-[#F2EFE9] shadow-xs border border-[#E2DDD3] dark:border-[#2E3B46]'
+                  : 'text-slate-500 dark:text-[#98A4AF] hover:text-slate-800 dark:hover:text-[#F2EFE9]'
               }`}
             >
               Curriculum Roadmap
@@ -268,8 +266,8 @@ export function LearningPath({ user, profile }: LearningPathProps) {
               onClick={() => setPlanMode('weekly')}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
                 planMode === 'weekly'
-                  ? 'bg-white dark:bg-[#252525] text-slate-900 dark:text-[#EDEDED] shadow-xs border border-slate-200/60 dark:border-white/10'
-                  : 'text-slate-500 dark:text-[#A0A0A0] hover:text-slate-800 dark:hover:text-[#EDEDED]'
+                  ? 'bg-white dark:bg-[#1F2830] text-slate-900 dark:text-[#F2EFE9] shadow-xs border border-[#E2DDD3] dark:border-[#2E3B46]'
+                  : 'text-slate-500 dark:text-[#98A4AF] hover:text-slate-800 dark:hover:text-[#F2EFE9]'
               }`}
             >
               Weekly Schedule
@@ -279,9 +277,9 @@ export function LearningPath({ user, profile }: LearningPathProps) {
 
         {/* Progress Bar */}
         <div className="pt-4">
-          <div className="w-full h-2 bg-slate-100 dark:bg-[#222222] rounded-full overflow-hidden">
+          <div className="w-full h-2 bg-[#EFECE4] dark:bg-[#222B33] rounded-full overflow-hidden">
             <div 
-              className="h-full bg-indigo-600 dark:bg-[#8a70d6] rounded-full transition-all duration-500" 
+              className="h-full bg-brand-600 dark:bg-brand-500 rounded-full transition-all duration-500" 
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -299,10 +297,10 @@ export function LearningPath({ user, profile }: LearningPathProps) {
               key={idx}
               className={`rounded-2xl p-5 sm:p-6 transition-all duration-200 border ${
                 isCompleted 
-                  ? 'plan-card-completed bg-emerald-50/60 dark:bg-[#152219] border-emerald-200 dark:border-emerald-500/35'
+                  ? 'plan-card-completed bg-emerald-50/60 dark:bg-[#13221C] border-emerald-200 dark:border-emerald-500/35'
                   : isCurrent 
-                  ? 'plan-card-current bg-indigo-50/60 dark:bg-[#201a2f] border-indigo-200 dark:border-indigo-500/50 ring-1 ring-indigo-500/20'
-                  : 'plan-card-upcoming bg-white dark:bg-[#171717] border-slate-200 dark:border-[#262626]'
+                  ? 'plan-card-current bg-brand-50/55 dark:bg-[#14232A] border-brand-200 dark:border-brand-500/45 ring-1 ring-brand-500/20'
+                  : 'plan-card-upcoming bg-white dark:bg-[#171E24] border-[#E2DDD3] dark:border-[#26313A]'
               }`}
             >
               <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -310,40 +308,41 @@ export function LearningPath({ user, profile }: LearningPathProps) {
                   {/* Status Indicator Icon */}
                   <div className="mt-0.5 shrink-0">
                     {isCompleted ? (
-                      <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 flex items-center justify-center border border-emerald-200 dark:border-emerald-500/30">
+                      <div className="w-8 h-8 rounded-xl bg-emerald-100 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 flex items-center justify-center border border-emerald-200 dark:border-emerald-500/30">
                         <CheckCircle2 className="w-5 h-5" />
                       </div>
                     ) : isCurrent ? (
-                      <div className="w-8 h-8 rounded-xl bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-300 flex items-center justify-center border border-indigo-200 dark:border-indigo-500/40 animate-pulse">
+                      <div className="w-8 h-8 rounded-xl bg-brand-100 dark:bg-brand-500/20 text-brand-700 dark:text-brand-300 flex items-center justify-center border border-brand-200 dark:border-brand-500/40">
                         <Target className="w-5 h-5" />
                       </div>
                     ) : (
-                      <div className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-[#242424] text-slate-400 dark:text-[#8E8E93] flex items-center justify-center border border-slate-200 dark:border-[#303030]">
+                      <div className="w-8 h-8 rounded-xl bg-[#EFECE4] dark:bg-[#222B33] text-slate-400 dark:text-[#8A97A3] flex items-center justify-center border border-[#E2DDD3] dark:border-[#2E3B46]">
                         <Circle className="w-4 h-4" />
                       </div>
                     )}
                   </div>
 
                   <div>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] font-mono tracking-wider uppercase font-bold text-slate-500 dark:text-[#A0A0A0]">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono tracking-wider uppercase font-semibold">
+                      <span className="text-slate-500 dark:text-[#98A4AF]">
                         Milestone 0{idx + 1}
                       </span>
-                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md ${
+                      <span aria-hidden="true" className="text-slate-300 dark:text-[#44515C]">·</span>
+                      <span className={
                         isCompleted
-                          ? 'bg-emerald-100/80 dark:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                          ? 'text-emerald-700 dark:text-emerald-300'
                           : isCurrent
-                          ? 'bg-indigo-100/80 dark:bg-indigo-500/20 text-indigo-700 dark:text-indigo-300'
-                          : 'bg-slate-100 dark:bg-[#242424] text-slate-600 dark:text-[#A0A0A0]'
-                      }`}>
+                          ? 'text-brand-700 dark:text-brand-300'
+                          : 'text-slate-500 dark:text-[#98A4AF]'
+                      }>
                         {step.status}
                       </span>
                     </div>
 
-                    <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] mt-1 tracking-tight">
+                    <h3 className="text-lg font-display font-bold text-slate-900 dark:text-[#F2EFE9] mt-1 tracking-tight">
                       {step.title}
                     </h3>
-                    <p className="text-xs sm:text-sm text-slate-500 dark:text-[#A0A0A0] mt-1 leading-relaxed">
+                    <p className="text-xs sm:text-sm text-slate-600 dark:text-[#98A4AF] mt-1 leading-relaxed">
                       {step.description}
                     </p>
 
@@ -353,7 +352,7 @@ export function LearningPath({ user, profile }: LearningPathProps) {
                         {step.concepts.map((concept, cIdx) => (
                           <span 
                             key={cIdx} 
-                            className="text-[11px] px-2.5 py-1 rounded-lg bg-white/90 dark:bg-[#121212] text-slate-700 dark:text-[#EDEDED] border border-slate-200/80 dark:border-white/10 font-medium"
+                            className="text-[11px] px-2.5 py-1 rounded-lg bg-[#FAF8F4] dark:bg-[#11161A] text-slate-700 dark:text-[#D5D1C8] border border-[#E2DDD3] dark:border-[#26313A] font-medium"
                           >
                             {concept}
                           </span>
@@ -364,14 +363,14 @@ export function LearningPath({ user, profile }: LearningPathProps) {
                 </div>
 
                 {/* Duration and Action */}
-                <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-slate-200/70 dark:border-white/5">
-                  <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 dark:text-[#A0A0A0]">
-                    <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-[#8E8E93]" />
+                <div className="flex sm:flex-col items-center sm:items-end justify-between sm:justify-start gap-2 shrink-0 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#E2DDD3]/70 dark:border-white/5">
+                  <div className="flex items-center gap-1.5 text-xs font-mono font-semibold text-slate-600 dark:text-[#98A4AF]">
+                    <Clock className="w-3.5 h-3.5 text-slate-400 dark:text-[#8A97A3]" />
                     <span>{step.duration}</span>
                   </div>
 
                   {isCompleted ? (
-                    <span className="text-xs font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
+                    <span className="text-xs font-mono font-semibold text-emerald-700 dark:text-emerald-400 tabular-nums">
                       +40 EP Earned
                     </span>
                   ) : (
@@ -380,8 +379,8 @@ export function LearningPath({ user, profile }: LearningPathProps) {
                       onClick={() => handleCompleteMilestone(idx)}
                       className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1 cursor-pointer shadow-xs whitespace-nowrap ${
                         isCurrent
-                          ? 'bg-brand-600 dark:bg-indigo-600/80 hover:bg-brand-700 dark:hover:bg-indigo-600 text-white'
-                          : 'bg-slate-100 dark:bg-[#242429] hover:bg-slate-200 dark:hover:bg-[#303038] text-slate-700 dark:text-[#ededed] border border-slate-200 dark:border-[#34343c]'
+                          ? 'bg-brand-600 hover:bg-brand-700 text-white'
+                          : 'bg-[#FAF8F4] dark:bg-[#202931] hover:bg-[#EFECE4] dark:hover:bg-[#29343E] text-slate-700 dark:text-[#F2EFE9] border border-[#E2DDD3] dark:border-[#2E3B46]'
                       }`}
                     >
                       <span>Complete Milestone (+40 EP)</span>
@@ -397,13 +396,13 @@ export function LearningPath({ user, profile }: LearningPathProps) {
 
       {/* Weekly Schedule Supplementary Card (when Plan Mode is weekly) */}
       {planMode === 'weekly' && (
-        <div className="contrast-blocked-card plan-card rounded-2xl p-6 border border-slate-200 dark:border-[#2a2a2a] bg-white dark:bg-[#1a1a1a] space-y-4">
+        <div className="contrast-blocked-card plan-card rounded-2xl p-6 border border-[#E2DDD3] dark:border-[#26313A] bg-white dark:bg-[#171E24] space-y-4">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <Calendar className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
-              <h4 className="text-sm font-bold text-slate-900 dark:text-[#EDEDED]">Weekly Reading & Retention Rhythm</h4>
+              <Calendar className="w-4 h-4 text-brand-600 dark:text-brand-400" />
+              <h4 className="text-base font-display font-bold text-slate-900 dark:text-[#F2EFE9]">Weekly Reading &amp; Retention Rhythm</h4>
             </div>
-            <span className="text-xs text-slate-400 dark:text-[#A0A0A0]">4 Sessions / Week</span>
+            <span className="text-xs font-mono text-slate-500 dark:text-[#98A4AF]">4 Sessions / Week</span>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -415,11 +414,11 @@ export function LearningPath({ user, profile }: LearningPathProps) {
             ].map((slot, sIdx) => (
               <div 
                 key={sIdx}
-                className="p-3.5 rounded-xl bg-slate-50 dark:bg-[#141414] border border-slate-200/70 dark:border-white/10"
+                className="p-3.5 rounded-xl bg-[#FAF8F4] dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A]"
               >
-                <div className="text-[11px] font-bold text-indigo-600 dark:text-indigo-300 uppercase tracking-wider">{slot.day}</div>
-                <div className="text-sm font-semibold text-slate-900 dark:text-[#EDEDED] mt-0.5">{slot.activity}</div>
-                <div className="text-xs text-slate-500 dark:text-[#A0A0A0] mt-1 flex items-center gap-1">
+                <div className="text-[11px] font-mono font-bold text-brand-700 dark:text-brand-400 uppercase tracking-wider">{slot.day}</div>
+                <div className="text-sm font-semibold text-slate-900 dark:text-[#F2EFE9] mt-0.5">{slot.activity}</div>
+                <div className="text-xs text-slate-500 dark:text-[#98A4AF] mt-1 flex items-center gap-1">
                   <Clock className="w-3 h-3 text-slate-400" />
                   <span>{slot.focus}</span>
                 </div>

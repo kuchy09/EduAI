@@ -182,7 +182,7 @@ export function AiLabAssistantView({
             role: m.role,
             content: m.content,
           })),
-          provider: 'gemini',
+          provider: 'qwen3',
           speedMode: 'fast',
           stream: false,
           bookContext,

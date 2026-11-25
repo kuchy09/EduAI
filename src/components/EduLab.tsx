@@ -332,14 +332,14 @@ export function EduLab({ user, profile, onNavigate }: EduLabProps) {
   }, [activeSection, activeMeta]);
 
   return (
-    <div className="min-h-full w-full bg-slate-50 dark:bg-[#121212] text-slate-900 dark:text-[#EDEDED]">
+    <div className="min-h-full w-full bg-[#F7F5F0] dark:bg-[#11161A] text-slate-900 dark:text-[#F2EFE9]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5 sm:py-7 space-y-5">
         {/* Top Lab Console Header + 8-Item EduLab Navigation */}
-        <div className="flex flex-col gap-4 pb-4 border-b border-slate-200 dark:border-white/10">
+        <div className="flex flex-col gap-4 pb-4 border-b border-[#E2DDD3] dark:border-[#26313A]">
           <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
             <div className="space-y-1">
-              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                <span className="text-indigo-600 dark:text-indigo-400 font-semibold">
+              <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-[#98A4AF]">
+                <span className="text-brand-700 dark:text-brand-400 font-semibold">
                   EDULAB VIRTUAL LABORATORY
                 </span>
                 <span>·</span>
@@ -351,10 +351,10 @@ export function EduLab({ user, profile, onNavigate }: EduLabProps) {
                   </>
                 )}
               </div>
-              <h1 className="text-xl sm:text-2xl font-display font-bold tracking-tight text-slate-900 dark:text-white">
+              <h1 className="text-xl sm:text-2xl font-display font-bold tracking-tight text-slate-900 dark:text-[#F2EFE9]">
                 {headerInfo.title}
               </h1>
-              <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 max-w-3xl">
+              <p className="text-xs sm:text-sm text-slate-600 dark:text-[#98A4AF] max-w-3xl">
                 {headerInfo.subtitle}
               </p>
             </div>

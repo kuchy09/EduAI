@@ -6,6 +6,7 @@ import {
   Mic, MicOff, FileText, X, AudioLines, Square, Pencil, RotateCcw
 } from 'lucide-react';
 import { AstroidIcon } from './icons/AstroidIcon';
+import sageEmblemImg from '../assets/images/eduai_sage_emblem_1795602312891.jpg';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
@@ -50,7 +51,7 @@ interface AiTutorProps {
 
 export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSidebarStateChange }: AiTutorProps) {
   const [input, setInput] = useState('');
-  const [provider, setProvider] = useState<'gemini' | 'anthropic'>('gemini');
+  const [provider, setProvider] = useState<'qwen3' | 'gemini' | 'anthropic'>('qwen3');
   const [speedMode, setSpeedMode] = useState<'fast' | 'deep'>('fast');
   const abortControllerRef = useRef<AbortController | null>(null);
   const [learningActive] = useState(() => {
@@ -1039,6 +1040,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
           if (dataStr && dataStr !== '[DONE]') {
             try {
               const parsed = JSON.parse(dataStr);
+              if (parsed.thought) accumulatedThought += parsed.thought;
               if (parsed.text) accumulated += parsed.text;
               else if (parsed.error) accumulated += accumulated.trim() ? `\n\n*(Error: ${parsed.error})*` : String(parsed.error);
             } catch {}
@@ -1185,11 +1187,11 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
   });
 
   const sidebarPanelContent = (
-    <div className="flex flex-col h-full bg-slate-50 dark:bg-[#161616]/75 dark:backdrop-blur-xl border-r border-slate-200/60 dark:border-white/10 font-sans select-none sidebar-pane">
-      <div className="px-4 pb-4 pt-16 sm:pt-[72px] border-b border-slate-200/50 dark:border-white/10 shrink-0 space-y-2.5">
+    <div className="flex flex-col h-full bg-[#FAF8F4] dark:bg-[#151B20] border-r border-[#E2DDD3] dark:border-[#26313A] font-sans select-none sidebar-pane">
+      <div className="px-4 pb-4 pt-16 sm:pt-[72px] border-b border-[#E2DDD3] dark:border-[#26313A] shrink-0 space-y-2.5">
         <button
           onClick={handleStartNewChat}
-          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 dark:bg-indigo-600/80 hover:bg-slate-800 dark:hover:bg-indigo-600 text-white font-semibold text-sm rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-[0.99] cursor-pointer"
+          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-brand-600 hover:bg-brand-700 text-white font-semibold text-sm rounded-xl shadow-2xs transition-all active:scale-[0.99] cursor-pointer"
         >
           <Plus className="w-4 h-4" />
           <span>New Chat Session</span>
@@ -1283,11 +1285,11 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
   );
 
   return (
-    <div className="flex h-full w-full bg-slate-50 dark:bg-[#121212] relative overflow-hidden font-sans main-canvas-bg">
+    <div className="flex h-full w-full bg-[#F7F5F0] dark:bg-[#11161A] relative overflow-hidden font-sans main-canvas-bg">
       
       {/* Desktop Sidebar Panel */}
       <div 
-        className={`hidden md:flex flex-col h-full shrink-0 border-slate-200/70 dark:border-white/10 transition-all duration-300 ease-in-out ${
+        className={`hidden md:flex flex-col h-full shrink-0 border-[#E2DDD3] dark:border-[#26313A] transition-all duration-300 ease-in-out ${
           isDesktopSidebarOpen ? 'w-72 border-r' : 'w-0 border-none overflow-hidden'
         }`}
       >
@@ -1312,7 +1314,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
               animate={{ translateX: '0%' }}
               exit={{ translateX: '-100%' }}
               transition={{ type: 'tween', duration: 0.25 }}
-              className="md:hidden fixed top-0 bottom-0 left-0 w-72 h-full bg-white dark:bg-[#161616]/85 dark:backdrop-blur-2xl z-50 shadow-2xl border-r border-slate-200 dark:border-white/10 sidebar-pane"
+              className="md:hidden fixed top-0 bottom-0 left-0 w-72 h-full bg-[#FAF8F4] dark:bg-[#151B20] z-50 shadow-2xl border-r border-[#E2DDD3] dark:border-[#26313A] sidebar-pane"
             >
               {sidebarPanelContent}
             </motion.div>
@@ -1320,26 +1322,31 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         )}
       </AnimatePresence>
 
-      {/* Main Study Companion Panel - Cool, Smooth & Modern Box */}
-      <div className="flex-1 flex flex-col h-full bg-slate-50 dark:bg-[#121212] relative overflow-hidden main-canvas-bg">
+      {/* Main Study Companion Panel */}
+      <div className="flex-1 flex flex-col h-full bg-[#F7F5F0] dark:bg-[#11161A] relative overflow-hidden main-canvas-bg">
 
         {/* Message Container Scroller */}
         <div className="flex-1 overflow-y-auto pt-16 sm:pt-20 pb-48 px-4 md:px-10 scroll-smooth relative">
           <div className="max-w-3xl mx-auto space-y-7 flex flex-col">
             {messages.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-10 space-y-6">
-                <div className="relative">
-                  <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-brand-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-xl shadow-brand-500/25">
-                    <AstroidIcon className="w-8 h-8" />
-                  </div>
-                  <div className="absolute inset-0 bg-brand-400 rounded-3xl blur-xl opacity-30 -z-10 animate-pulse" />
+              <div className="flex flex-col items-center justify-center py-8 sm:py-10 space-y-6">
+                <div className="w-24 h-24 rounded-2xl overflow-hidden border border-[#E2DDD3] dark:border-[#26313A] shadow-sm bg-[#F7F5F0] dark:bg-[#171E24] p-1">
+                  <img
+                    src={sageEmblemImg}
+                    alt="Sage scholarly astrolabe and open folio emblem"
+                    referrerPolicy="no-referrer"
+                    className="w-full h-full object-cover rounded-xl"
+                  />
                 </div>
 
                 <div className="text-center max-w-md space-y-1.5">
-                  <h3 className="text-xl font-bold font-display text-slate-900 dark:text-[#EDEDED]">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-brand-600 dark:text-brand-400">
+                    Sage · Guided Academic Inquiry
+                  </p>
+                  <h3 className="text-xl sm:text-2xl font-semibold font-display text-slate-900 dark:text-white">
                     What would you like to master today?
                   </h3>
-                  <p className="text-xs sm:text-sm text-slate-500 dark:text-[#A0A0A0] leading-relaxed">
+                  <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 leading-relaxed">
                     Ask any question, derive mathematical formulas with LaTeX, or select an interactive starter below:
                   </p>
                 </div>
@@ -1349,20 +1356,20 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                   {starterSuggestions.map((item, idx) => (
                     <motion.button
                       key={idx}
-                      whileHover={{ scale: 1.02, y: -2 }}
-                      whileTap={{ scale: 0.98 }}
+                      whileHover={{ y: -2 }}
+                      whileTap={{ scale: 0.99 }}
                       onClick={() => handleSelectStarterPrompt(item.prompt)}
-                      className="text-left p-4 rounded-2xl bg-white dark:bg-[#181818] border border-slate-200/80 dark:border-[#282828] hover:border-brand-400 dark:hover:border-white/20 shadow-xs hover:shadow-md transition-all group flex flex-col justify-between cursor-pointer"
+                      className="text-left p-4 rounded-2xl bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] hover:border-brand-400 dark:hover:border-brand-400/60 transition-all group flex flex-col justify-between cursor-pointer"
                     >
                       <div className="flex items-center gap-2.5 mb-2">
-                        <div className="p-2 rounded-xl bg-slate-50 dark:bg-[#222222] group-hover:bg-brand-50 dark:group-hover:bg-brand-950/60 transition-colors">
+                        <div className="p-2 rounded-xl bg-[#FAF8F4] dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A] group-hover:border-brand-300 transition-colors">
                           {item.icon}
                         </div>
-                        <h4 className="text-xs font-bold text-slate-800 dark:text-[#EDEDED] group-hover:text-brand-600 dark:group-hover:text-indigo-400 transition-colors">
+                        <h4 className="text-xs font-semibold text-slate-900 dark:text-white group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
                           {item.title}
                         </h4>
                       </div>
-                      <p className="text-[11px] text-slate-500 dark:text-[#A0A0A0] leading-relaxed">
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
                         {item.desc}
                       </p>
                     </motion.button>
@@ -1422,7 +1429,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                       ) : (
                         /* Standard User Message Bubble + Action Icons Container */
                         <>
-                          <div className="bg-gradient-to-br from-indigo-600 via-brand-600 to-purple-700 text-white px-5 py-3.5 rounded-3xl rounded-tr-sm text-[14.5px] sm:text-[15px] leading-relaxed break-words shadow-md shadow-brand-600/15 border border-white/15">
+                          <div className="bg-brand-600 dark:bg-brand-600 text-white px-5 py-3.5 rounded-2xl rounded-tr-sm text-[14.5px] sm:text-[15px] leading-relaxed break-words shadow-xs border border-brand-700/20">
                             {msg.content}
                           </div>
 
@@ -1640,7 +1647,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         </div>
 
         {/* Floating Controls & Input Dock */}
-        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-slate-50 via-slate-50/95 to-transparent dark:from-[#121212] dark:via-[#121212]/95 pt-8 pb-5 px-3 sm:px-6 z-20 pointer-events-none">
+        <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-[#F7F5F0] via-[#F7F5F0]/95 to-transparent dark:from-[#11161A] dark:via-[#11161A]/95 pt-8 pb-5 px-3 sm:px-6 z-20 pointer-events-none">
           <div className="max-w-3xl mx-auto flex flex-col items-center pointer-events-auto space-y-2.5">
             
             {/* Quick Prompt Helper Chips */}
@@ -1749,10 +1756,11 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                   {/* Model Selector Mini Toggle */}
                   <select
                     value={provider}
-                    onChange={(e) => setProvider(e.target.value as 'gemini' | 'anthropic')}
+                    onChange={(e) => setProvider(e.target.value as 'qwen3' | 'gemini' | 'anthropic')}
                     className="text-[11px] font-semibold bg-slate-100 dark:bg-[#202020] text-slate-600 dark:text-[#EDEDED] rounded-xl px-2.5 py-1.5 outline-none border border-transparent dark:border-[#282828] hover:border-slate-200 dark:hover:border-white/20 cursor-pointer transition-colors"
                     title="Choose AI Model"
                   >
+                    <option value="qwen3">Qwen 3 (Open-Weight)</option>
                     <option value="gemini">Gemini 4 Flash</option>
                     <option value="anthropic">Claude 3.7</option>
                   </select>

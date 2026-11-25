@@ -1610,7 +1610,7 @@ export default function App() {
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-            className="fixed inset-0 z-50 bg-[#F4ECD8] dark:bg-[#121212] transition-colors duration-250 main-canvas-bg"
+            className="fixed inset-0 z-50 bg-[#F4ECD8] dark:bg-[#11161A] transition-colors duration-250 main-canvas-bg"
           >
             <Reader 
               book={activeBook} 
@@ -1631,7 +1631,7 @@ export default function App() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, scale: 0.98 }}
             transition={{ duration: 0.2 }}
-            className="flex min-h-screen min-h-[100dvh] flex-1 bg-slate-50 dark:bg-[#121212] font-sans text-slate-900 dark:text-[#EDEDED] border-x border-slate-50 dark:border-[#121212] w-full max-w-full overflow-x-hidden main-canvas-bg"
+            className="flex min-h-screen min-h-[100dvh] flex-1 bg-[#F7F5F0] dark:bg-[#11161A] font-sans text-slate-900 dark:text-[#EDEDED] border-x border-[#F7F5F0] dark:border-[#11161A] w-full max-w-full overflow-x-hidden main-canvas-bg"
           >
             <Sidebar 
               currentView={currentView} 
@@ -1906,33 +1906,6 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Floating System Health & Diagnostics Trigger Button */}
-      {currentView !== 'reader' && (
-        <div className="fixed bottom-20 right-4 z-40 sm:bottom-6 sm:right-6">
-          <button
-            onClick={() => setIsDiagnosticsOpen(true)}
-            title="System Health & Self-Healing Diagnostics"
-            className="flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium backdrop-blur-md shadow-lg border transition-all cursor-pointer bg-white/90 dark:bg-slate-900/90 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:scale-105 active:scale-95 group"
-          >
-            <span className="relative flex h-2 w-2">
-              <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-75 ${
-                systemHealth.status === 'healthy' ? 'bg-emerald-400' : systemHealth.status === 'degraded' ? 'bg-amber-400' : 'bg-slate-400'
-              }`}></span>
-              <span className={`relative inline-flex rounded-full h-2 w-2 ${
-                systemHealth.status === 'healthy' ? 'bg-emerald-500' : systemHealth.status === 'degraded' ? 'bg-amber-500' : 'bg-slate-500'
-              }`}></span>
-            </span>
-            <span className="text-[11px] font-mono">
-              {systemHealth.status === 'healthy' 
-                ? `System Healthy ${systemHealth.latencyMs ? `(${systemHealth.latencyMs}ms)` : ''}` 
-                : systemHealth.status === 'checking' 
-                  ? 'Testing Health...' 
-                  : 'Local Offline Mode'}
-            </span>
-            <Wrench className="w-3 h-3 text-slate-400 group-hover:text-brand-500 transition-colors ml-0.5" />
-          </button>
-        </div>
-      )}
 
       {/* Edu Points & Badge Celebration Toast */}
       <AnimatePresence>

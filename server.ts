@@ -17,6 +17,13 @@ import {
   synthesizeAudiobookSpeech,
 } from "./server/audiobookEngine";
 import {
+  formatQwenErrorPayload,
+  generateQwenCompletion,
+  isQwenConfigured,
+  resolveQwenRuntimeConfig,
+  streamQwenCompletion,
+} from "./server/qwenClient";
+import {
   BookCoverOverride,
   CANONICAL_BOOK_COVERS,
   GLOBAL_BOOK_COVERS_ROW_ID,
@@ -2233,11 +2240,20 @@ app.use(express.json({ limit: "5mb" }));
 
 // Health check endpoint
 app.get("/api/health", (req, res) => {
+  const qwenCfg = resolveQwenRuntimeConfig();
+  let qwenHost: string | null = null;
+  try {
+    if (qwenCfg?.endpointUrl) qwenHost = new URL(qwenCfg.endpointUrl).host;
+  } catch {}
   res.json({
     status: "ok",
     cloudConnected: {
       supabase: Boolean(getServerSupabase()),
       b2: Boolean(getS3Client() && B2_BUCKET_NAME),
+      qwen3: Boolean(qwenCfg),
+      qwenModel: qwenCfg?.model || null,
+      qwenProvider: qwenCfg?.providerLabel || null,
+      qwenHost,
     },
   });
 });
@@ -6058,28 +6074,63 @@ app.get("/api/download", async (req, res) => {
 
   app.post("/api/learning-path", async (req, res) => {
     try {
-      const { apiKey, reason } = getUsableServerGeminiKey();
-      if (!apiKey) {
-        return res.status(503).json({ error: reason || "GEMINI_API_KEY environment variable is missing" });
-      }
-
-      const ai = new GoogleGenAI({
-        apiKey,
-        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
-      });
-
-      const { userStyle, readingHabits, currentProgress } = req.body;
+      const { userStyle, readingHabits, currentProgress, provider = "qwen3" } = req.body || {};
+      const normalizedProvider = String(provider || "qwen3").toLowerCase().trim();
 
       const prompt = `Generate a personalized learning path consisting of 3 steps based on the user's reading habits and style.
 User Style: ${userStyle || "Visual learner, prefers concise explanations."}
 Reading Habits: ${readingHabits || "General learning and core subjects."}
 Current Progress: ${currentProgress || "Starting foundational topics."}
 
-Return a JSON object with a single 'steps' array. Each step should have:
-- title: A short title for the topic
-- status: "completed", "current", or "upcoming"
-- duration: The estimated duration to complete (e.g., "2 weeks")
-`;
+Return ONLY a valid JSON object with a single "steps" array (no surrounding markdown text). Each step object must have:
+- "title": A short title for the topic
+- "status": "completed", "current", or "upcoming"
+- "duration": The estimated duration to complete (e.g., "2 weeks")`;
+
+      // Default: route through Qwen3 adapter (independent of Gemini)
+      if (normalizedProvider !== "gemini") {
+        if (!isQwenConfigured()) {
+          return res.status(503).json({
+            error: "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets.",
+          });
+        }
+        try {
+          const qwenRes = await generateQwenCompletion({
+            systemPrompt:
+              "You are an expert curriculum designer for Edu AI. Always reply with strictly valid JSON matching the requested schema.",
+            messages: [{ role: "user", content: prompt }],
+            jsonMode: true,
+            speedMode: "fast",
+            maxTokens: 1024,
+          });
+          const cleaned = qwenRes.text
+            .replace(/^```(?:json)?\s*/i, "")
+            .replace(/\s*```$/i, "")
+            .trim();
+          const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+          const parsed = JSON.parse(jsonMatch ? jsonMatch[0] : cleaned);
+          if (Array.isArray(parsed?.steps) && parsed.steps.length > 0) {
+            return res.json({ steps: parsed.steps, model: qwenRes.model, provider: qwenRes.providerLabel });
+          }
+          return res.status(502).json({ error: "Qwen 3 returned an invalid learning path format. Please retry." });
+        } catch (qwenErr: any) {
+          const formatted = formatQwenErrorPayload(qwenErr);
+          return res.status(formatted.status).json({ error: formatted.message });
+        }
+      }
+
+      // Explicit rollback path: Gemini
+      const { apiKey, reason } = getUsableServerGeminiKey();
+      if (!apiKey) {
+        return res.status(503).json({
+          error: reason || "GEMINI_API_KEY environment variable is missing",
+        });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
 
       const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
       let parsedSteps: any = null;
@@ -6146,12 +6197,14 @@ Return a JSON object with a single 'steps' array. Each step should have:
         prompt,
         message,
         history,
-        provider = 'gemini',
+        provider = 'qwen3',
         allowDataCollection,
         bookContext,
         speedMode = 'fast', // 'fast' (default, low thinking latency) | 'deep' (extended thinking)
         stream = false
       } = req.body || {};
+
+      const normalizedProvider = String(provider || 'qwen3').toLowerCase().trim();
 
       const effectivePrompt = String(prompt ?? message ?? "").trim();
       if (!effectivePrompt) {
@@ -6200,11 +6253,100 @@ Core Pedagogical & Speed Rules:
 Behavioral Persona:
 - Tone: Encouraging, expert, collaborative, and peer-like co-pilot.`;
 
+      // Qwen 3 Single-Host Adapter (default provider)
+      if (normalizedProvider === 'qwen3' || normalizedProvider === 'qwen') {
+        if (!isQwenConfigured()) {
+          return res.status(503).json({
+            error:
+              "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets.",
+          });
+        }
+
+        const qwenMessages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+        for (const msg of recentHistory) {
+          const content = String(msg?.content || "").trim();
+          if (!content) continue;
+          qwenMessages.push({
+            role: msg?.role === 'user' ? 'user' : 'assistant',
+            content,
+          });
+        }
+        qwenMessages.push({ role: 'user', content: effectivePrompt });
+
+        if (isStreamingRequested) {
+          res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-cache, no-transform');
+          res.setHeader('Connection', 'keep-alive');
+          res.setHeader('X-Accel-Buffering', 'no');
+          res.flushHeaders?.();
+          res.write(`: ping\n\n`);
+          if (typeof (res as any).flush === 'function') (res as any).flush();
+
+          const abortController = new AbortController();
+          let clientAborted = false;
+          res.on('close', () => {
+            if (!res.writableEnded) {
+              clientAborted = true;
+              abortController.abort();
+            }
+          });
+
+          try {
+            await streamQwenCompletion({
+              systemPrompt,
+              messages: qwenMessages,
+              maxTokens: speedMode === 'deep' ? 3072 : 2048,
+              speedMode: speedMode === 'deep' ? 'deep' : 'fast',
+              signal: abortController.signal,
+              onThought: (thought) => {
+                if (clientAborted || !thought) return;
+                res.write(`data: ${JSON.stringify({ thought })}\n\n`);
+                if (typeof (res as any).flush === 'function') (res as any).flush();
+              },
+              onText: (text) => {
+                if (clientAborted || !text) return;
+                res.write(`data: ${JSON.stringify({ text })}\n\n`);
+                if (typeof (res as any).flush === 'function') (res as any).flush();
+              },
+            });
+          } catch (qwenErr: any) {
+            if (!clientAborted && qwenErr?.name !== 'AbortError') {
+              const formatted = formatQwenErrorPayload(qwenErr);
+              res.write(`data: ${JSON.stringify({ error: formatted.message })}\n\n`);
+            }
+          }
+
+          if (!clientAborted) {
+            res.write(`data: [DONE]\n\n`);
+            res.end();
+          }
+          return;
+        }
+
+        try {
+          const result = await generateQwenCompletion({
+            systemPrompt,
+            messages: qwenMessages,
+            maxTokens: speedMode === 'deep' ? 3072 : 2048,
+            speedMode: speedMode === 'deep' ? 'deep' : 'fast',
+          });
+          return res.json({
+            reply: result.text,
+            thought: result.thought || undefined,
+            model: result.model,
+            provider: result.providerLabel,
+          });
+        } catch (qwenErr: any) {
+          const formatted = formatQwenErrorPayload(qwenErr);
+          return res.status(formatted.status).json({ error: formatted.message });
+        }
+      }
+
       // Anthropic Handler
-      if (provider === 'anthropic') {
+      if (normalizedProvider === 'anthropic') {
         const apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
-          return res.status(500).json({ error: "ANTHROPIC_API_KEY environment variable is missing" });
+          return res.status(503).json({ error: "ANTHROPIC_API_KEY environment variable is missing. Configure it in Settings > Secrets or switch to Qwen 3." });
         }
 
         const anthropic = new Anthropic({ apiKey });
@@ -6277,7 +6419,7 @@ Behavioral Persona:
         return res.json({ reply: replyText });
       }
 
-      // Default to Gemini with robust fallback cascade for transient model errors
+      // Gemini Handler (explicitly selected fallback option)
       const { apiKey, reason } = getUsableServerGeminiKey();
       if (!apiKey) {
         return res.status(503).json({
@@ -6299,12 +6441,8 @@ Behavioral Persona:
         parts: [{ text: effectivePrompt }],
       });
 
-      // Model cascade using current @google/genai models:
-      // Primary: gemini-4-hydrogen (ThinkingLevel.LOW for fast responsiveness, MEDIUM for deep reasoning)
-      // Fallback: gemini-3.1-flash-lite
       const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
 
-      // Helper to configure system instruction and thinking level
       const getModelConfig = (modelName: string) => {
         const config: any = {
           systemInstruction: systemPrompt
@@ -6322,7 +6460,6 @@ Behavioral Persona:
         httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
       });
 
-      // Real-time Server-Sent Events (SSE) Streaming
       if (isStreamingRequested) {
         res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
         res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -6401,7 +6538,6 @@ Behavioral Persona:
         return;
       }
 
-      // Standard non-streaming JSON generation
       let generatedText: string | null = null;
       let lastModelErr: any = null;
       for (const modelName of modelsToTry) {
@@ -6434,7 +6570,7 @@ Behavioral Persona:
     } catch (error: any) {
       const errorString = error?.toString() || JSON.stringify(error) || "";
       if ((error?.status === 400 || errorString.includes('400')) && errorString.includes('credit balance')) {
-        return res.status(400).json({ error: "Your Anthropic API credit balance is too low. Please switch to the Gemini Model or add credits to your Anthropic account." });
+        return res.status(400).json({ error: "Your Anthropic API credit balance is too low. Please switch to Qwen 3 or add credits to your Anthropic account." });
       }
       const formatted = formatGeminiErrorPayload(error);
       return res.status(formatted.status).json({ error: formatted.message });
