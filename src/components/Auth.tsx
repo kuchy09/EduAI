@@ -105,6 +105,9 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeLegalDoc]);
 
+  const onLoginSuccessRef = useRef(onLoginSuccess);
+  onLoginSuccessRef.current = onLoginSuccess;
+
   useEffect(() => {
     const handleOAuthMessage = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
@@ -164,7 +167,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
           fetchedProfile = verifyJson.profile || null;
         }
 
-        if (activeSession?.user?.id && activeSession?.access_token && onLoginSuccess) {
+        if (activeSession?.user?.id && activeSession?.access_token && onLoginSuccessRef.current) {
           authorizeInteractiveSession(activeSession.user.id, activeSession);
           if (!fetchedProfile) {
             try {
@@ -182,7 +185,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
               }
             } catch (_) {}
           }
-          onLoginSuccess(activeSession, fetchedProfile);
+          onLoginSuccessRef.current(activeSession, fetchedProfile);
         }
       } catch (err: any) {
         setError(err?.message || 'Could not finalize OAuth sign-in.');
@@ -199,7 +202,7 @@ export function Auth({ onLoginSuccess, securityNotice }: AuthProps = {}) {
         window.clearInterval(popupTimerRef.current);
       }
     };
-  }, [onLoginSuccess]);
+  }, []);
 
   const handleOAuthLogin = async (provider: OAuthProviderType) => {
     const providerLabel = provider === 'github' ? 'GitHub' : provider === 'apple' ? 'Apple' : 'Google';

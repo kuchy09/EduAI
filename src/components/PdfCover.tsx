@@ -17,11 +17,54 @@ interface PdfCoverProps {
 export function PdfCover({ url, className, alt, fallbackImage, pageNumber = 1, onLoadError }: PdfCoverProps) {
   const [hasError, setHasError] = useState(false);
   const [isVisible, setIsVisible] = useState(false);
+  const [isVerifiedReady, setIsVerifiedReady] = useState(() => !url.startsWith('/api/download'));
   const containerRef = useRef<HTMLDivElement>(null);
+  const onLoadErrorRef = useRef(onLoadError);
+  onLoadErrorRef.current = onLoadError;
 
   useEffect(() => {
     setHasError(false);
+    setIsVerifiedReady(!url.startsWith('/api/download'));
   }, [url, pageNumber]);
+
+  useEffect(() => {
+    if (!isVisible || hasError || !url.startsWith('/api/download')) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const parsed = new URL(url, window.location.origin);
+        const key = parsed.searchParams.get('key');
+        if (!key) {
+          if (!cancelled) setIsVerifiedReady(true);
+          return;
+        }
+        const res = await fetch(`/api/download/exists?key=${encodeURIComponent(key)}`);
+        if (!res.ok) {
+          if (!cancelled) {
+            setHasError(true);
+            onLoadErrorRef.current?.();
+          }
+          return;
+        }
+        const json = await res.json().catch(() => ({ available: true }));
+        if (cancelled) return;
+        if (json?.available) {
+          setIsVerifiedReady(true);
+        } else {
+          setHasError(true);
+          onLoadErrorRef.current?.();
+        }
+      } catch {
+        if (!cancelled) {
+          setHasError(true);
+          onLoadErrorRef.current?.();
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isVisible, hasError, url]);
 
   useEffect(() => {
     const observer = new IntersectionObserver(
@@ -40,8 +83,8 @@ export function PdfCover({ url, className, alt, fallbackImage, pageNumber = 1, o
 
   const handleError = () => {
     setHasError(true);
-    if (onLoadError) {
-      onLoadError();
+    if (onLoadErrorRef.current) {
+      onLoadErrorRef.current();
     }
   };
 
@@ -53,16 +96,10 @@ export function PdfCover({ url, className, alt, fallbackImage, pageNumber = 1, o
         className={`object-cover w-full h-full ${className}`} 
         referrerPolicy="no-referrer"
         onError={() => {
-          if (onLoadError) onLoadError();
+          onLoadErrorRef.current?.();
         }}
       />
     );
-  }
-
-  if (hasError && !fallbackImage) {
-    if (onLoadError) {
-      onLoadError();
-    }
   }
 
   return (
@@ -75,7 +112,7 @@ export function PdfCover({ url, className, alt, fallbackImage, pageNumber = 1, o
           referrerPolicy="no-referrer"
         />
       )}
-      {!hasError && isVisible && (
+      {!hasError && isVisible && isVerifiedReady && (
         <Document
           file={url}
           onLoadError={handleError}

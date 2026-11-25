@@ -97,6 +97,11 @@ export function Audiobooks({
   profile,
   onOpenAcademicPrefs,
 }: AudiobooksProps) {
+  const onConsumeInitialBookRef = useRef(onConsumeInitialBook);
+  onConsumeInitialBookRef.current = onConsumeInitialBook;
+  const onUpdateProgressRef = useRef(onUpdateProgress);
+  onUpdateProgressRef.current = onUpdateProgress;
+
   const [prefsTick, setPrefsTick] = useState(0);
   const [playlistMode, setPlaylistMode] = useState<'personalized' | 'all' | 'offline'>('all');
   const { isOnline, cachedBookIds, isBookCached } = useOffline();
@@ -159,8 +164,8 @@ export function Audiobooks({
       });
       setAutoPlayOnLoad(true);
     }
-    onConsumeInitialBook?.();
-  }, [initialBookId, books, cachedBookIds, onConsumeInitialBook]);
+    onConsumeInitialBookRef.current?.();
+  }, [initialBookId, books, cachedBookIds]);
 
   // Keep playingBook synced with latest progress / metadata from parent Library state
   useEffect(() => {
@@ -170,7 +175,13 @@ export function Audiobooks({
       return;
     }
     const updated = books.find((b) => b.id === playingBook.id);
-    if (updated && updated !== playingBook) {
+    if (
+      updated &&
+      (updated.readProgress !== playingBook.readProgress ||
+        updated.coverImage !== playingBook.coverImage ||
+        updated.title !== playingBook.title ||
+        updated.fileUrl !== playingBook.fileUrl)
+    ) {
       setPlayingBook(updated);
     }
   }, [books, activeAudioCatalog, playingBook]);
@@ -414,7 +425,7 @@ export function Audiobooks({
         voiceId: selectedVoice,
       });
       if (!cancelled) {
-        onUpdateProgress?.(playingBook.id, pct);
+        onUpdateProgressRef.current?.(playingBook.id, pct);
       }
     })();
     return () => {
@@ -428,7 +439,6 @@ export function Audiobooks({
     bookChapters.length,
     selectedVoice,
     isPlaying,
-    onUpdateProgress,
   ]);
 
   // Scroll active paragraph into comfortable view

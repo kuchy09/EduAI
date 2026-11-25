@@ -76,11 +76,14 @@ export function QuickDictionaryPopover({
     };
   }, [currentWord]);
 
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   // Handle outside click to close
   useEffect(() => {
     const handleOutsideClick = (e: MouseEvent | TouchEvent) => {
       if (popoverRef.current && !popoverRef.current.contains(e.target as Node)) {
-        onClose();
+        onCloseRef.current();
       }
     };
     const timer = setTimeout(() => {
@@ -93,7 +96,7 @@ export function QuickDictionaryPopover({
       document.removeEventListener('mousedown', handleOutsideClick);
       document.removeEventListener('touchstart', handleOutsideClick);
     };
-  }, [onClose]);
+  }, []);
 
   // Pronounce word using Web Speech API
   const handlePronounce = () => {

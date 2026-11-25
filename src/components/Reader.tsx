@@ -89,16 +89,53 @@ interface ReaderProps {
 }
 
 export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user, onUpdateProgress }: ReaderProps) {
+  const onUpdateProgressRef = useRef(onUpdateProgress);
+  onUpdateProgressRef.current = onUpdateProgress;
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('Bookmark saved');
   const [numPages, setNumPages] = useState<number | null>(null);
   const [pageNumber, setPageNumber] = useState(1);
+  const [pdfLoadError, setPdfLoadError] = useState<string | null>(null);
+  const [allowSummaryFallback, setAllowSummaryFallback] = useState(false);
+  const [binaryAvailability, setBinaryAvailability] = useState<'checking' | 'available' | 'missing'>('checking');
   const isNativeEpub =
     book.format === 'epub' ||
     String(book.fileUrl || '').toLowerCase().split('?')[0].endsWith('.epub');
   const [activeFormat, setActiveFormat] = useState<'epub' | 'pdf'>(
     isNativeEpub ? 'epub' : 'pdf'
   );
+
+  useEffect(() => {
+    setPdfLoadError(null);
+    setAllowSummaryFallback(false);
+  }, [book.id, book.fileUrl]);
+
+  useEffect(() => {
+    if (
+      activeFormat !== 'pdf' ||
+      allowSummaryFallback ||
+      (book.fileUrl && book.fileUrl.startsWith('http'))
+    ) {
+      setBinaryAvailability('available');
+      return;
+    }
+    const key = book.fileUrl || book.id;
+    let cancelled = false;
+    setBinaryAvailability('checking');
+    fetch(`/api/download/exists?key=${encodeURIComponent(key)}`)
+      .then((r) => (r.ok ? r.json() : { available: false }))
+      .then((json) => {
+        if (!cancelled) {
+          setBinaryAvailability(json?.available ? 'available' : 'missing');
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setBinaryAvailability('available');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [book.id, book.fileUrl, activeFormat, allowSummaryFallback]);
 
   useEffect(() => {
     setActiveFormat(
@@ -397,16 +434,16 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
   useEffect(() => {
     if (book.fileUrl && numPages) {
       const currentProgress = Math.min(100, Math.round((pageNumber / numPages) * 100));
-      if (currentProgress !== readingProgress) {
-        setReadingProgress(currentProgress);
+      setReadingProgress(prev => {
+        if (prev === currentProgress) return prev;
         saveReadingProgressLocal(book.id, currentProgress, pageNumber, numPages);
-        const timer = setTimeout(() => {
-          onUpdateProgress?.(book.id, currentProgress);
+        setTimeout(() => {
+          onUpdateProgressRef.current?.(book.id, currentProgress);
         }, 0);
-        return () => clearTimeout(timer);
-      }
+        return currentProgress;
+      });
     }
-  }, [pageNumber, numPages, book.id, book.fileUrl, onUpdateProgress, readingProgress]);
+  }, [pageNumber, numPages, book.id, book.fileUrl]);
 
   useEffect(() => {
     const container = scrollContainerRef.current;
@@ -420,7 +457,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
         if (pct !== prev) {
           setTimeout(() => {
             saveReadingProgressLocal(book.id, pct, undefined, undefined, pct);
-            onUpdateProgress?.(book.id, pct);
+            onUpdateProgressRef.current?.(book.id, pct);
           }, 0);
           return pct;
         }
@@ -432,7 +469,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     return () => {
       container.removeEventListener('scroll', handleScroll);
     };
-  }, [book.id, book.fileUrl, theme, onUpdateProgress]);
+  }, [book.id, book.fileUrl]);
 
   // Track Daily Reading Goal time and pages
   const prevPageRef = useRef<number>(pageNumber);
@@ -1137,9 +1174,9 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
               onChapterProgress={(idx, total) => {
                 setPageNumber(idx + 1);
                 setNumPages(total);
-                if (total > 0 && onUpdateProgress) {
+                if (total > 0) {
                   const pct = Math.min(100, Math.round(((idx + 1) / total) * 100));
-                  onUpdateProgress(book.id, pct);
+                  onUpdateProgressRef.current?.(book.id, pct);
                 }
               }}
             />
@@ -1150,17 +1187,49 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                 theme === 'dark' ? 'bg-[#1C1C1E]' : theme === 'amoled' ? 'bg-black' : 'bg-[#F4ECD8]'
               }`}
             >
+              {!cachedBlobUrl && !allowSummaryFallback && binaryAvailability === 'checking' ? (
+                <div className="flex flex-col items-center justify-center p-20 text-stone-500 font-sans">
+                  <div className="w-8 h-8 border-4 border-brand-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                  Checking cloud storage...
+                </div>
+              ) : !cachedBlobUrl && !allowSummaryFallback && binaryAvailability === 'missing' ? (
+                <div className="flex flex-col items-center justify-center p-8 sm:p-16 text-stone-700 dark:text-stone-200 max-w-md text-center font-sans">
+                  <FileText className="w-12 h-12 mb-4 text-amber-500 opacity-80" />
+                  <p className="font-semibold text-base mb-1.5">
+                    Source textbook file not found in cloud storage
+                  </p>
+                  <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
+                    The catalog entry for &ldquo;{book.title}&rdquo; exists ({book.fileUrl || book.id}), but its PDF binary was never stored in Backblaze B2 (Edu-AI-Cloud) or Supabase Storage. Re-attach the PDF in the Admin Dashboard to restore the full book.
+                  </p>
+                  <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPdfLoadError(null);
+                        setAllowSummaryFallback(true);
+                      }}
+                      className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                    >
+                      Open Quick Syllabus Summary
+                    </button>
+                  </div>
+                </div>
+              ) : (
               <Document
                 file={
                   cachedBlobUrl ||
                   ((book.fileUrl && book.fileUrl.startsWith('http')) 
                     ? book.fileUrl 
-                    : `/api/download?key=${encodeURIComponent(book.fileUrl || book.id)}`)
+                    : `/api/download?key=${encodeURIComponent(book.fileUrl || book.id)}${allowSummaryFallback ? '&fallback=summary' : ''}`)
                 }
-                onLoadSuccess={onDocumentLoadSuccess}
+                onLoadSuccess={(doc) => {
+                  setPdfLoadError(null);
+                  onDocumentLoadSuccess(doc);
+                }}
                 onItemClick={({ pageNumber }) => setPageNumber(pageNumber)}
                 onLoadError={(error) => {
                   console.warn("Document load error caught gracefully:", error.message);
+                  setPdfLoadError(error.message || 'Missing or unreadable PDF');
                 }}
                 loading={
                   <div className="flex flex-col items-center justify-center p-20 text-stone-500 font-sans">
@@ -1169,10 +1238,32 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                   </div>
                 }
                 error={
-                  <div className="flex flex-col items-center justify-center p-20 text-red-500 max-w-md text-center font-sans">
-                    <FileText className="w-12 h-12 mb-4 opacity-50" />
-                    <p>Failed to load PDF. It may be restricted or formatted incorrectly.</p>
-                    <DownloadFallback book={book} />
+                  <div className="flex flex-col items-center justify-center p-8 sm:p-16 text-stone-700 dark:text-stone-200 max-w-md text-center font-sans">
+                    <FileText className="w-12 h-12 mb-4 text-amber-500 opacity-80" />
+                    <p className="font-semibold text-base mb-1.5">
+                      Source textbook file not found in cloud storage
+                    </p>
+                    <p className="text-xs text-stone-500 dark:text-stone-400 leading-relaxed">
+                      The catalog entry for &ldquo;{book.title}&rdquo; exists ({book.fileUrl || book.id}), but its PDF binary was never stored in Backblaze B2 (Edu-AI-Cloud) or Supabase Storage. Re-attach the PDF in the Admin Dashboard to restore the full book.
+                    </p>
+                    {pdfLoadError && (
+                      <p className="mt-2 font-mono text-[10px] text-stone-400 break-all">{pdfLoadError}</p>
+                    )}
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      {!allowSummaryFallback && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPdfLoadError(null);
+                            setAllowSummaryFallback(true);
+                          }}
+                          className="px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                        >
+                          Open Quick Syllabus Summary
+                        </button>
+                      )}
+                      <DownloadFallback book={book} />
+                    </div>
                   </div>
                 }
               >
@@ -1238,6 +1329,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                   </AnimatePresence>
                 )}
               </Document>
+              )}
               
             </div>
           ) : (

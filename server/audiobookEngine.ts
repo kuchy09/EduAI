@@ -102,6 +102,21 @@ function isAuthKeyError(err: any): boolean {
   );
 }
 
+function isBillingOrQuotaError(err: any): boolean {
+  const raw = String(err?.message || err || "");
+  const lower = raw.toLowerCase();
+  return (
+    err?.status === 402 ||
+    err?.status === 429 ||
+    err?.code === 402 ||
+    err?.code === 429 ||
+    lower.includes("payment required") ||
+    lower.includes("prepayment credits") ||
+    lower.includes("resource_exhausted") ||
+    lower.includes("quota")
+  );
+}
+
 function humanizeMathAndAbbreviationsForSpeech(text: string): string {
   return String(text || "")
     .replace(/\be\.m\.f\./gi, "electromotive force")
@@ -647,12 +662,17 @@ ${truncatedSource}
         lastRejectedKeyHash = keyState.keyHash;
         break;
       }
+      if (isBillingOrQuotaError(err)) {
+        break;
+      }
     }
   }
 
   if (!generated) {
     const notice = isAuthKeyError(lastError)
       ? "Configured GEMINI_API_KEY was rejected by Google AI. Using extracted Library chapter narration with Device Voice."
+      : isBillingOrQuotaError(lastError)
+      ? "AI Studio credits or quota are currently depleted. Using extracted Library chapter narration with Device Voice."
       : "Cloud AI Tutor narration is temporarily busy. Playing full extracted textbook chapter with local concept diagrams.";
     return {
       bookId: params.bookId,
@@ -828,13 +848,18 @@ export async function synthesizeAudiobookSpeech(params: {
         lastRejectedKeyHash = keyState.keyHash;
         break;
       }
+      if (isBillingOrQuotaError(err)) {
+        break;
+      }
     }
   }
 
   if (!wavBuffer) {
-    if (isAuthKeyError(lastErr)) {
+    if (isAuthKeyError(lastErr) || isBillingOrQuotaError(lastErr)) {
       const authErr: any = new Error(
-        "Configured GEMINI_API_KEY is invalid for Studio TTS. Using Device Voice."
+        isBillingOrQuotaError(lastErr)
+          ? "AI Studio credits or quota are depleted for Studio TTS. Using Device Voice."
+          : "Configured GEMINI_API_KEY is invalid for Studio TTS. Using Device Voice."
       );
       authErr.status = 503;
       throw authErr;

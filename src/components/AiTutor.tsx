@@ -36,6 +36,7 @@ interface ChatSession {
   title: string;
   createdAt: string;
   updatedAt?: string;
+  source?: 'tutor' | 'reader' | 'edulab';
   messages: Message[];
 }
 
@@ -61,19 +62,24 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
   });
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isDesktopSidebarOpen, setIsDesktopSidebarOpen] = useState(false);
+  const onSidebarStateChangeRef = useRef(onSidebarStateChange);
+  onSidebarStateChangeRef.current = onSidebarStateChange;
+  const lastReportedOpenRef = useRef<boolean | null>(null);
 
   // Sync with prop when changed from outside
   useEffect(() => {
     if (typeof isSidebarOpen === 'boolean') {
       if (window.innerWidth < 768) {
         setIsMobileSidebarOpen(isSidebarOpen);
+        setIsDesktopSidebarOpen(false);
       } else {
         setIsDesktopSidebarOpen(isSidebarOpen);
+        setIsMobileSidebarOpen(false);
       }
     }
   }, [isSidebarOpen]);
 
-  // Listen to custom event from the div button in the Header above
+  // Listen to custom event from fallback toggle triggers
   useEffect(() => {
     const handleToggle = () => {
       if (window.innerWidth < 768) {
@@ -86,12 +92,14 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     return () => window.removeEventListener('toggle-sage-sidebar', handleToggle);
   }, []);
 
-  // Broadcast state change back to Header & App
+  // Broadcast state change back to Header & App only when isOpen actually changes
   useEffect(() => {
     const isOpen = isMobileSidebarOpen || isDesktopSidebarOpen;
+    if (lastReportedOpenRef.current === isOpen) return;
+    lastReportedOpenRef.current = isOpen;
     window.dispatchEvent(new CustomEvent('sage-sidebar-state-change', { detail: { isOpen } }));
-    onSidebarStateChange?.(isOpen);
-  }, [isMobileSidebarOpen, isDesktopSidebarOpen, onSidebarStateChange]);
+    onSidebarStateChangeRef.current?.(isOpen);
+  }, [isMobileSidebarOpen, isDesktopSidebarOpen]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [liveStreamingText, setLiveStreamingText] = useState<string>('');
   const [liveThoughtText, setLiveThoughtText] = useState<string>('');
@@ -100,6 +108,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
   const [editingMsgId, setEditingMsgId] = useState<string | null>(null);
   const [editInputText, setEditInputText] = useState<string>('');
+  const [historySearch, setHistorySearch] = useState<string>('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -353,10 +362,16 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: userPrompt };
 
     const nowIso = new Date().toISOString();
+    const targetSessionId =
+      activeSession.id === 'default_session' ? `chat_${Date.now()}` : activeSession.id;
+    if (targetSessionId !== activeSession.id) {
+      setActiveSessionId(targetSessionId);
+    }
     setSessions(prev => prev.map(s => {
       if (s.id === activeSession.id) {
         return {
           ...s,
+          id: targetSessionId,
           title: s.title === 'Introduction with Sage' || s.title === 'New Conversation' ? userPrompt.slice(0, 25) : s.title,
           updatedAt: nowIso,
           messages: [...s.messages, userMessage]
@@ -387,7 +402,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
         const replyIso = new Date().toISOString();
         setSessions(prev => prev.map(s => {
-          if (s.id === activeSession.id) {
+          if (s.id === targetSessionId || s.id === activeSession.id) {
             return {
               ...s,
               updatedAt: replyIso,
@@ -485,11 +500,15 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     return savedLastActive || 'default_session';
   });
 
+  // Tracks which user/guest scope has completed initial localStorage hydration so state transitions never overwrite another scope
+  const [hydratedScope, setHydratedScope] = useState<string>(() => user?.id || 'guest');
+
   const lastSyncedDigestRef = useRef<string>('');
   const lastRemotePullAtRef = useRef<number>(0);
 
   // Hydrate latest Sage AI conversations on mount, user change, sync event, and window focus/visibility
   useEffect(() => {
+    const scopeKey = user?.id || 'guest';
     const chatsKey = getAiChatsStorageKey(user?.id);
     const activeKey = getAiLastActiveStorageKey(user?.id);
     const delKey = getAiDeletedStorageKey(user?.id);
@@ -498,18 +517,30 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     const savedSessions = safeStorage.getJSON<ChatSession[]>(chatsKey, []);
     const savedActive = safeStorage.getItem(activeKey);
 
-    if (Object.keys(savedDeleted).length > 0) {
-      setDeletedSessions(savedDeleted);
-    }
-    if (Array.isArray(savedSessions) && savedSessions.length > 0) {
-      setSessions(prev => {
-        const merged = mergeAiChatSessions(prev, savedSessions, savedDeleted);
-        return merged.length > 0 ? merged : [buildDefaultSession()];
-      });
-    }
+    setDeletedSessions(savedDeleted);
+    setSessions(() => {
+      const merged = mergeAiChatSessions(savedSessions, [], savedDeleted);
+      return merged.length > 0 ? merged : [buildDefaultSession()];
+    });
     if (savedActive) {
       setActiveSessionId(savedActive);
+    } else if (savedSessions.length > 0 && savedSessions[0]?.id) {
+      setActiveSessionId(savedSessions[0].id);
+    } else {
+      setActiveSessionId('default_session');
     }
+    setHydratedScope(scopeKey);
+
+    const handleExternalUpdated = (e: any) => {
+      if (e?.detail?.userId && scopeKey !== e.detail.userId) return;
+      const latestSaved = safeStorage.getJSON<ChatSession[]>(chatsKey, []);
+      const latestDel = safeStorage.getJSON<Record<string, string>>(delKey, {});
+      setDeletedSessions(latestDel);
+      setSessions(prev => {
+        const merged = mergeAiChatSessions(prev, latestSaved, latestDel);
+        return merged.length > 0 ? merged : [buildDefaultSession()];
+      });
+    };
 
     const handleSyncUpdated = (e: any) => {
       if (e?.detail?.userId && user?.id && e.detail.userId !== user.id) return;
@@ -560,6 +591,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     };
 
     window.addEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+    window.addEventListener('sage-ai-chats-updated', handleExternalUpdated);
 
     const pullRemoteLatest = (force = false) => {
       if (!user?.id) return;
@@ -591,6 +623,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
     return () => {
       window.removeEventListener(ACCOUNT_SYNC_EVENT, handleSyncUpdated);
+      window.removeEventListener('sage-ai-chats-updated', handleExternalUpdated);
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('pagehide', handlePageHide);
@@ -602,6 +635,11 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
   // Sync sessions, deletions & active thread to localStorage & cross-device cloud whenever updated
   useEffect(() => {
+    const scopeKey = user?.id || 'guest';
+    if (hydratedScope !== scopeKey) {
+      return;
+    }
+
     safeStorage.setJSON(getAiChatsStorageKey(user?.id), sessions);
     safeStorage.setJSON(getAiDeletedStorageKey(user?.id), deletedSessions);
     safeStorage.setItem(getAiLastActiveStorageKey(user?.id), activeSessionId);
@@ -633,7 +671,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         { immediate: !isGenerating }
       );
     }
-  }, [sessions, activeSessionId, deletedSessions, user?.id, isGenerating]);
+  }, [sessions, activeSessionId, deletedSessions, user?.id, isGenerating, hydratedScope]);
 
   // Support prefill prompts from platform search or contextual deep dives
   useEffect(() => {
@@ -770,6 +808,9 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     if (
       content.includes('sorry, i encountered an error') ||
       content.includes('network error') ||
+      content.includes('*(error:') ||
+      content.includes('settings > secrets') ||
+      content.includes('timed out') ||
       nextMsg.id.endsWith('err') ||
       nextMsg.id.endsWith('err2')
     ) {
@@ -894,9 +935,14 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: promptToSend };
     const startIso = new Date().toISOString();
-    
+    const targetSessionId =
+      activeSession.id === 'default_session' ? `chat_${Date.now()}` : activeSession.id;
+
     if (!options?.skipAppendUserMessage) {
-      // Add user message to active session list and rename session from default if needed
+      if (targetSessionId !== activeSession.id) {
+        setActiveSessionId(targetSessionId);
+      }
+      // Add user message to active session list, promote default_session to a unique immutable ID, and rename if needed
       setSessions(prev => prev.map(s => {
         if (s.id === activeSession.id) {
           let updatedTitle = s.title;
@@ -905,6 +951,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
           }
           return {
             ...s,
+            id: targetSessionId,
             title: updatedTitle,
             updatedAt: startIso,
             messages: [...s.messages, userMessage]
@@ -916,6 +963,12 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
     const assistantMsgId = Date.now().toString() + 'ai';
     const historyToSend = (options?.historyMessages ?? messages).slice(-8).map(m => ({ role: m.role, content: m.content }));
+
+    let didTimeout = false;
+    const timeoutId = window.setTimeout(() => {
+      didTimeout = true;
+      controller.abort();
+    }, 60000);
 
     try {
       const allowDataCollection = JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
@@ -970,7 +1023,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                 accumulated += parsed.text;
                 setLiveStreamingText(accumulated);
               } else if (parsed.error) {
-                accumulated += `\n\n*(Error: ${parsed.error})*`;
+                accumulated += accumulated.trim() ? `\n\n*(Error: ${parsed.error})*` : String(parsed.error);
                 setLiveStreamingText(accumulated);
               }
             } catch {
@@ -987,13 +1040,13 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
             try {
               const parsed = JSON.parse(dataStr);
               if (parsed.text) accumulated += parsed.text;
-              else if (parsed.error) accumulated += `\n\n*(Error: ${parsed.error})*`;
+              else if (parsed.error) accumulated += accumulated.trim() ? `\n\n*(Error: ${parsed.error})*` : String(parsed.error);
             } catch {}
           }
         }
 
         setSessions(prev => prev.map(s => {
-          if (s.id === activeSession.id) {
+          if (s.id === targetSessionId || s.id === activeSession.id) {
             return {
               ...s,
               updatedAt: new Date().toISOString(),
@@ -1018,7 +1071,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
       } else if (response.ok) {
         const data = await response.json();
         setSessions(prev => prev.map(s => {
-          if (s.id === activeSession.id) {
+          if (s.id === targetSessionId || s.id === activeSession.id) {
             return {
               ...s,
               updatedAt: replyIso,
@@ -1037,7 +1090,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
       } else {
         const errorData = await response.json().catch(() => ({}));
         setSessions(prev => prev.map(s => {
-          if (s.id === activeSession.id) {
+          if (s.id === targetSessionId || s.id === activeSession.id) {
             return {
               ...s,
               updatedAt: replyIso,
@@ -1055,11 +1108,11 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         }));
       }
     } catch (err: any) {
-      if (err?.name === 'AbortError') {
+      if (err?.name === 'AbortError' && !didTimeout) {
         return;
       }
       setSessions(prev => prev.map(s => {
-        if (s.id === activeSession.id) {
+        if (s.id === targetSessionId || s.id === activeSession.id) {
           return {
             ...s,
             updatedAt: new Date().toISOString(),
@@ -1068,7 +1121,9 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
               { 
                 id: Date.now().toString() + 'err2', 
                 role: 'assistant', 
-                content: 'Sorry, I encountered a network error. Please try again.' 
+                content: didTimeout
+                  ? 'Sorry, the request timed out before Sage finished responding. Please click Retry.'
+                  : 'Sorry, I encountered a network error. Please try again.'
               }
             ]
           };
@@ -1076,6 +1131,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         return s;
       }));
     } finally {
+      window.clearTimeout(timeoutId);
       abortControllerRef.current = null;
       setLiveStreamingText('');
       setLiveThoughtText('');
@@ -1118,9 +1174,19 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     }
   ];
 
-  const SidebarContent = () => (
+  const filteredSessions = sessions.filter((sessionItem) => {
+    const q = historySearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      String(sessionItem.title || '').toLowerCase().includes(q) ||
+      (Array.isArray(sessionItem.messages) &&
+        sessionItem.messages.some((m) => String(m?.content || '').toLowerCase().includes(q)))
+    );
+  });
+
+  const sidebarPanelContent = (
     <div className="flex flex-col h-full bg-slate-50 dark:bg-[#161616]/75 dark:backdrop-blur-xl border-r border-slate-200/60 dark:border-white/10 font-sans select-none sidebar-pane">
-      <div className="px-4 pb-4 pt-16 sm:pt-[72px] border-b border-slate-200/50 dark:border-white/10 shrink-0">
+      <div className="px-4 pb-4 pt-16 sm:pt-[72px] border-b border-slate-200/50 dark:border-white/10 shrink-0 space-y-2.5">
         <button
           onClick={handleStartNewChat}
           className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-slate-900 dark:bg-indigo-600/80 hover:bg-slate-800 dark:hover:bg-indigo-600 text-white font-semibold text-sm rounded-2xl shadow-sm hover:shadow-md transition-all active:scale-[0.99] cursor-pointer"
@@ -1128,16 +1194,37 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
           <Plus className="w-4 h-4" />
           <span>New Chat Session</span>
         </button>
+
+        {sessions.length > 3 && (
+          <input
+            type="text"
+            value={historySearch}
+            onChange={(e) => setHistorySearch(e.target.value)}
+            placeholder="Search chat history..."
+            aria-label="Search chat history"
+            className="w-full px-3 py-1.5 rounded-xl bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 text-xs text-slate-900 dark:text-white placeholder:text-slate-400 focus:outline-none focus:border-indigo-500"
+          />
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-1.5 scrollbar-thin">
-        <div className="flex items-center gap-2 px-2 pb-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
-          <Clock className="w-3.5 h-3.5" />
-          <span>Your Conversations</span>
+        <div className="flex items-center justify-between gap-2 px-2 pb-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
+          <span className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5" />
+            <span>Chat History</span>
+          </span>
+          <span className="font-mono text-[11px]">{filteredSessions.length}</span>
         </div>
 
-        {sessions.map((sessionItem) => {
+        {filteredSessions.map((sessionItem) => {
           const isActive = sessionItem.id === activeSessionId;
+          const originLabel =
+            sessionItem.source === 'reader' || sessionItem.id.startsWith('reader_')
+              ? 'Book Reader'
+              : sessionItem.source === 'edulab' || sessionItem.id.startsWith('edulab_')
+              ? 'EduLab'
+              : null;
+
           return (
             <div
               key={sessionItem.id}
@@ -1159,20 +1246,27 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                 <MessageSquare className="w-3.5 h-3.5" />
               </div>
               
-              <div className="flex-1 min-w-0 pr-6">
+              <div className="flex-1 min-w-0 pr-7">
                 <p className="text-xs font-medium truncate leading-normal" title={sessionItem.title}>
                   {sessionItem.title}
                 </p>
-                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-[#8E8E93] mt-0.5">
+                <div className="flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-[#8E8E93] mt-0.5 truncate">
                   <Calendar className="w-2.5 h-2.5 shrink-0" />
                   <span>{sessionItem.createdAt}</span>
+                  {originLabel && (
+                    <>
+                      <span>·</span>
+                      <span className="text-indigo-500 dark:text-indigo-400 font-semibold">{originLabel}</span>
+                    </>
+                  )}
                 </div>
               </div>
 
               <button
                 onClick={(e) => handleDeleteChat(sessionItem.id, e)}
-                className="absolute right-2 p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 transition-all cursor-pointer"
-                title="Delete convo"
+                className="absolute right-2 p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg opacity-75 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100 transition-all cursor-pointer"
+                title="Delete from Chat History"
+                aria-label="Delete conversation"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -1182,8 +1276,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
       </div>
 
       <div className="p-4 border-t border-slate-200/50 dark:border-white/10 shrink-0 bg-slate-100/40 dark:bg-[#141414] text-[11px] text-slate-400 dark:text-[#8E8E93] flex items-center justify-between">
-        <span>Continuous Auto-Save</span>
-        <span className="font-bold text-slate-500 dark:text-[#D1D1D6]">Edu AI Core</span>
+        <span>Saved Until You Delete</span>
+        <span className="font-bold text-slate-500 dark:text-[#D1D1D6]">Sage AI Core</span>
       </div>
     </div>
   );
@@ -1198,7 +1292,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         }`}
       >
         <div className="w-72 h-full flex flex-col">
-          <SidebarContent />
+          {sidebarPanelContent}
         </div>
       </div>
 
@@ -1220,7 +1314,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
               transition={{ type: 'tween', duration: 0.25 }}
               className="md:hidden fixed top-0 bottom-0 left-0 w-72 h-full bg-white dark:bg-[#161616]/85 dark:backdrop-blur-2xl z-50 shadow-2xl border-r border-slate-200 dark:border-white/10 sidebar-pane"
             >
-              <SidebarContent />
+              {sidebarPanelContent}
             </motion.div>
           </>
         )}

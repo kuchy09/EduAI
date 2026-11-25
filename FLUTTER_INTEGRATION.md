@@ -63,7 +63,7 @@ Run the function tests: `cd supabase/functions/ai-tutor && deno test --allow-env
 
 1. In your provider consoles, register the Supabase callback URL:
    `https://<YOUR_PROJECT_REF>.supabase.co/auth/v1/callback`
-2. In Supabase Dashboard (**Authentication -> Providers**), enable **Google**, **Apple**, and **GitHub** with their Client IDs and Secrets (or export `SUPABASE_AUTH_EXTERNAL_*` env vars and run `./supabase/deploy-edu-claude.sh`).
+2. In Supabase Dashboard (**Authentication -> Providers**), enable **Google**, **Apple**, and **GitHub** with their Client IDs and Secrets (or export `SUPABASE_AUTH_EXTERNAL_*` env vars and run `./supabase/deploy-edu-ai.sh`).
 3. In **Authentication -> URL Configuration -> Redirect URLs**, add `io.supabase.eduai://login-callback` for mobile deep links.
 4. After generating `android/` and `ios/` in `mobile/`, register the custom URL scheme `io.supabase.eduai` (`host="login-callback"` in `android/app/src/main/AndroidManifest.xml`, and `CFBundleURLSchemes = ["io.supabase.eduai"]` in `ios/Runner/Info.plist`).
 

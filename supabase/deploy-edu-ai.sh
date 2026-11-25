@@ -2,17 +2,17 @@
 set -euo pipefail
 
 # ==============================================================================
-# One-Command Provisioner for Supabase: Edu AI Org / Edu-Claude
+# One-Command Provisioner for Supabase: Edu AI Org / Edu AI
 # Usage:
-#   SUPABASE_ACCESS_TOKEN=sbp_... SUPABASE_PROJECT_REF=<edu-claude-ref> ./supabase/deploy-edu-claude.sh
+#   SUPABASE_ACCESS_TOKEN=sbp_... SUPABASE_PROJECT_REF=<edu-ai-ref> ./supabase/deploy-edu-ai.sh
 # ==============================================================================
 
 if [ -z "${SUPABASE_PROJECT_REF:-}" ]; then
-  echo "Error: SUPABASE_PROJECT_REF is required (find it in Edu AI Org -> Edu-Claude -> Project Settings -> General -> Reference ID)."
+  echo "Error: SUPABASE_PROJECT_REF is required (find it in Edu AI Org -> Edu AI -> Project Settings -> General -> Reference ID)."
   exit 1
 fi
 
-echo "1/4 Linking to Edu AI Org / Edu-Claude (${SUPABASE_PROJECT_REF})..."
+echo "1/4 Linking to Edu AI Org / Edu AI (${SUPABASE_PROJECT_REF})..."
 npx supabase link --project-ref "${SUPABASE_PROJECT_REF}"
 
 echo "2/4 Pushing Database Schema, Table Editor, Storage Buckets, RLS, Realtime & Auth Triggers..."
@@ -27,7 +27,7 @@ if [ ${#SECRETS_ARGS[@]} -gt 0 ]; then
   npx supabase secrets set "${SECRETS_ARGS[@]}" --project-ref "${SUPABASE_PROJECT_REF}"
 fi
 
-echo "4/5 Deploying all 4 Edu-Claude Edge Functions (JWT verification enabled)..."
+echo "4/5 Deploying all 4 Edu AI Edge Functions (JWT verification enabled)..."
 for fn in ai-tutor reader-assistant learning-path quiz-generator; do
   npx supabase functions deploy "${fn}" --project-ref "${SUPABASE_PROJECT_REF}"
 done
@@ -72,4 +72,4 @@ if [ -n "${SUPABASE_ACCESS_TOKEN:-}" ]; then
     -d "${AUTH_PATCH_JSON}" >/dev/null
 fi
 
-echo "Done! Edu AI Org / Edu-Claude is fully provisioned."
+echo "Done! Edu AI Org / Edu AI is fully provisioned."

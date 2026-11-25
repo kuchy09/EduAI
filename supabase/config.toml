@@ -1,5 +1,5 @@
-# Supabase Project Configuration — Edu AI Org / Edu-Claude
-project_id = "edu-claude"
+# Supabase Project Configuration — Edu AI Org / Edu AI
+project_id = "edu-ai"
 
 [api]
 enabled = true

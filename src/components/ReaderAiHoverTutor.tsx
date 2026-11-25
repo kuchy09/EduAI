@@ -34,6 +34,7 @@ import {
   pushAccountSyncPatch,
   flushPendingAccountSync,
   hydrateAccountSync,
+  recordExternalSageChatSession,
   ACCOUNT_SYNC_EVENT,
 } from '../lib/accountSyncService';
 
@@ -136,7 +137,10 @@ export function ReaderAiHoverTutor({
     };
   }, [book.id, user?.id, isOpen]);
 
-  // Sync messages to user-scoped storage and cloud per book
+  // Track active reader thread suffix so clicking "New Conversation" never erases earlier reader chats from Chat History
+  const [threadIdSuffix, setThreadIdSuffix] = useState<string>('');
+
+  // Sync messages to user-scoped storage, cloud per book, and unified Sage Chat History
   useEffect(() => {
     const scopedKey = getReaderChatStorageKey(book.id, user?.id);
     safeStorage.setJSON(scopedKey, messages);
@@ -147,6 +151,16 @@ export function ReaderAiHoverTutor({
     }
 
     const hasUserActivity = messages.some((m) => m.role === 'user');
+    if (hasUserActivity) {
+      recordExternalSageChatSession(user?.id, {
+        id: threadIdSuffix ? `reader_${book.id}_${threadIdSuffix}` : `reader_${book.id}`,
+        title: `Book: ${book.title}`,
+        source: 'reader',
+        updatedAt: new Date().toISOString(),
+        messages,
+      });
+    }
+
     if (user?.id && hasUserActivity) {
       pushAccountSyncPatch(
         user.id,
@@ -155,7 +169,7 @@ export function ReaderAiHoverTutor({
         { immediate: !isGenerating }
       );
     }
-  }, [messages, book.id, user?.id, isGenerating]);
+  }, [messages, book.id, book.title, user?.id, isGenerating, threadIdSuffix]);
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -252,25 +266,27 @@ export function ReaderAiHoverTutor({
 
   const handleResetChat = () => {
     triggerCapsuleFeedback({ pitch: 480, volume: 0.15, hapticDuration: 15 });
+    // Preserve any previous conversation in unified Chat History before starting a fresh popup thread
+    if (messages.some((m) => m.role === 'user')) {
+      recordExternalSageChatSession(user?.id, {
+        id: threadIdSuffix ? `reader_${book.id}_${threadIdSuffix}` : `reader_${book.id}`,
+        title: `Book: ${book.title}`,
+        source: 'reader',
+        updatedAt: new Date().toISOString(),
+        messages,
+      });
+    }
+    const nextSuffix = String(Date.now());
+    setThreadIdSuffix(nextSuffix);
     const freshMessages: Message[] = [
       {
         id: Date.now().toString(),
         role: 'assistant',
-        content: `I've refreshed our conversation! What would you like to explore on page **${pageNumber}** of *${book.title}*?`
+        content: `Started a fresh conversation thread (previous messages remain saved in Chat History). What would you like to explore on page **${pageNumber}** of *${book.title}*?`
       }
     ];
     skipCloudPushRef.current = true;
     setMessages(freshMessages);
-    safeStorage.removeItem(`sage_reader_chat_${book.id}`);
-    safeStorage.removeItem(getReaderChatStorageKey(book.id, user?.id));
-    if (user?.id) {
-      pushAccountSyncPatch(
-        user.id,
-        { readerChats: { [book.id]: freshMessages } },
-        undefined,
-        { immediate: true }
-      );
-    }
   };
 
   const isInputUnanswered = (msgIndex: number): boolean => {

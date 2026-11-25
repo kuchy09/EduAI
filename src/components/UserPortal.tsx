@@ -82,7 +82,22 @@ export function UserPortal({ user, profile, onStartChat, onNavigate }: UserPorta
   useEffect(() => {
     setCurrentUser((prev) => {
       const next = buildPortalUser();
-      return { ...prev, ...next, avatar: next.avatar || prev.avatar };
+      const resolvedAvatar = next.avatar || prev.avatar;
+      if (
+        prev.id === next.id &&
+        prev.name === next.name &&
+        prev.email === next.email &&
+        prev.avatar === resolvedAvatar &&
+        prev.role === next.role &&
+        prev.title === next.title &&
+        prev.institution === next.institution &&
+        prev.bio === next.bio &&
+        prev.location === next.location &&
+        JSON.stringify(prev.subjects) === JSON.stringify(next.subjects)
+      ) {
+        return prev;
+      }
+      return { ...prev, ...next, avatar: resolvedAvatar };
     });
   }, [
     user?.id,

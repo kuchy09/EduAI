@@ -1,5 +1,5 @@
 -- ==============================================================================
--- EDU AI ORG / EDU-CLAUDE — MASTER STANDALONE SUPABASE BLUEPRINT
+-- EDU AI ORG / EDU AI — MASTER STANDALONE SUPABASE BLUEPRINT
 -- ==============================================================================
 -- Safe, 100% idempotent single-pass setup script for Supabase SQL Editor.
 -- Configures:
@@ -103,6 +103,12 @@ CREATE TABLE IF NOT EXISTS public.books (
   pdf_cover_page integer DEFAULT 1,
   custom_cover jsonb,
   file_url text,
+  b2_bucket text,
+  b2_key text,
+  subject_category text,
+  book_format text DEFAULT 'pdf',
+  storage_provider text DEFAULT 'b2',
+  synced_to_b2_at timestamptz,
   total_pages integer,
   file_size_bytes bigint,
   uploaded_by uuid,
@@ -110,6 +116,12 @@ CREATE TABLE IF NOT EXISTS public.books (
   updated_at timestamptz DEFAULT timezone('utc'::text, now()),
   CONSTRAINT books_title_author_key UNIQUE (title, author)
 );
+ALTER TABLE public.books ADD COLUMN IF NOT EXISTS subject_category text;
+ALTER TABLE public.books ADD COLUMN IF NOT EXISTS b2_bucket text;
+ALTER TABLE public.books ADD COLUMN IF NOT EXISTS b2_key text;
+ALTER TABLE public.books ADD COLUMN IF NOT EXISTS book_format text DEFAULT 'pdf';
+ALTER TABLE public.books ADD COLUMN IF NOT EXISTS storage_provider text DEFAULT 'b2';
+ALTER TABLE public.books ADD COLUMN IF NOT EXISTS synced_to_b2_at timestamptz;
 
 -- 3.4 Curriculums, Grade Levels, Subjects, Curriculum Books, Chapters, Sub-topics & RAG Chunks
 CREATE TABLE IF NOT EXISTS public.curriculums (
@@ -919,6 +931,8 @@ CREATE INDEX IF NOT EXISTS idx_profiles_role ON public.profiles (role);
 CREATE INDEX IF NOT EXISTS idx_profiles_full_name_trgm ON public.profiles USING gin (full_name gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_profiles_username_trgm ON public.profiles USING gin (username gin_trgm_ops);
 CREATE INDEX IF NOT EXISTS idx_books_title_trgm ON public.books USING gin (title gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS idx_books_curriculum_subject ON public.books (curriculum, subject_category);
+CREATE INDEX IF NOT EXISTS idx_books_b2_key ON public.books (b2_key);
 CREATE INDEX IF NOT EXISTS idx_book_chunks_vector ON public.book_content_chunks USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_reading_progress_user_book ON public.reading_progress (user_id, book_id);
 CREATE INDEX IF NOT EXISTS idx_highlights_user_book ON public.highlights (user_id, book_id);

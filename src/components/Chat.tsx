@@ -308,9 +308,26 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
     }, 3200);
   }, []);
 
+  const buildCurrentUserRef = useRef(buildCurrentUser);
+  buildCurrentUserRef.current = buildCurrentUser;
+
   useEffect(() => {
     setCurrentUser((prev) => {
       const next = buildCurrentUser();
+      if (
+        prev.id === next.id &&
+        prev.name === next.name &&
+        prev.email === next.email &&
+        prev.avatar === next.avatar &&
+        prev.role === next.role &&
+        prev.title === next.title &&
+        prev.institution === next.institution &&
+        prev.bio === next.bio &&
+        prev.location === next.location &&
+        JSON.stringify(prev.subjects) === JSON.stringify(next.subjects)
+      ) {
+        return prev;
+      }
       return { ...prev, ...next };
     });
   }, [buildCurrentUser]);
@@ -431,7 +448,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
 
     (async () => {
       try {
-        await updateSocialProfileApi(buildCurrentUser());
+        await updateSocialProfileApi(buildCurrentUserRef.current());
       } catch (_) {}
       if (mounted) {
         await hydrateFromServer();
@@ -731,7 +748,7 @@ export const Chat: React.FC<ChatProps> = ({ user, profile }) => {
       window.removeEventListener('focus', onFocusOrVisible);
       document.removeEventListener('visibilitychange', onFocusOrVisible);
     };
-  }, [user?.id, buildCurrentUser, hydrateFromServer, showToast]);
+  }, [user?.id, hydrateFromServer, showToast]);
 
   // Periodically prune stale typing indicators (> 4s old)
   useEffect(() => {

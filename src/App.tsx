@@ -80,7 +80,6 @@ import {
   applyGlobalCoverToBook,
   applyGlobalCoversToBooks,
   fetchGlobalBookCoversFromServer,
-  saveGlobalBookCover,
   setGlobalBookCovers,
 } from './lib/globalBookCoversService';
 import { isSystemBookConfigRow } from '../shared/canonicalBookCovers';
@@ -240,6 +239,12 @@ export default function App() {
   const [bookmarks, setBookmarks] = useState<Bookmark[]>([]);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isSageSidebarOpen, setIsSageSidebarOpen] = useState(false);
+  const handleToggleSageSidebar = useCallback(() => {
+    setIsSageSidebarOpen(prev => !prev);
+  }, []);
+  const handleConsumeInitialBook = useCallback(() => {
+    setAudiobookTargetBookId(null);
+  }, []);
   const [pendingFriendRequestsCount, setPendingFriendRequestsCount] = useState(0);
   const [pendingSocialBadgeCount, setPendingSocialBadgeCount] = useState(0);
   const getPersistedBooks = useCallback((baseBooks: Book[], userIdOverride?: string): Book[] => {
@@ -271,8 +276,12 @@ export default function App() {
 
   const handleUpdateProgress = useCallback((bookId: string, progress: number) => {
     const bounded = Math.max(0, Math.min(100, Math.round(progress)));
-    setBooks(prev => prev.map(b => b.id === bookId ? { ...b, readProgress: bounded } : b));
-    setActiveBook(prev => prev && prev.id === bookId ? { ...prev, readProgress: bounded } : prev);
+    setBooks(prev => {
+      const target = prev.find(b => b.id === bookId);
+      if (!target || target.readProgress === bounded) return prev;
+      return prev.map(b => b.id === bookId ? { ...b, readProgress: bounded } : b);
+    });
+    setActiveBook(prev => (prev && prev.id === bookId && prev.readProgress !== bounded ? { ...prev, readProgress: bounded } : prev));
     const uid = session?.user?.id;
     if (uid) {
       const progressKey = getReadingProgressMapStorageKey(uid);
@@ -537,7 +546,8 @@ export default function App() {
   const loadUnifiedCatalog = useCallback(async () => {
     try {
       let serverBooks: Book[] = [];
-      let deletedIds = new Set<string>();
+      const localDeletedRaw = safeStorage.getJSON<string[]>('edu_ai_deleted_book_ids', []);
+      let deletedIds = new Set<string>(Array.isArray(localDeletedRaw) ? localDeletedRaw : []);
 
       try {
         const res = await fetch('/api/books', { headers: { 'Cache-Control': 'no-cache' } });
@@ -547,7 +557,10 @@ export default function App() {
           if (payload.globalBookCovers && typeof payload.globalBookCovers === 'object') {
             setGlobalBookCovers(payload.globalBookCovers, { notify: false });
           }
-          if (Array.isArray(payload.deletedIds)) deletedIds = new Set(payload.deletedIds);
+          if (Array.isArray(payload.deletedIds)) {
+            deletedIds = new Set(payload.deletedIds);
+            safeStorage.setJSON('edu_ai_deleted_book_ids', payload.deletedIds);
+          }
         }
       } catch (apiErr) {
         console.warn('[App] /api/books fetch notice:', apiErr);
@@ -582,7 +595,7 @@ export default function App() {
                 id: b.id,
                 title: b.title,
                 author: b.author || 'Unknown',
-                coverImage: b.cover_image?.includes('unsplash.com') ? '' : (b.cover_image || ''),
+                coverImage: b.cover_image || '',
                 coverMode: b.cover_mode || undefined,
                 pdfCoverPage: b.pdf_cover_page ?? undefined,
                 customCover: b.custom_cover || undefined,
@@ -620,7 +633,7 @@ export default function App() {
           publisher: cb.publisher,
           isbn: cb.isbn,
           isKicdApproved: cb.isKicdApproved,
-          coverImage: cb.coverImageUrl?.includes('unsplash.com') ? '' : (cb.coverImageUrl || ''),
+          coverImage: cb.coverImageUrl || '',
           category: cb.category === 'PAST_PAPER' ? 'Natural Sciences, Mathematics, and Statistics' : 'Natural Sciences, Mathematics, and Statistics',
           rating: 4.9,
           description: cb.description || '',
@@ -658,7 +671,14 @@ export default function App() {
       const deduped: Book[] = [];
 
       for (const candidate of candidates) {
-        if (!candidate || !candidate.id || !candidate.title || deletedIds.has(candidate.id) || isSystemBookConfigRow(candidate)) continue;
+        if (!candidate || !candidate.id || !candidate.title || isSystemBookConfigRow(candidate)) continue;
+        const candFile = String(candidate.fileUrl || '').trim();
+        if (
+          deletedIds.has(candidate.id) ||
+          (candFile && (deletedIds.has(`b2-${candFile}`) || deletedIds.has(`disk-${candFile}`)))
+        ) {
+          continue;
+        }
         const normTitle = `${candidate.title.trim().toLowerCase()}::${(candidate.publisher || candidate.author || '').trim().toLowerCase()}`;
         if (seenIds.has(candidate.id) || seenTitles.has(normTitle)) continue;
         seenIds.add(candidate.id);
@@ -1116,11 +1136,21 @@ export default function App() {
           setBookmarks(prev => mergeBookmarksLists(prev, combinedBookmarks));
         }
 
+        const deletedList = safeStorage.getJSON<string[]>('edu_ai_deleted_book_ids', []);
+        const deletedSet = new Set(Array.isArray(deletedList) ? deletedList : []);
+        const notDeleted = (b: Book) => {
+          const f = String(b?.fileUrl || '').trim();
+          return !deletedSet.has(b.id) && !(f && (deletedSet.has(`b2-${f}`) || deletedSet.has(`disk-${f}`)));
+        };
+
         setBooks(prev => {
+          const filteredUnlocked = Array.isArray(hydrated?.unlockedBooks)
+            ? hydrated.unlockedBooks.filter(notDeleted)
+            : [];
           const withUnlocked =
-            hydrated?.unlockedBooks && hydrated.unlockedBooks.length > 0
-              ? mergeBooksLists(hydrated.unlockedBooks, prev)
-              : prev;
+            filteredUnlocked.length > 0
+              ? mergeBooksLists(filteredUnlocked, prev.filter(notDeleted))
+              : prev.filter(notDeleted);
           const withCovers = getPersistedBooks(withUnlocked, userId);
           return withCovers.map(book =>
             syncedProgress[book.id] !== undefined
@@ -1128,7 +1158,7 @@ export default function App() {
               : book
           );
         });
-        setActiveBook(prev => (prev ? getPersistedBooks([prev], userId)[0] : prev));
+        setActiveBook(prev => (prev && notDeleted(prev) ? getPersistedBooks([prev], userId)[0] : null));
       } catch (err) {
         console.warn('[App] Realtime initial sync notice:', err);
       }
@@ -1628,7 +1658,7 @@ export default function App() {
                 user={session?.user}
                 profile={profile}
                 books={books}
-                onToggleSageSidebar={() => setIsSageSidebarOpen(prev => !prev)}
+                onToggleSageSidebar={handleToggleSageSidebar}
                 isSageSidebarOpen={isSageSidebarOpen}
                 onSignOut={handleSignOut}
                 pendingChatBadgeCount={pendingSocialBadgeCount}
@@ -1710,8 +1740,8 @@ export default function App() {
                         user={session?.user}
                         profile={profile}
                         isSidebarOpen={isSageSidebarOpen}
-                        onToggleSidebar={() => setIsSageSidebarOpen(prev => !prev)}
-                        onSidebarStateChange={(open) => setIsSageSidebarOpen(open)}
+                        onToggleSidebar={handleToggleSageSidebar}
+                        onSidebarStateChange={setIsSageSidebarOpen}
                       />
                     )}
                     {currentView === 'quizzes' && <Quizzes user={session?.user} profile={profile} books={books} />}
@@ -1751,18 +1781,15 @@ export default function App() {
                             updatedBook.pdfCoverPage !== undefined ||
                             updatedBook.customCover
                           ) {
-                            void saveGlobalBookCover(
-                              updatedBook.id,
-                              {
+                            setGlobalBookCovers({
+                              [updatedBook.id]: {
                                 coverMode: updatedBook.coverMode,
                                 coverImage: updatedBook.coverImage ?? '',
                                 pdfCoverPage: updatedBook.pdfCoverPage,
                                 customCover: updatedBook.customCover,
                                 updatedAt: new Date().toISOString(),
                               },
-                              updatedBook,
-                              session?.access_token
-                            );
+                            });
                           }
                           setBooks(prev => {
                             const exists = prev.some(b => b.id === updatedBook.id);
@@ -1774,11 +1801,39 @@ export default function App() {
                             setActiveBook(updatedBook);
                           }
                         }}
-                        onDeleteBook={(deletedId) => {
-                          setBooks(prev => prev.filter(b => b.id !== deletedId));
-                          if (activeBook?.id === deletedId) {
+                        onDeleteBook={(deletedId, deletedFileUrl) => {
+                          const matchesDeleted = (b: Book) =>
+                            b.id === deletedId ||
+                            (Boolean(deletedFileUrl) && String(b.fileUrl || '').trim() === deletedFileUrl);
+                          setBooks(prev => prev.filter(b => !matchesDeleted(b)));
+                          if (activeBook && matchesDeleted(activeBook)) {
                             setActiveBook(null);
                           }
+                          try {
+                            const existingCustom = safeStorage.getJSON<Book[]>('custom_uploaded_books', []);
+                            if (Array.isArray(existingCustom)) {
+                              safeStorage.setJSON('custom_uploaded_books', existingCustom.filter(b => !matchesDeleted(b)));
+                            }
+                            if (session?.user?.id) {
+                              const unlockedKey = getUnlockedBooksStorageKey(session.user.id);
+                              const existingUnlocked = safeStorage.getJSON<Book[]>(unlockedKey, []);
+                              if (Array.isArray(existingUnlocked)) {
+                                const nextUnlocked = existingUnlocked.filter(b => !matchesDeleted(b));
+                                safeStorage.setJSON(unlockedKey, nextUnlocked);
+                                if (nextUnlocked.length !== existingUnlocked.length) {
+                                  pushAccountSyncPatch(session.user.id, { unlockedBooks: nextUnlocked }, session?.access_token);
+                                }
+                              }
+                            }
+                            const deletedList = safeStorage.getJSON<string[]>('edu_ai_deleted_book_ids', []);
+                            const nextDeletedSet = new Set(Array.isArray(deletedList) ? deletedList : []);
+                            nextDeletedSet.add(deletedId);
+                            if (deletedFileUrl) {
+                              nextDeletedSet.add(`b2-${deletedFileUrl}`);
+                              nextDeletedSet.add(`disk-${deletedFileUrl}`);
+                            }
+                            safeStorage.setJSON('edu_ai_deleted_book_ids', Array.from(nextDeletedSet));
+                          } catch (_) {}
                         }}
                       />
                     )}
@@ -1798,7 +1853,7 @@ export default function App() {
                         books={books} 
                         bookmarks={bookmarks}
                         initialBookId={audiobookTargetBookId}
-                        onConsumeInitialBook={() => setAudiobookTargetBookId(null)}
+                        onConsumeInitialBook={handleConsumeInitialBook}
                         onBookSelect={(book) => { setActiveBook(book); }} 
                         onOpenInReader={(book) => {
                           setActiveBook(book);

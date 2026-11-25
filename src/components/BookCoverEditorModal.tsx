@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Book, CustomCoverConfig } from '../types';
 import { 
   X, Upload, Image as ImageIcon, Sparkles, Sliders, CheckCircle2, 
-  AlertCircle, RefreshCw, FileText, Check, Eye, Palette, 
+  AlertCircle, RefreshCw, FileText, Check, Eye, Palette, Link2, Cloud,
   BookOpen, Atom, Code, Scale, GraduationCap, Microscope, Dna, 
   Globe, Languages, Landmark, TrendingUp, Wheat, Award, Compass, ShieldCheck
 } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
-import { getPersistedDeviceSession } from '../lib/supabase';
-import { saveGlobalBookCover } from '../lib/globalBookCoversService';
+import { setGlobalBookCovers } from '../lib/globalBookCoversService';
+import { normalizePastedCoverUrl } from '../lib/coverUrlUtils';
 
 interface BookCoverEditorModalProps {
   book: Book;
@@ -172,18 +172,17 @@ const ICON_OPTIONS = [
 ];
 
 export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCoverEditorModalProps) {
-  if (!isOpen) return null;
+  const resolveInitialMode = (target: Book): 'image' | 'visual' | 'pdf' => {
+    if (target.coverMode === 'image' || target.coverMode === 'visual' || target.coverMode === 'pdf') {
+      return target.coverMode;
+    }
+    if (target.coverImage) return 'image';
+    if (target.fileUrl) return 'pdf';
+    return 'visual';
+  };
 
   // Active cover configuration state
-  const [coverMode, setCoverMode] = useState<'image' | 'visual' | 'pdf'>(() => {
-    if (book.coverMode === 'image' || book.coverMode === 'visual' || book.coverMode === 'pdf') {
-      return book.coverMode;
-    }
-    if (book.coverImage) return 'image';
-    if (book.fileUrl) return 'pdf';
-    return 'visual';
-  });
-  
+  const [coverMode, setCoverMode] = useState<'image' | 'visual' | 'pdf'>(() => resolveInitialMode(book));
   const [coverImageUrl, setCoverImageUrl] = useState<string>(book.coverImage || '');
   const [pdfPageNumber, setPdfPageNumber] = useState<number>(book.pdfCoverPage || book.customCover?.pdfPageNumber || 1);
   
@@ -208,13 +207,51 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
   const [previewAspect, setPreviewAspect] = useState<'grid' | 'card' | 'reader'>('grid');
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [isImportingUrl, setIsImportingUrl] = useState(false);
+  const [urlPreviewStatus, setUrlPreviewStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+  const [urlPreviewDims, setUrlPreviewDims] = useState<{ width: number; height: number } | null>(null);
+  const [urlPreviewError, setUrlPreviewError] = useState<string>('');
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+
+  const attemptedAutoImportUrlsRef = useRef<Set<string>>(new Set());
+  const importDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    setCoverMode(resolveInitialMode(book));
+    setCoverImageUrl(book.coverImage || '');
+    setPdfPageNumber(book.pdfCoverPage || book.customCover?.pdfPageNumber || 1);
+    setThemeGradient(book.customCover?.themeGradient || 'from-blue-700 via-indigo-900 to-slate-950');
+    setAccentBg(book.customCover?.accentBg || 'bg-sky-400');
+    setAccentText(book.customCover?.accentText || 'text-sky-300');
+    setIconType(book.customCover?.iconType || 'book');
+    setSubtitle(book.customCover?.subtitle || (book.subjects?.[0] || book.category || ''));
+    setBadgeText(
+      book.customCover?.badgeText ||
+        (book.curriculum?.[0] ? `${book.curriculum[0]} CURRICULUM` : book.level ? `${book.level} Level` : 'EDU AI EDITION')
+    );
+    setPattern(book.customCover?.pattern || 'grid');
+    setUrlPreviewStatus(book.coverImage ? 'loading' : 'idle');
+    setUrlPreviewDims(null);
+    setUrlPreviewError('');
+    setStatusMessage(null);
+    attemptedAutoImportUrlsRef.current.clear();
+  }, [book.id, isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (importDebounceRef.current) clearTimeout(importDebounceRef.current);
+    };
+  }, []);
+
+  if (!isOpen) return null;
+
+  const normalizedCoverUrl = coverImageUrl.trim();
 
   // Synthesize working book object for real-time live preview
   const livePreviewBook: Book = {
     ...book,
     coverMode,
-    coverImage: coverMode === 'image' ? coverImageUrl : '',
+    coverImage: coverMode === 'image' ? normalizedCoverUrl : '',
     pdfCoverPage: pdfPageNumber,
     customCover: {
       mode: coverMode,
@@ -295,9 +332,107 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
     }
   };
 
+  const importCoverUrlViaServer = async (rawTargetUrl: string, quiet = false): Promise<string | null> => {
+    const trimmed = rawTargetUrl.trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) return null;
+
+    setIsImportingUrl(true);
+    setUrlPreviewError('');
+    if (!quiet) {
+      setStatusMessage({ type: 'info', text: 'Fetching cover image through cloud proxy and hosting it in B2 Storage...' });
+    }
+    try {
+      const res = await fetch('/api/admin/import-cover-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url: trimmed,
+          bookId: book.id,
+          title: book.title,
+        }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.url) {
+        const msg = data?.error || `Could not import image from URL (HTTP ${res.status}).`;
+        setUrlPreviewStatus('error');
+        setUrlPreviewError(msg);
+        if (!quiet) {
+          setStatusMessage({ type: 'error', text: msg });
+        }
+        return null;
+      }
+
+      setCoverImageUrl(data.url);
+      setCoverMode('image');
+      setUrlPreviewStatus('loading');
+      setUrlPreviewError('');
+      setStatusMessage({
+        type: 'success',
+        text: data.b2Synced
+          ? 'Cover image fetched & hosted in B2 Edu-AI-Cloud! Click Save to publish.'
+          : 'Cover image fetched & cached on server! Click Save to publish.',
+      });
+      return data.url as string;
+    } catch (err: any) {
+      const msg = err?.message || 'Network error while fetching remote cover image.';
+      setUrlPreviewStatus('error');
+      setUrlPreviewError(msg);
+      if (!quiet) {
+        setStatusMessage({ type: 'error', text: msg });
+      }
+      return null;
+    } finally {
+      setIsImportingUrl(false);
+    }
+  };
+
+  const handleCoverUrlChange = (rawValue: string) => {
+    if (importDebounceRef.current) {
+      clearTimeout(importDebounceRef.current);
+      importDebounceRef.current = null;
+    }
+
+    const norm = normalizePastedCoverUrl(rawValue);
+    if (!norm.isValidSyntax) {
+      setCoverImageUrl(rawValue);
+      setCoverMode('image');
+      setUrlPreviewStatus('error');
+      setUrlPreviewDims(null);
+      setUrlPreviewError(norm.error || 'Invalid image URL.');
+      return;
+    }
+
+    setCoverImageUrl(norm.url);
+    setUrlPreviewDims(null);
+    setUrlPreviewError('');
+
+    if (!norm.url) {
+      setUrlPreviewStatus('idle');
+      return;
+    }
+
+    setCoverMode('image');
+    setUrlPreviewStatus('loading');
+
+    if (norm.wasUnwrapped) {
+      setStatusMessage({ type: 'info', text: 'Extracted direct image link from pasted search URL.' });
+    }
+
+    if (norm.isWebPageHint && /^https?:\/\//i.test(norm.url) && !attemptedAutoImportUrlsRef.current.has(norm.url)) {
+      importDebounceRef.current = setTimeout(() => {
+        if (!attemptedAutoImportUrlsRef.current.has(norm.url)) {
+          attemptedAutoImportUrlsRef.current.add(norm.url);
+          void importCoverUrlViaServer(norm.url, true);
+        }
+      }, 450);
+    }
+  };
+
   const handleApplyPreset = (preset: typeof CURATED_PRESETS[0]) => {
     setCoverImageUrl(preset.image);
     setCoverMode('image');
+    setUrlPreviewStatus('loading');
+    setUrlPreviewError('');
     setBadgeText(preset.badge);
     setThemeGradient(preset.gradient);
     setIconType(preset.iconType);
@@ -309,6 +444,30 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
     setStatusMessage(null);
 
     try {
+      let finalCoverUrl = coverImageUrl.trim();
+      if (coverMode === 'image') {
+        const norm = normalizePastedCoverUrl(finalCoverUrl);
+        if (!norm.isValidSyntax || !norm.url) {
+          setStatusMessage({
+            type: 'error',
+            text: norm.error || 'Paste a valid cover image URL or upload an image file before saving.',
+          });
+          setIsSaving(false);
+          return;
+        }
+        finalCoverUrl = norm.url;
+
+        // If browser direct load failed on an external HTTP(S) URL, auto-import to B2/server before saving
+        if (urlPreviewStatus === 'error' && /^https?:\/\//i.test(finalCoverUrl)) {
+          const importedUrl = await importCoverUrlViaServer(finalCoverUrl, true);
+          if (!importedUrl) {
+            setIsSaving(false);
+            return;
+          }
+          finalCoverUrl = importedUrl;
+        }
+      }
+
       const customCoverConfig: CustomCoverConfig = {
         mode: coverMode,
         themeGradient,
@@ -324,28 +483,24 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
       const updatedBook: Book = {
         ...book,
         coverMode,
-        coverImage: coverMode === 'image' ? coverImageUrl : '',
+        coverImage: coverMode === 'image' ? finalCoverUrl : '',
         pdfCoverPage: pdfPageNumber,
         customCover: customCoverConfig
       };
 
-      // Persist to system-wide global book covers registry (shared across all users & devices)
+      // Update local in-memory/storage global covers immediately, then persist via Admin onSave handler
       try {
-        const persistedSession = getPersistedDeviceSession();
-        await saveGlobalBookCover(
-          book.id,
-          {
+        setGlobalBookCovers({
+          [book.id]: {
             coverMode,
-            coverImage: coverMode === 'image' ? coverImageUrl : '',
+            coverImage: coverMode === 'image' ? finalCoverUrl : '',
             pdfCoverPage: pdfPageNumber,
             customCover: customCoverConfig,
             updatedAt: new Date().toISOString(),
           },
-          book,
-          persistedSession?.access_token
-        );
+        });
       } catch (lsErr) {
-        console.warn('Global cover sync notice:', lsErr);
+        console.warn('Global cover local sync notice:', lsErr);
       }
 
       await onSave(updatedBook);
@@ -449,7 +604,28 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
                   previewAspect === 'card' ? 'w-40 h-56' :
                   'w-28 h-36'
                 }`}>
-                  <BookCoverVisual book={livePreviewBook} className="w-full h-full" />
+                  <BookCoverVisual
+                    book={livePreviewBook}
+                    className="w-full h-full"
+                    onImageLoad={({ width, height, src }) => {
+                      if (src === normalizedCoverUrl) {
+                        setUrlPreviewStatus('loaded');
+                        setUrlPreviewDims(width && height ? { width, height } : null);
+                        setUrlPreviewError('');
+                      }
+                    }}
+                    onImageError={(failedSrc) => {
+                      if (failedSrc !== normalizedCoverUrl) return;
+                      if (/^https?:\/\//i.test(failedSrc) && !attemptedAutoImportUrlsRef.current.has(failedSrc)) {
+                        attemptedAutoImportUrlsRef.current.add(failedSrc);
+                        void importCoverUrlViaServer(failedSrc, true);
+                      } else {
+                        setUrlPreviewStatus('error');
+                        setUrlPreviewDims(null);
+                        setUrlPreviewError((prev) => prev || 'Browser could not load an image from this URL.');
+                      }
+                    }}
+                  />
                 </div>
               </div>
             </div>
@@ -582,21 +758,45 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
                     </label>
                     <div className="flex gap-2">
                       <input
-                        type="url"
-                        placeholder="https://example.com/cover.jpg or Unsplash link"
+                        type="text"
+                        inputMode="url"
+                        placeholder="Paste image URL, Unsplash link, or Google Images URL..."
                         value={coverImageUrl}
-                        onChange={(e) => {
-                          setCoverImageUrl(e.target.value);
-                          setCoverMode('image');
+                        onChange={(e) => handleCoverUrlChange(e.target.value)}
+                        onPaste={(e) => {
+                          const pasted = e.clipboardData?.getData('text');
+                          if (pasted !== undefined) {
+                            e.preventDefault();
+                            handleCoverUrlChange(pasted);
+                          }
                         }}
                         className="flex-1 px-3 py-2 border border-slate-200 rounded-lg text-xs focus:ring-1 focus:ring-brand-500 outline-none"
                       />
+                      {/^https?:\/\//i.test(normalizedCoverUrl) && (
+                        <button
+                          type="button"
+                          onClick={() => void importCoverUrlViaServer(normalizedCoverUrl, false)}
+                          disabled={isImportingUrl}
+                          title="Download via server & host in Backblaze B2 Edu-AI-Cloud so external hotlink blocks never break it"
+                          className="px-3 py-2 text-xs text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg font-semibold transition-colors flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+                        >
+                          {isImportingUrl ? (
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                          ) : (
+                            <Cloud className="w-3.5 h-3.5" />
+                          )}
+                          <span>{isImportingUrl ? 'Fetching...' : 'Host in B2'}</span>
+                        </button>
+                      )}
                       {coverImageUrl && (
                         <button
                           type="button"
                           onClick={() => {
                             setCoverImageUrl('');
                             setCoverMode('visual');
+                            setUrlPreviewStatus('idle');
+                            setUrlPreviewDims(null);
+                            setUrlPreviewError('');
                           }}
                           className="px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-lg font-medium transition-colors"
                         >
@@ -604,12 +804,51 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
                         </button>
                       )}
                     </div>
+
+                    {/* Explicit Preview Diagnostics for Pasted URLs */}
+                    {coverMode === 'image' && normalizedCoverUrl && (
+                      <div className="mt-2 text-[11px]">
+                        {isImportingUrl ? (
+                          <span className="inline-flex items-center gap-1.5 text-indigo-600 font-medium">
+                            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                            Importing cover image via cloud server &amp; storing in Backblaze B2...
+                          </span>
+                        ) : urlPreviewStatus === 'loaded' ? (
+                          <span className="inline-flex items-center gap-1.5 text-emerald-700 font-medium">
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                            Image loaded{urlPreviewDims ? ` (${urlPreviewDims.width}×${urlPreviewDims.height}px)` : ''}
+                            {normalizedCoverUrl.startsWith('/api/download') ? ' · Hosted reliably in Edu-AI-Cloud' : ' · Ready to save'}
+                          </span>
+                        ) : urlPreviewStatus === 'loading' ? (
+                          <span className="inline-flex items-center gap-1.5 text-slate-500 font-medium">
+                            <RefreshCw className="w-3 h-3 animate-spin" />
+                            Loading image preview...
+                          </span>
+                        ) : urlPreviewStatus === 'error' ? (
+                          <div className="p-2.5 bg-rose-50 border border-rose-200 rounded-lg text-rose-700 flex items-start justify-between gap-2">
+                            <div className="flex items-start gap-1.5">
+                              <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                              <span>{urlPreviewError || 'Unable to load an image from this URL.'}</span>
+                            </div>
+                            {/^https?:\/\//i.test(normalizedCoverUrl) && (
+                              <button
+                                type="button"
+                                onClick={() => void importCoverUrlViaServer(normalizedCoverUrl, false)}
+                                className="px-2 py-1 bg-rose-600 text-white rounded text-[10px] font-bold hover:bg-rose-700 shrink-0"
+                              >
+                                Retry Fetch
+                              </button>
+                            )}
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
                   </div>
 
                   <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800 flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <Link2 className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
                     <div>
-                      <strong className="font-semibold">Quick Fix Tip:</strong> If the PDF cover was blurry, had a blank white 1st page, or an unappealing scan, setting a high-resolution cover image here will immediately replace it across all student and teacher devices.
+                      <strong className="font-semibold">Quick Fix Tip:</strong> Paste any image link (or even an Unsplash/publisher page or Google Images link). Blocked or external links are automatically fetched and hosted in Backblaze B2 so every student sees the exact cover.
                     </div>
                   </div>
                 </div>
@@ -863,7 +1102,7 @@ export function BookCoverEditorModal({ book, isOpen, onClose, onSave }: BookCove
                 <button
                   type="button"
                   onClick={handleSave}
-                  disabled={isSaving || isUploading}
+                  disabled={isSaving || isUploading || isImportingUrl}
                   className="px-5 py-2 text-xs font-bold text-white bg-brand-600 hover:bg-brand-700 rounded-xl shadow-xs transition-colors flex items-center gap-2 disabled:opacity-50"
                 >
                   {isSaving ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}

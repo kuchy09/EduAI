@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import { WebSocketServer, WebSocket } from "ws";
 import { GoogleGenAI, Type, ThinkingLevel } from "@google/genai";
 import Anthropic from "@anthropic-ai/sdk";
-import { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, DeleteObjectCommand } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import PDFDocument from "pdfkit";
@@ -29,6 +29,21 @@ import {
   normalizeBookCoverTitleKey,
 } from "./shared/canonicalBookCovers";
 import { ADMIN_EMAILS, isAuthorizedAdminEmail } from "./shared/adminAuth";
+import {
+  buildB2CurriculumPath,
+  parseB2CurriculumKey,
+  resolveSubjectCategory,
+  sanitizeB2ObjectKey,
+  sanitizeB2Prefix,
+} from "./shared/b2StoragePaths";
+import {
+  isUuid,
+  listAllB2Objects,
+  mapSupabaseRowToCatalogBook,
+  syncOrMoveBookToB2Shelf,
+  upsertBookInSupabase,
+} from "./server/b2SupabaseSync";
+import { fetchAndValidateRemoteCoverImage } from "./server/coverImageImporter";
 import {
   addCommunityReplyAction,
   addGroupMemberAction,
@@ -110,6 +125,95 @@ function writeDeletedBookIds(ids: string[]): void {
     console.warn("[Catalog] Failed to write deleted-books.json:", err);
   }
 }
+
+function isValidPdfBufferHeader(buf: Buffer): boolean {
+  if (!Buffer.isBuffer(buf) || buf.length < 64) return false;
+  const head = buf.subarray(0, Math.min(buf.length, 1024));
+  return head.includes(Buffer.from("%PDF-"));
+}
+
+function isValidPdfBufferStructure(buf: Buffer): boolean {
+  if (!isValidPdfBufferHeader(buf)) return false;
+  const tailStart = Math.max(0, buf.length - 16384);
+  const tail = buf.subarray(tailStart);
+  return tail.includes(Buffer.from("%%EOF"));
+}
+
+function isValidEpubBufferHeader(buf: Buffer): boolean {
+  if (!Buffer.isBuffer(buf) || buf.length < 64) return false;
+  return buf[0] === 0x50 && buf[1] === 0x4b;
+}
+
+function isValidPdfFileOnDisk(filePath: string): boolean {
+  let fd: number | null = null;
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size < 64) return false;
+    fd = fs.openSync(filePath, "r");
+    const headLen = Math.min(1024, stat.size);
+    const headBuf = Buffer.allocUnsafe(headLen);
+    fs.readSync(fd, headBuf, 0, headLen, 0);
+    if (!headBuf.includes(Buffer.from("%PDF-"))) return false;
+    const tailLen = Math.min(16384, stat.size);
+    const tailBuf = Buffer.allocUnsafe(tailLen);
+    fs.readSync(fd, tailBuf, 0, tailLen, Math.max(0, stat.size - tailLen));
+    return tailBuf.includes(Buffer.from("%%EOF"));
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch (_) {}
+    }
+  }
+}
+
+function isValidEpubFileOnDisk(filePath: string): boolean {
+  let fd: number | null = null;
+  try {
+    const stat = fs.statSync(filePath);
+    if (!stat.isFile() || stat.size < 64) return false;
+    fd = fs.openSync(filePath, "r");
+    const headBuf = Buffer.allocUnsafe(4);
+    fs.readSync(fd, headBuf, 0, 4, 0);
+    return headBuf[0] === 0x50 && headBuf[1] === 0x4b;
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch (_) {}
+    }
+  }
+}
+
+function isNonCatalogProbeObject(key: string, sizeBytes?: number): boolean {
+  const safe = String(key || "").trim();
+  if (!safe) return true;
+  if (typeof sizeBytes === "number" && sizeBytes < 256) return true;
+  if (/^etc\//i.test(safe) && /probe/i.test(safe)) return true;
+  return false;
+}
+
+function buildSafeContentDisposition(type: "inline" | "attachment", filename: string): string {
+  const asciiFallback = String(filename || "download")
+    .replace(/[\r\n"\\;]/g, "_")
+    .replace(/[^\x20-\x7E]/g, "_")
+    .trim() || "download";
+  const encoded = encodeURIComponent(String(filename || "download")).replace(/['()]/g, escape).replace(/\*/g, "%2A");
+  return `${type}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
+}
+
+function getB2CandidateKeys(safeKey: string, strippedUploadsKey = safeKey.replace(/^uploads\//, "")): string[] {
+  const spacedSafe = safeKey.replace(/ /g, "_");
+  const spacedStripped = strippedUploadsKey.replace(/ /g, "_");
+  const underscoredToSpaceSafe = safeKey.replace(/_/g, " ");
+  return Array.from(new Set([safeKey, strippedUploadsKey, spacedSafe, spacedStripped, underscoredToSpaceSafe])).filter(Boolean);
+}
+
+const b2AutoRegisterInFlight = new Map<string, Promise<{ synced: boolean; supabaseId?: string }>>();
 
 function readGlobalBookCoversFromDisk(): Record<string, BookCoverOverride> {
   let diskCovers: Record<string, BookCoverOverride> = {};
@@ -382,6 +486,18 @@ function getResolvedSupabaseUrlEnv(): string {
       process.env.SUPABASE_URL,
     ].find(isRealUrlEnv) || ""
   );
+}
+
+function getSupabaseProjectRef(): string | null {
+  const url = getResolvedSupabaseUrlEnv();
+  if (!url) return null;
+  try {
+    const host = new URL(url).hostname;
+    const ref = host.split(".")[0];
+    return ref || null;
+  } catch {
+    return null;
+  }
 }
 
 function getPublicSupabaseAnonKeyEnv(): string {
@@ -662,6 +778,20 @@ function mergeDeletedAiSessionsMap(
   return result;
 }
 
+function parseSyncSessionActivityMs(s: any): number {
+  const upd = s?.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+  if (upd > 0) return upd;
+  const msgs = Array.isArray(s?.messages) ? s.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = String(msgs[i]?.id || "").match(/^(\d{10,})/);
+    if (m) return Number(m[1]);
+  }
+  const idMatch = String(s?.id || "").match(/(\d{10,})$/);
+  if (idMatch) return Number(idMatch[1]);
+  const createdTs = s?.createdAt ? Date.parse(s.createdAt) || 0 : 0;
+  return createdTs;
+}
+
 function serverMergeAiChatSessions(
   listA: any[],
   listB: any[],
@@ -673,7 +803,7 @@ function serverMergeAiChatSessions(
   const isDeleted = (s: any) => {
     if (!s?.id || !deletedMap || !deletedMap[s.id]) return false;
     const delTs = Date.parse(deletedMap[s.id]) || 0;
-    const sessTs = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    const sessTs = parseSyncSessionActivityMs(s);
     return sessTs <= delTs;
   };
 
@@ -2071,6 +2201,10 @@ function getMimeType(filename: string, defaultType = 'application/octet-stream')
       return 'image/gif';
     case '.webp':
       return 'image/webp';
+    case '.avif':
+      return 'image/avif';
+    case '.bmp':
+      return 'image/bmp';
     case '.svg':
       return 'image/svg+xml';
     case '.pdf':
@@ -2113,9 +2247,11 @@ app.get("/api/public-config", (_req, res) => {
   const supabaseUrl = getResolvedSupabaseUrlEnv();
   const supabaseAnonKey = getPublicSupabaseAnonKeyEnv();
   const serverAuthReady = Boolean(getServerSupabase());
+  const supabaseProjectRef = getSupabaseProjectRef();
   res.setHeader("Cache-Control", "no-store");
   res.json({
     supabaseUrl,
+    supabaseProjectRef,
     supabaseAnonKey,
     serverAuthReady,
   });
@@ -3626,57 +3762,145 @@ app.get("/api/books", async (req, res) => {
     let localCatalog = readLocalBooksCatalog();
     const knownFileUrls = new Set(localCatalog.map((b: any) => b.fileUrl).filter(Boolean));
 
-    // Auto-discover any uploaded PDF or EPUB files on local disk not yet in books-catalog.json
-    const scanDirs = ["books", "uploads", ""];
-    let catalogUpdated = false;
-    for (const sub of scanDirs) {
-      const targetDir = sub ? path.join(UPLOADS_DIR, sub) : UPLOADS_DIR;
-      if (!fs.existsSync(targetDir)) continue;
-      const entries = fs.readdirSync(targetDir, { withFileTypes: true });
+    // Auto-discover any uploaded PDF or EPUB files on local disk (including nested curriculums/<shelf>/<subject>/ paths)
+    const walkUploadFiles = (dir: string, relBase = ""): Array<{ relKey: string; filename: string }> => {
+      if (!fs.existsSync(dir)) return [];
+      const collected: Array<{ relKey: string; filename: string }> = [];
+      let entries: fs.Dirent[] = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch (_) {
+        return [];
+      }
       for (const entry of entries) {
-        const lowerName = entry.name.toLowerCase();
-        const isPdf = lowerName.endsWith(".pdf");
-        const isEpub = lowerName.endsWith(".epub");
-        if (!entry.isFile() || (!isPdf && !isEpub)) continue;
-        const relKey = sub ? `${sub}/${entry.name}` : entry.name;
-        if (knownFileUrls.has(relKey) || deletedSet.has(`disk-${relKey}`)) continue;
-        const cleanName = entry.name.replace(/^\d+-/, "").replace(/\.(pdf|epub)$/i, "").replace(/[_\-]+/g, " ").trim();
-        const inferredKlb = cleanName.toLowerCase().includes("klb");
-        const discoveredBook = {
-          id: `disk-${relKey}`,
-          title: cleanName || getTitleFromKey(relKey),
-          author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Uploaded Textbook",
-          publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
-          isKicdApproved: inferredKlb,
-          coverImage: "",
-          category: "Textbook",
-          rating: 4.8,
-          description: isEpub
+        if (entry.isDirectory()) {
+          const nextRel = relBase ? `${relBase}/${entry.name}` : entry.name;
+          collected.push(...walkUploadFiles(path.join(dir, entry.name), nextRel));
+        } else if (entry.isFile()) {
+          const lowerName = entry.name.toLowerCase();
+          if (lowerName.endsWith(".pdf") || lowerName.endsWith(".epub")) {
+            const relKey = relBase ? `${relBase}/${entry.name}` : entry.name;
+            collected.push({ relKey, filename: entry.name });
+          }
+        }
+      }
+      return collected;
+    };
+
+    const scanTargets = [
+      { dir: path.join(UPLOADS_DIR, "curriculums"), base: "curriculums" },
+      { dir: path.join(UPLOADS_DIR, "books"), base: "books" },
+      { dir: path.join(UPLOADS_DIR, "uploads"), base: "uploads" },
+    ];
+
+    const rootDiskFiles: Array<{ relKey: string; filename: string }> = [];
+    try {
+      for (const entry of fs.readdirSync(UPLOADS_DIR, { withFileTypes: true })) {
+        if (entry.isFile()) {
+          const lowerName = entry.name.toLowerCase();
+          if (lowerName.endsWith(".pdf") || lowerName.endsWith(".epub")) {
+            rootDiskFiles.push({ relKey: entry.name, filename: entry.name });
+          }
+        }
+      }
+    } catch (_) {}
+
+    const discoveredDiskEntries = [
+      ...scanTargets.flatMap((t) => walkUploadFiles(t.dir, t.base)),
+      ...rootDiskFiles,
+    ];
+
+    let catalogUpdated = false;
+    const cleanedLocal = localCatalog.filter((b: any) => !isNonCatalogProbeObject(String(b?.fileUrl || "")));
+    if (cleanedLocal.length !== localCatalog.length) {
+      localCatalog = cleanedLocal;
+      catalogUpdated = true;
+    }
+
+    for (const { relKey, filename } of discoveredDiskEntries) {
+      const diskCandidateKeys = getB2CandidateKeys(relKey);
+      const isDiskDeleted =
+        deletedSet.has(relKey) ||
+        diskCandidateKeys.some((k) => deletedSet.has(`disk-${k}`) || deletedSet.has(`b2-${k}`));
+      if (knownFileUrls.has(relKey) || isDiskDeleted) continue;
+      if (isNonCatalogProbeObject(relKey)) continue;
+      const lowerName = filename.toLowerCase();
+      const isEpub = lowerName.endsWith(".epub");
+      const absDiskPath = path.resolve(UPLOADS_DIR, relKey);
+      if (isEpub ? !isValidEpubFileOnDisk(absDiskPath) : !isValidPdfFileOnDisk(absDiskPath)) {
+        continue;
+      }
+      const cleanName = filename.replace(/^\d+-/, "").replace(/\.(pdf|epub)$/i, "").replace(/[_\-]+/g, " ").trim();
+      const inferredKlb = cleanName.toLowerCase().includes("klb");
+      const parsedShelf = parseB2CurriculumKey(relKey);
+      const inferredCurriculum = parsedShelf.isCurriculumShelfPath && parsedShelf.curriculumShelf
+        ? [parsedShelf.curriculumShelf]
+        : inferredKlb
+          ? ["CBC", "KCSE"]
+          : ["General"];
+      const inferredSubjects = parsedShelf.isCurriculumShelfPath && parsedShelf.subjectCategory
+        ? [parsedShelf.subjectCategory]
+        : undefined;
+      const inferredLevel =
+        parsedShelf.curriculumShelf &&
+        ["University", "College", "Graduate", "Postgraduate", "Vocational"].includes(parsedShelf.curriculumShelf)
+          ? parsedShelf.curriculumShelf
+          : "School";
+
+      const discoveredBook = {
+        id: `disk-${relKey}`,
+        title: cleanName || getTitleFromKey(relKey),
+        author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Uploaded Textbook",
+        publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
+        isKicdApproved: inferredKlb,
+        coverImage: "",
+        category: "Textbook",
+        subjectCategory: parsedShelf.subjectCategory,
+        rating: 4.8,
+        description: parsedShelf.isCurriculumShelfPath
+          ? `${parsedShelf.curriculumShelf} • ${parsedShelf.subjectCategory} ${isEpub ? "EPUB" : "PDF"} curriculum material.`
+          : isEpub
             ? "Reflowable EPUB curriculum textbook stored in platform library."
             : "Uploaded source PDF textbook stored in platform library.",
-          level: "School",
-          curriculum: inferredKlb ? ["CBC", "KCSE"] : ["General"],
-          fileUrl: relKey,
-          format: isEpub ? "epub" : "pdf",
-          securityPolicy: {
-            requireEncryptedOffline: true,
-            watermarkUser: true,
-            allowRawExport: !isEpub,
-            offlineLeaseDays: 90,
-          },
-          createdAt: new Date().toISOString(),
-        };
-        localCatalog = [discoveredBook, ...localCatalog];
-        knownFileUrls.add(relKey);
-        catalogUpdated = true;
-      }
+        level: inferredLevel,
+        curriculum: inferredCurriculum,
+        subjects: inferredSubjects,
+        fileUrl: relKey,
+        format: isEpub ? "epub" : "pdf",
+        securityPolicy: {
+          requireEncryptedOffline: true,
+          watermarkUser: true,
+          allowRawExport: !isEpub,
+          offlineLeaseDays: 90,
+        },
+        createdAt: new Date().toISOString(),
+      };
+      localCatalog = [discoveredBook, ...localCatalog];
+      knownFileUrls.add(relKey);
+      catalogUpdated = true;
     }
     if (catalogUpdated) {
       writeLocalBooksCatalog(localCatalog);
     }
 
-    // Opportunistically fetch from Supabase if real credentials exist on server
-    const sb = getServerSupabase();
+    // Query Backblaze B2 object key inventory first so Supabase & disk catalogs report real-time B2 sync status
+    const s3 = getS3Client();
+    let allB2Objects: any[] = [];
+    let b2KeySet = new Set<string>();
+    if (s3 && B2_BUCKET_NAME) {
+      try {
+        const listed = await listAllB2Objects(s3, B2_BUCKET_NAME);
+        allB2Objects = listed.objects;
+        b2KeySet = listed.keySet;
+      } catch (b2ListErr) {
+        console.warn("[Catalog] B2 inventory warning:", b2ListErr);
+      }
+    }
+
+    // Fetch canonical books catalog from Supabase
+    const authHeader = req.headers.authorization || "";
+    const reqToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+    const sb = getServerSupabase(reqToken);
     let cloudBooks: any[] = [];
     let cloudGlobalCovers: Record<string, BookCoverOverride> = {};
     if (sb) {
@@ -3698,39 +3922,7 @@ app.get("/api/books", async (req, res) => {
               }
               return true;
             })
-            .map((b: any) => {
-              const isKlb =
-                Boolean(b.publisher?.toLowerCase().includes("klb")) ||
-                Boolean(b.author?.toLowerCase().includes("klb")) ||
-                Boolean(b.title?.toLowerCase().includes("klb")) ||
-                Boolean(b.author?.toLowerCase().includes("kenya literature bureau"));
-              return {
-                id: b.id,
-                title: b.title,
-                author: b.author || (isKlb ? "Kenya Literature Bureau (KLB)" : "Unknown"),
-                publisher: b.publisher || (isKlb ? "Kenya Literature Bureau (KLB)" : undefined),
-                isKicdApproved: b.is_kicd_approved ?? isKlb,
-                isbn: b.isbn || undefined,
-                coverImage: b.cover_image?.includes("unsplash.com") ? "" : b.cover_image || "",
-                coverMode: b.cover_mode || undefined,
-                pdfCoverPage: b.pdf_cover_page ?? undefined,
-                customCover: b.custom_cover || undefined,
-                category: b.category || "Textbook",
-                rating: 4.8,
-                description: b.description || "",
-                level: b.education_level || "All",
-                curriculum: b.curriculum ? (Array.isArray(b.curriculum) ? b.curriculum : [b.curriculum]) : (isKlb ? ["CBC", "KCSE"] : undefined),
-                subjects: b.subjects ? (Array.isArray(b.subjects) ? b.subjects : b.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)) : undefined,
-                country: b.country
-                  ? (Array.isArray(b.country) ? b.country : [b.country])
-                  : b.description?.includes("Location: ")
-                    ? [b.description.split("Location: ")[1].trim()]
-                    : isKlb
-                      ? ["Kenya"]
-                      : undefined,
-                fileUrl: b.file_url,
-              };
-            });
+            .map((b: any) => mapSupabaseRowToCatalogBook(b, b2KeySet, B2_BUCKET_NAME));
         }
       } catch (sbErr) {
         console.warn("[Catalog] Supabase books fetch warning:", sbErr);
@@ -3739,65 +3931,157 @@ app.get("/api/books", async (req, res) => {
 
     const globalCovers = mergeGlobalBookCoversMaps(readGlobalBookCoversFromDisk(), cloudGlobalCovers);
 
-    // Opportunistically discover PDFs in Backblaze B2 if configured
+    // Opportunistically discover PDF & EPUB books in Backblaze B2 (including curriculums/<shelf>/<subject>/ paths)
     const normalizeCatalogBookKey = (val?: string) =>
       String(val || "")
         .toLowerCase()
         .replace(/^\d+[-_]?/, "")
-        .replace(/\.pdf$/i, "")
+        .replace(/\.(pdf|epub)$/i, "")
         .replace(/[^a-z0-9]/g, "");
 
     const knownNormalizedKeys = new Set<string>();
+    const cloudFileUrls = new Set<string>();
     for (const b of [...localCatalog, ...cloudBooks]) {
+      const safeFileUrl = sanitizeB2ObjectKey(String(b?.fileUrl || ""));
+      if (!safeFileUrl || !b2KeySet.has(safeFileUrl)) continue;
+      cloudFileUrls.add(safeFileUrl);
       const titleKey = normalizeCatalogBookKey(b?.title);
       if (titleKey) knownNormalizedKeys.add(titleKey);
-      const fileLeaf = b?.fileUrl ? String(b.fileUrl).split("/").pop() : "";
+      const fileLeaf = safeFileUrl.split("/").pop() || "";
       const fileKey = normalizeCatalogBookKey(fileLeaf);
       if (fileKey) knownNormalizedKeys.add(fileKey);
     }
 
-    const s3 = getS3Client();
     let b2Books: any[] = [];
-    if (s3 && B2_BUCKET_NAME) {
-      try {
-        const listRes = await s3.send(new ListObjectsV2Command({ Bucket: B2_BUCKET_NAME, MaxKeys: 200 }));
-        const cloudFileUrls = new Set([
-          ...Array.from(knownFileUrls),
-          ...cloudBooks.map((b: any) => b.fileUrl).filter(Boolean),
-        ]);
-        for (const obj of listRes.Contents || []) {
-          const key = obj.Key || "";
-          if (!key.toLowerCase().endsWith(".pdf") || cloudFileUrls.has(key) || deletedSet.has(`b2-${key}`)) continue;
-          const filename = key.split("/").pop() || key;
-          const cleanName = filename.replace(/^\d+-/, "").replace(/\.pdf$/i, "").replace(/[_\-]+/g, " ").trim();
-          const normKey = normalizeCatalogBookKey(cleanName || filename);
-          if (normKey && knownNormalizedKeys.has(normKey)) continue;
-          if (normKey) knownNormalizedKeys.add(normKey);
-          const inferredKlb = cleanName.toLowerCase().includes("klb");
-          b2Books.push({
-            id: `b2-${key}`,
-            title: cleanName || getTitleFromKey(key),
-            author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Cloud Library",
-            publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
-            isKicdApproved: inferredKlb,
-            coverImage: "",
-            category: "Textbook",
-            rating: 4.8,
-            description: "Cloud-synced PDF study material.",
-            level: "School",
-            curriculum: inferredKlb ? ["CBC", "KCSE"] : undefined,
-            fileUrl: key,
-          });
+    if (allB2Objects.length > 0) {
+      for (const obj of allB2Objects) {
+        const key = obj.Key || "";
+        const safeObjKey = sanitizeB2ObjectKey(key);
+        const lowerKey = key.toLowerCase();
+        const isPdf = lowerKey.endsWith(".pdf");
+        const isEpub = lowerKey.endsWith(".epub");
+        const candidateB2Keys = getB2CandidateKeys(key);
+        const isDeletedB2 =
+          deletedSet.has(key) ||
+          candidateB2Keys.some((k) => deletedSet.has(`b2-${k}`) || deletedSet.has(`disk-${k}`));
+        if (
+          (!isPdf && !isEpub) ||
+          isNonCatalogProbeObject(key, typeof obj.Size === "number" ? obj.Size : undefined) ||
+          cloudFileUrls.has(key) ||
+          cloudFileUrls.has(safeObjKey) ||
+          isDeletedB2
+        ) {
+          continue;
         }
-      } catch (b2Err) {
-        console.warn("[Catalog] B2 list warning:", b2Err);
+        const filename = key.split("/").pop() || key;
+        const cleanName = filename.replace(/^\d+-/, "").replace(/\.(pdf|epub)$/i, "").replace(/[_\-]+/g, " ").trim();
+        const normKey = normalizeCatalogBookKey(cleanName || filename);
+        if (normKey && knownNormalizedKeys.has(normKey)) continue;
+        if (normKey) knownNormalizedKeys.add(normKey);
+
+        const inferredKlb = cleanName.toLowerCase().includes("klb");
+        const parsedShelf = parseB2CurriculumKey(key);
+        const inferredCurriculum = parsedShelf.isCurriculumShelfPath && parsedShelf.curriculumShelf
+          ? [parsedShelf.curriculumShelf]
+          : inferredKlb
+            ? ["CBC", "KCSE"]
+            : undefined;
+        const inferredSubjects = parsedShelf.isCurriculumShelfPath && parsedShelf.subjectCategory
+          ? [parsedShelf.subjectCategory]
+          : undefined;
+        const inferredLevel =
+          parsedShelf.curriculumShelf &&
+          ["University", "College", "Graduate", "Postgraduate", "Vocational"].includes(parsedShelf.curriculumShelf)
+            ? parsedShelf.curriculumShelf
+            : "School";
+
+        const discoveredB2Book: any = {
+          id: `b2-${key}`,
+          title: cleanName || getTitleFromKey(key),
+          author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Cloud Library",
+          publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
+          isKicdApproved: inferredKlb,
+          coverImage: "",
+          category: "Textbook",
+          subjectCategory: parsedShelf.subjectCategory,
+          rating: 4.8,
+          description: parsedShelf.isCurriculumShelfPath
+            ? `Cloud-synced ${parsedShelf.curriculumShelf} (${parsedShelf.subjectCategory}) curriculum material in ${B2_BUCKET_NAME}.`
+            : `Cloud-synced ${isEpub ? "EPUB" : "PDF"} study material.`,
+          level: inferredLevel,
+          curriculum: inferredCurriculum,
+          subjects: inferredSubjects,
+          fileUrl: key,
+          format: isEpub ? "epub" : "pdf",
+          b2Bucket: B2_BUCKET_NAME,
+          b2Synced: true,
+          supabaseSynced: false,
+          fileSizeBytes: typeof obj.Size === "number" ? obj.Size : undefined,
+        };
+
+        // Hand-in-hand B2 -> Supabase auto-registration with concurrency lock so duplicate rows never insert
+        if (sb && parsedShelf.isCurriculumShelfPath) {
+          let pending = b2AutoRegisterInFlight.get(key);
+          if (!pending) {
+            pending = upsertBookInSupabase(sb, discoveredB2Book, { b2Synced: true })
+              .catch(() => ({ synced: false, supabaseId: undefined }))
+              .finally(() => {
+                setTimeout(() => b2AutoRegisterInFlight.delete(key), 5000);
+              });
+            b2AutoRegisterInFlight.set(key, pending);
+          }
+          const syncRes = await pending;
+          if (syncRes.synced && syncRes.supabaseId) {
+            discoveredB2Book.id = syncRes.supabaseId;
+            discoveredB2Book.supabaseSynced = true;
+          }
+        }
+
+        b2Books.push(discoveredB2Book);
       }
     }
 
     // Deduplicate combined books (cloudBooks + localCatalog + b2Books) excluding deletedIds
+    // Also collapse duplicate entries pointing at the exact same B2-backed fileUrl (keeping highest priority entry)
+    const b2BackedTitleKeys = new Set<string>();
+    for (const candidate of [...cloudBooks, ...b2Books]) {
+      const safeCandidateUrl = sanitizeB2ObjectKey(String(candidate?.fileUrl || ""));
+      if (safeCandidateUrl && b2KeySet.has(safeCandidateUrl)) {
+        const tk = normalizeCatalogBookKey(candidate?.title);
+        if (tk) b2BackedTitleKeys.add(tk);
+      }
+    }
+
     const mergedMap = new Map<string, any>();
+    const seenB2BackedUrlToId = new Map<string, string>();
     for (const book of [...cloudBooks, ...localCatalog, ...b2Books]) {
       if (!book || !book.id || !book.title || deletedSet.has(book.id) || isSystemBookConfigRow(book)) continue;
+      const safeUrl = sanitizeB2ObjectKey(String(book.fileUrl || ""));
+      const urlKeys = safeUrl ? getB2CandidateKeys(safeUrl) : [];
+      if (urlKeys.some((k) => deletedSet.has(`b2-${k}`) || deletedSet.has(`disk-${k}`))) continue;
+      const isB2Backed = Boolean(safeUrl && b2KeySet.has(safeUrl));
+      if (String(book.id).startsWith("disk-") && !isB2Backed) {
+        const diskTitleKey = normalizeCatalogBookKey(book.title);
+        if (diskTitleKey && b2BackedTitleKeys.has(diskTitleKey)) continue;
+      }
+      if (isB2Backed) {
+        const primaryIdForUrl = seenB2BackedUrlToId.get(safeUrl);
+        if (primaryIdForUrl && primaryIdForUrl !== book.id) {
+          const prevEntry = mergedMap.get(primaryIdForUrl);
+          if (prevEntry) {
+            mergedMap.set(primaryIdForUrl, {
+              ...book,
+              ...prevEntry,
+              id: isUuid(prevEntry.id) ? prevEntry.id : book.id,
+              coverImage: prevEntry.coverImage || book.coverImage || "",
+              supabaseSynced: Boolean(prevEntry.supabaseSynced || book.supabaseSynced || isUuid(prevEntry.id) || isUuid(book.id)),
+              b2Synced: true,
+            });
+            continue;
+          }
+        }
+        seenB2BackedUrlToId.set(safeUrl, book.id);
+      }
       const existing = mergedMap.get(book.id);
       if (!existing) {
         mergedMap.set(book.id, book);
@@ -3809,6 +4093,8 @@ app.get("/api/books", async (req, res) => {
           coverMode: book.coverMode || existing.coverMode,
           pdfCoverPage: book.pdfCoverPage ?? existing.pdfCoverPage,
           customCover: book.customCover || existing.customCover,
+          supabaseSynced: Boolean(existing.supabaseSynced || book.supabaseSynced || isUuid(book.id)),
+          b2Synced: Boolean(existing.b2Synced || book.b2Synced),
         });
       }
     }
@@ -3819,8 +4105,26 @@ app.get("/api/books", async (req, res) => {
         withCover.format === "epub" || String(withCover.fileUrl || "").toLowerCase().split("?")[0].endsWith(".epub")
           ? "epub"
           : "pdf";
+      const safeKey = sanitizeB2ObjectKey(String(withCover.fileUrl || ""));
+      const parsedShelf = parseB2CurriculumKey(safeKey);
+      const inB2 = Boolean(safeKey && b2KeySet.has(safeKey));
+      const hasShelfPath = Boolean(parsedShelf.isCurriculumShelfPath);
+      const isSupabaseRow = Boolean(withCover.supabaseSynced || isUuid(withCover.id));
       return {
         ...withCover,
+        ...(parsedShelf.isCurriculumShelfPath && !withCover.subjectCategory
+          ? { subjectCategory: parsedShelf.subjectCategory }
+          : {}),
+        ...(parsedShelf.isCurriculumShelfPath && (!withCover.curriculum || withCover.curriculum.length === 0)
+          ? { curriculum: [parsedShelf.curriculumShelf] }
+          : {}),
+        ...(parsedShelf.isCurriculumShelfPath && (!withCover.subjects || withCover.subjects.length === 0) && parsedShelf.subjectCategory
+          ? { subjects: [parsedShelf.subjectCategory] }
+          : {}),
+        b2Bucket: withCover.b2Bucket || (s3 && B2_BUCKET_NAME && safeKey ? B2_BUCKET_NAME : undefined),
+        b2Synced: inB2,
+        supabaseSynced: isSupabaseRow,
+        needsShelfMigration: Boolean(safeKey && (!hasShelfPath || !inB2)),
         format: inferredFormat,
         securityPolicy: withCover.securityPolicy || {
           requireEncryptedOffline: true,
@@ -3831,10 +4135,22 @@ app.get("/api/books", async (req, res) => {
       };
     });
 
+    const syncSummary = {
+      totalBooks: finalBooks.length,
+      supabaseSyncedCount: finalBooks.filter((b: any) => b.supabaseSynced).length,
+      b2SyncedCount: finalBooks.filter((b: any) => b.b2Synced).length,
+      curriculumShelfCount: finalBooks.filter((b: any) => parseB2CurriculumKey(String(b.fileUrl || "")).isCurriculumShelfPath).length,
+      needsShelfMigrationCount: finalBooks.filter((b: any) => b.needsShelfMigration).length,
+      b2ObjectsCount: allB2Objects.length,
+    };
+
     res.json({
       books: finalBooks,
       globalBookCovers: globalCovers,
       deletedIds,
+      b2Bucket: B2_BUCKET_NAME || null,
+      supabaseProjectRef: getSupabaseProjectRef(),
+      syncSummary,
       cloudConnected: {
         supabase: Boolean(sb),
         b2: Boolean(s3 && B2_BUCKET_NAME),
@@ -3901,12 +4217,101 @@ app.put("/api/book-covers/:id", async (req, res) => {
   }
 });
 
+// Import and cloud-host an external pasted cover image URL cleanly (resolves hotlink/CORP/HTTP/webpage links)
+app.post("/api/admin/import-cover-image", async (req, res) => {
+  try {
+    const rawUrl = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+    if (!rawUrl) {
+      return res.status(400).json({ error: "Image URL is required." });
+    }
+
+    const imported = await fetchAndValidateRemoteCoverImage(rawUrl);
+    const rawBookRef = String(req.body?.bookId || req.body?.title || "cover")
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 48) || "cover";
+    const key = `covers/${rawBookRef}-${imported.sha256}.${imported.extension}`;
+
+    // 1. Write to local disk cache
+    const localCoversDir = path.resolve(UPLOADS_DIR, "covers");
+    if (!fs.existsSync(localCoversDir)) {
+      fs.mkdirSync(localCoversDir, { recursive: true });
+    }
+    const localFilePath = path.resolve(UPLOADS_DIR, key);
+    if (localFilePath.startsWith(path.resolve(UPLOADS_DIR) + path.sep)) {
+      fs.writeFileSync(localFilePath, imported.buffer);
+    }
+
+    // 2. Upload to Backblaze B2 (Edu-AI-Cloud)
+    let b2Synced = false;
+    const s3 = getS3Client();
+    if (s3 && B2_BUCKET_NAME) {
+      try {
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: B2_BUCKET_NAME,
+            Key: key,
+            ContentType: imported.contentType,
+            Body: imported.buffer,
+          })
+        );
+        b2Synced = true;
+      } catch (b2Err: any) {
+        console.warn("[CoverImport] B2 upload notice:", b2Err?.message || b2Err);
+      }
+    }
+
+    // 3. Mirror to Supabase Storage avatars bucket (<= 5MB image bucket)
+    const sb = getServerSupabase();
+    if (sb && imported.buffer.length <= 5 * 1024 * 1024) {
+      try {
+        await sb.storage.from("avatars").upload(key, imported.buffer, {
+          contentType: imported.contentType,
+          upsert: true,
+        });
+      } catch (_) {}
+    }
+
+    return res.json({
+      success: true,
+      key,
+      url: `/api/download?key=${encodeURIComponent(key)}&inline=true`,
+      resolvedUrl: imported.resolvedUrl,
+      contentType: imported.contentType,
+      sizeBytes: imported.buffer.length,
+      b2Synced,
+    });
+  } catch (err: any) {
+    console.warn("[CoverImport] Import failed:", err?.message || err);
+    return res.status(400).json({
+      error: err?.message || "Failed to import cover image from the supplied URL.",
+    });
+  }
+});
+
 app.post("/api/books", async (req, res) => {
   try {
     const payload = req.body || {};
     if (!payload.title) {
       return res.status(400).json({ error: "Book title is required" });
     }
+
+    const normalizedSubjects = Array.isArray(payload.subjects)
+      ? payload.subjects.map((s: any) => String(s || "").trim()).filter(Boolean)
+      : typeof payload.subjects === "string" && payload.subjects.trim()
+      ? payload.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)
+      : undefined;
+
+    const parsedFromKey = parseB2CurriculumKey(String(payload.fileUrl || ""));
+    const resolvedSubjCat =
+      (payload.subjectCategory && String(payload.subjectCategory).trim()) ||
+      parsedFromKey.subjectCategory ||
+      resolveSubjectCategory({
+        subjects: normalizedSubjects,
+        category: payload.category,
+        title: payload.title,
+      }).label;
 
     let createdBook: any = {
       id: payload.id || `book-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
@@ -3917,21 +4322,25 @@ app.post("/api/books", async (req, res) => {
       isKicdApproved: Boolean(payload.isKicdApproved),
       description: payload.description || "",
       category: payload.category || "Textbook",
+      subjectCategory: resolvedSubjCat,
       rating: typeof payload.rating === "number" ? payload.rating : 4.8,
       level: payload.level || "All",
       curriculum: Array.isArray(payload.curriculum)
         ? payload.curriculum
         : payload.curriculum
         ? [String(payload.curriculum)]
+        : parsedFromKey.curriculumShelf
+        ? [parsedFromKey.curriculumShelf]
         : undefined,
-      subjects: Array.isArray(payload.subjects)
-        ? payload.subjects
-        : typeof payload.subjects === "string" && payload.subjects.trim()
-        ? payload.subjects.split(",").map((s: string) => s.trim()).filter(Boolean)
+      subjects: normalizedSubjects && normalizedSubjects.length > 0
+        ? normalizedSubjects
+        : parsedFromKey.subjectCategory
+        ? [parsedFromKey.subjectCategory]
         : undefined,
       country: Array.isArray(payload.country) ? payload.country : undefined,
-      coverImage: payload.coverImage || "",
+      coverImage: typeof payload.coverImage === "string" ? payload.coverImage.trim() : "",
       fileUrl: payload.fileUrl || "",
+      b2Bucket: B2_BUCKET_NAME && String(payload.fileUrl || "").includes("/") ? B2_BUCKET_NAME : undefined,
       format:
         payload.format === "epub" || String(payload.fileUrl || "").toLowerCase().split("?")[0].endsWith(".epub")
           ? "epub"
@@ -3945,45 +4354,45 @@ app.post("/api/books", async (req, res) => {
       createdAt: new Date().toISOString(),
     };
 
-    // Opportunistically insert into Supabase if real credentials exist
-    const sb = getServerSupabase();
-    if (sb) {
-      try {
-        const { data, error } = await sb
-          .from("books")
-          .insert([
-            {
-              title: createdBook.title,
-              author: createdBook.author,
-              description: createdBook.description,
-              category: createdBook.category,
-              education_level: createdBook.level,
-              curriculum: createdBook.curriculum?.[0] || null,
-              subjects: createdBook.subjects?.join(", ") || null,
-              cover_image: createdBook.coverImage,
-              file_url: createdBook.fileUrl,
-              publisher: createdBook.publisher || null,
-              is_kicd_approved: createdBook.isKicdApproved,
-              isbn: createdBook.isbn || null,
-            },
-          ])
-          .select()
-          .single();
-
-        if (!error && data?.id) {
-          createdBook = { ...createdBook, id: data.id };
-        }
-      } catch (sbErr) {
-        console.warn("[Catalog] Supabase insert warning (persisted locally):", sbErr);
-      }
+    // Persist into Supabase public.books (passing caller JWT when present so RLS succeeds cleanly)
+    const authHeader = req.headers.authorization || "";
+    const reqToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+    const sb = getServerSupabase(reqToken);
+    const s3 = getS3Client();
+    const supabaseResult = await upsertBookInSupabase(sb, createdBook, {
+      b2Synced: Boolean(payload.b2Synced || (s3 && B2_BUCKET_NAME && createdBook.fileUrl)),
+    });
+    if (supabaseResult.synced && supabaseResult.supabaseId) {
+      createdBook = {
+        ...createdBook,
+        id: supabaseResult.supabaseId,
+        supabaseSynced: true,
+        b2Synced: Boolean(payload.b2Synced || (s3 && B2_BUCKET_NAME && createdBook.fileUrl)),
+      };
+    } else if (supabaseResult.error) {
+      console.warn("[Catalog] Supabase insert/upsert notice:", supabaseResult.error);
     }
 
-    // Persist in local books-catalog.json
-    const existing = readLocalBooksCatalog().filter((b: any) => b.id !== createdBook.id);
+    // Persist in local books-catalog.json (deduplicate any auto-discovered disk-/b2- entry for the same fileUrl)
+    const safeNewFileUrl = sanitizeB2ObjectKey(createdBook.fileUrl || "");
+    const existing = readLocalBooksCatalog().filter((b: any) => {
+      if (b.id === createdBook.id) return false;
+      if (safeNewFileUrl && sanitizeB2ObjectKey(b?.fileUrl) === safeNewFileUrl) return false;
+      if (safeNewFileUrl && (b.id === `disk-${safeNewFileUrl}` || b.id === `b2-${safeNewFileUrl}`)) return false;
+      return true;
+    });
     writeLocalBooksCatalog([createdBook, ...existing]);
 
-    // Ensure it's not marked deleted
-    const deletedIds = readDeletedBookIds().filter((id) => id !== createdBook.id);
+    // Ensure it and any matching storage keys are no longer marked deleted
+    const unmarkSet = new Set<string>([createdBook.id]);
+    if (safeNewFileUrl) {
+      for (const k of getB2CandidateKeys(safeNewFileUrl)) {
+        unmarkSet.add(k);
+        unmarkSet.add(`b2-${k}`);
+        unmarkSet.add(`disk-${k}`);
+      }
+    }
+    const deletedIds = readDeletedBookIds().filter((id) => !unmarkSet.has(id));
     writeDeletedBookIds(deletedIds);
 
     broadcastAllConnectedUsers({
@@ -3993,7 +4402,12 @@ app.post("/api/books", async (req, res) => {
       updatedAt: new Date().toISOString(),
     });
 
-    res.json({ book: createdBook, success: true });
+    res.json({
+      book: createdBook,
+      supabaseSynced: supabaseResult.synced,
+      ...(supabaseResult.error ? { supabaseError: supabaseResult.error } : {}),
+      success: true,
+    });
   } catch (err: any) {
     console.error("[Catalog] POST /api/books error:", err);
     res.status(500).json({ error: err.message || "Failed to save book" });
@@ -4006,15 +4420,70 @@ app.patch("/api/books/:id", async (req, res) => {
     const updates = req.body || {};
     const authHeader = req.headers.authorization || "";
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
-    const sb = getServerSupabase() || getServerSupabase(token);
+    const sb = getServerSupabase(token);
+    const s3 = getS3Client();
 
     const existing = readLocalBooksCatalog();
     const idx = existing.findIndex((b: any) => b.id === bookId);
-    if (idx >= 0) {
-      existing[idx] = { ...existing[idx], ...updates };
-      writeLocalBooksCatalog(existing);
+    let currentBook = idx >= 0 ? { ...existing[idx], ...updates } : { id: bookId, ...updates };
+
+    // If curriculum/subjects/subjectCategory changed and file resides in B2/managed storage, move object to updated Curriculum Shelf automatically
+    const shelfFieldsChanged =
+      updates.curriculum !== undefined ||
+      updates.subjects !== undefined ||
+      updates.subjectCategory !== undefined ||
+      updates.level !== undefined;
+    const previousSafeUrl = idx >= 0 ? sanitizeB2ObjectKey(String(existing[idx]?.fileUrl || "")) : "";
+    if (shelfFieldsChanged && s3 && B2_BUCKET_NAME) {
+      if (!currentBook.fileUrl && sb && isUuid(bookId)) {
+        const { data: sbRow } = await sb.from("books").select("*").eq("id", bookId).maybeSingle();
+        if (sbRow) {
+          currentBook = {
+            ...mapSupabaseRowToCatalogBook(sbRow, new Set(), B2_BUCKET_NAME),
+            ...updates,
+          };
+        }
+      }
+      const currentFileUrl = sanitizeB2ObjectKey(String(currentBook.fileUrl || ""));
+      if (
+        currentFileUrl.startsWith("curriculums/") ||
+        currentFileUrl.startsWith("books/") ||
+        currentFileUrl.startsWith("uploads/") ||
+        currentFileUrl.startsWith("avatars/")
+      ) {
+        const listed = await listAllB2Objects(s3, B2_BUCKET_NAME).catch(() => ({
+          objects: [],
+          keySet: new Set<string>(),
+        }));
+        const moveRes = await syncOrMoveBookToB2Shelf({
+          book: currentBook,
+          uploadsDir: UPLOADS_DIR,
+          s3,
+          b2BucketName: B2_BUCKET_NAME,
+          sb,
+          b2KeySet: listed.keySet,
+        }).catch(() => null);
+        if (moveRes?.movedOrSynced && moveRes.newKey) {
+          currentBook.fileUrl = moveRes.newKey;
+          currentBook.subjectCategory = moveRes.subjectCategory;
+          currentBook.b2Bucket = B2_BUCKET_NAME;
+        }
+      }
+    }
+
+    const dedupedExisting = existing.filter((b: any, i: number) => {
+      if (i === idx) return true;
+      if (previousSafeUrl && (b.id === `disk-${previousSafeUrl}` || b.id === `b2-${previousSafeUrl}`)) return false;
+      return true;
+    });
+    const nextIdx = dedupedExisting.findIndex((b: any) => b.id === bookId);
+    if (nextIdx >= 0) {
+      dedupedExisting[nextIdx] = currentBook;
+      writeLocalBooksCatalog(dedupedExisting);
     } else if (updates && updates.title) {
-      writeLocalBooksCatalog([{ id: bookId, ...updates }, ...existing]);
+      writeLocalBooksCatalog([currentBook, ...dedupedExisting]);
+    } else if (dedupedExisting.length !== existing.length) {
+      writeLocalBooksCatalog(dedupedExisting);
     }
 
     // Sync metadata updates to Supabase public.books so all accounts see canonical catalog updates
@@ -4032,16 +4501,36 @@ app.patch("/api/books/:id", async (req, res) => {
         if (updates.subjects !== undefined) {
           dbPatch.subjects = Array.isArray(updates.subjects) ? updates.subjects.join(", ") : updates.subjects;
         }
-        if (updates.coverImage !== undefined) dbPatch.cover_image = updates.coverImage;
-        if (updates.fileUrl !== undefined) dbPatch.file_url = updates.fileUrl;
+        if (updates.coverImage !== undefined) {
+          dbPatch.cover_image = typeof updates.coverImage === "string" ? updates.coverImage.trim() : "";
+        }
+        if (currentBook.fileUrl !== undefined && (updates.fileUrl !== undefined || shelfFieldsChanged)) {
+          dbPatch.file_url = currentBook.fileUrl;
+        }
         if (updates.publisher !== undefined) dbPatch.publisher = updates.publisher;
         if (updates.isbn !== undefined) dbPatch.isbn = updates.isbn;
         if (updates.isKicdApproved !== undefined) dbPatch.is_kicd_approved = Boolean(updates.isKicdApproved);
 
-        if (Object.keys(dbPatch).length > 0) {
-          await sb.from("books").update(dbPatch).eq("id", bookId);
+        const extendedDbPatch: Record<string, any> = { ...dbPatch };
+        if (currentBook.subjectCategory) extendedDbPatch.subject_category = currentBook.subjectCategory;
+        if (currentBook.b2Bucket) extendedDbPatch.b2_bucket = currentBook.b2Bucket;
+        if (currentBook.format) extendedDbPatch.book_format = currentBook.format;
+
+        if (Object.keys(extendedDbPatch).length > 0) {
+          const { error: extErr } = await sb.from("books").update(extendedDbPatch).eq("id", bookId);
+          if (extErr) {
+            console.warn("[Catalog] Extended PATCH Supabase notice, retrying core columns:", extErr.message);
+            if (Object.keys(dbPatch).length > 0) {
+              const { error: coreErr } = await sb.from("books").update(dbPatch).eq("id", bookId);
+              if (coreErr) {
+                console.warn("[Catalog] Core PATCH Supabase error:", coreErr.message);
+              }
+            }
+          }
         }
-      } catch (_) {}
+      } catch (sbPatchErr: any) {
+        console.warn("[Catalog] Supabase PATCH exception:", sbPatchErr?.message || sbPatchErr);
+      }
     }
 
     let updatedCovers: Record<string, BookCoverOverride> | null = null;
@@ -4081,7 +4570,7 @@ app.patch("/api/books/:id", async (req, res) => {
       });
     }
 
-    res.json({ success: true });
+    res.json({ success: true, book: currentBook });
   } catch (err: any) {
     console.error("[Catalog] PATCH /api/books error:", err);
     res.status(500).json({ error: err.message || "Failed to update book" });
@@ -4090,21 +4579,158 @@ app.patch("/api/books/:id", async (req, res) => {
 
 app.delete("/api/books/:id", async (req, res) => {
   try {
-    const bookId = req.params.id;
-    const existing = readLocalBooksCatalog().filter((b: any) => b.id !== bookId);
-    writeLocalBooksCatalog(existing);
-
-    const deletedIds = readDeletedBookIds();
-    if (!deletedIds.includes(bookId)) {
-      writeDeletedBookIds([...deletedIds, bookId]);
+    const bookId = decodeURIComponent(String(req.params.id || "")).trim();
+    if (!bookId) {
+      return res.status(400).json({ error: "Book ID is required" });
     }
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+    const sb = getServerSupabase(token);
 
-    const sb = getServerSupabase();
+    const allBefore = readLocalBooksCatalog();
+    const targetBook = allBefore.find((b: any) => b.id === bookId);
+
+    const hintFileUrl =
+      typeof req.query.fileUrl === "string" && req.query.fileUrl.trim()
+        ? req.query.fileUrl.trim()
+        : typeof req.body?.fileUrl === "string" && req.body.fileUrl.trim()
+          ? req.body.fileUrl.trim()
+          : "";
+
+    let targetFileUrl = targetBook?.fileUrl ? String(targetBook.fileUrl) : hintFileUrl;
     if (sb) {
       try {
-        await sb.from("books").delete().eq("id", bookId);
-      } catch (sbErr) {
+        const { data: sbRow } = await sb
+          .from("books")
+          .select("id, file_url, b2_key")
+          .eq("id", bookId)
+          .maybeSingle();
+        if (sbRow) {
+          const sbUrl = String(sbRow.b2_key || sbRow.file_url || "").trim();
+          if (sbUrl && !targetFileUrl) targetFileUrl = sbUrl;
+        }
+      } catch (_) {}
+    }
+    if (!targetFileUrl && (bookId.startsWith("b2-") || bookId.startsWith("disk-"))) {
+      targetFileUrl = bookId.replace(/^(b2-|disk-)/, "");
+    }
+
+    const safeObjectKey = sanitizeB2ObjectKey(targetFileUrl);
+    const candidateKeys = safeObjectKey ? getB2CandidateKeys(safeObjectKey) : [];
+    const candidateKeySet = new Set(candidateKeys);
+
+    const remaining = allBefore.filter((b: any) => {
+      if (b.id === bookId) return false;
+      const bKey = sanitizeB2ObjectKey(b?.fileUrl);
+      if (bKey && candidateKeySet.has(bKey)) return false;
+      return true;
+    });
+    writeLocalBooksCatalog(remaining);
+
+    // Clean up any global cover override entry for this deleted book ID
+    try {
+      const covers = readGlobalBookCoversFromDisk();
+      if (covers[bookId]) {
+        const nextCovers = { ...covers };
+        delete nextCovers[bookId];
+        writeGlobalBookCoversToDisk(nextCovers);
+      }
+    } catch (_) {}
+
+    const nextDeleted = new Set(readDeletedBookIds());
+    nextDeleted.add(bookId);
+    for (const k of candidateKeys) {
+      nextDeleted.add(`b2-${k}`);
+      nextDeleted.add(`disk-${k}`);
+    }
+    writeDeletedBookIds(Array.from(nextDeleted));
+
+    const isManagedUploadPath =
+      safeObjectKey.startsWith("curriculums/") ||
+      safeObjectKey.startsWith("books/") ||
+      safeObjectKey.startsWith("uploads/") ||
+      (safeObjectKey.startsWith("avatars/") && /\.(pdf|epub)$/i.test(safeObjectKey));
+
+    let supabaseDeleted = false;
+    let supabaseError: string | undefined;
+    if (sb) {
+      try {
+        const { data: delById, error: delErr } = await sb
+          .from("books")
+          .delete()
+          .eq("id", bookId)
+          .select("id");
+        if (delErr) {
+          supabaseError = delErr.message;
+        } else if (Array.isArray(delById) && delById.length > 0) {
+          supabaseDeleted = true;
+        }
+
+        // Also remove any duplicate/orphan Supabase rows pointing to the same managed upload path
+        if (isManagedUploadPath && candidateKeys.length > 0) {
+          const { data: dupByUrl, error: dupUrlErr } = await sb
+            .from("books")
+            .delete()
+            .in("file_url", candidateKeys)
+            .select("id");
+          if (!dupUrlErr && Array.isArray(dupByUrl) && dupByUrl.length > 0) {
+            supabaseDeleted = true;
+          }
+          const { data: dupByB2Key, error: dupB2Err } = await sb
+            .from("books")
+            .delete()
+            .in("b2_key", candidateKeys)
+            .select("id");
+          if (!dupB2Err && Array.isArray(dupByB2Key) && dupByB2Key.length > 0) {
+            supabaseDeleted = true;
+          }
+        }
+      } catch (sbErr: any) {
+        supabaseError = sbErr?.message || String(sbErr);
         console.warn("[Catalog] Supabase delete warning:", sbErr);
+      }
+    }
+
+    // Clean up uploaded object in local disk & Backblaze B2 if no other catalog book references it
+    const stillReferenced = Boolean(
+      safeObjectKey &&
+        remaining.some((b: any) => {
+          const bKey = sanitizeB2ObjectKey(b?.fileUrl);
+          return Boolean(bKey && candidateKeySet.has(bKey));
+        })
+    );
+
+    let b2Deleted = false;
+    if (isManagedUploadPath && !stillReferenced) {
+      const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+      for (const candKey of candidateKeys) {
+        const localTarget = path.resolve(resolvedUploadsDir, candKey);
+        if (localTarget.startsWith(resolvedUploadsDir + path.sep) && fs.existsSync(localTarget)) {
+          try {
+            fs.unlinkSync(localTarget);
+          } catch (_) {}
+        }
+      }
+
+      const s3 = getS3Client();
+      if (s3 && B2_BUCKET_NAME) {
+        try {
+          const listed = await listAllB2Objects(s3, B2_BUCKET_NAME).catch(() => ({
+            objects: [],
+            keySet: new Set<string>(),
+          }));
+          const keysToDelete = candidateKeys.filter((k) => listed.keySet.has(k));
+          const finalDeleteKeys = keysToDelete.length > 0 ? keysToDelete : [safeObjectKey];
+          for (const keyToDel of finalDeleteKeys) {
+            await s3.send(new DeleteObjectCommand({ Bucket: B2_BUCKET_NAME, Key: keyToDel }));
+            if (listed.keySet.has(keyToDel) || keyToDel === safeObjectKey) {
+              b2Deleted = true;
+            }
+            console.log(`[Storage] Deleted ${keyToDel} from B2 bucket ${B2_BUCKET_NAME}`);
+          }
+        } catch (b2DelErr: any) {
+          console.warn(`[Storage] B2 delete notice for ${safeObjectKey}:`, b2DelErr?.message || b2DelErr);
+        }
       }
     }
 
@@ -4115,10 +4741,213 @@ app.delete("/api/books/:id", async (req, res) => {
       updatedAt: new Date().toISOString(),
     });
 
-    res.json({ success: true });
+    res.json({
+      success: true,
+      bookId,
+      supabaseDeleted,
+      b2Deleted,
+      ...(supabaseError ? { supabaseError } : {}),
+    });
   } catch (err: any) {
     console.error("[Catalog] DELETE /api/books error:", err);
     res.status(500).json({ error: err.message || "Failed to delete book" });
+  }
+});
+
+// B2 Edu-AI-Cloud object inventory inspection endpoint
+app.get("/api/admin/b2-inventory", async (_req, res) => {
+  try {
+    const s3 = getS3Client();
+    if (!s3 || !B2_BUCKET_NAME) {
+      return res.status(503).json({ error: "Backblaze B2 is not configured on the server." });
+    }
+    const { objects } = await listAllB2Objects(s3, B2_BUCKET_NAME);
+    res.json({
+      bucket: B2_BUCKET_NAME,
+      count: objects.length,
+      objects: objects.map((obj: any) => ({
+        key: obj.Key,
+        size: obj.Size,
+        lastModified: obj.LastModified,
+      })),
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err?.message || "Failed to list B2 inventory" });
+  }
+});
+
+// Bidirectional Handshake: Reconcile Supabase public.books & Storage <-> Backblaze B2 Edu-AI-Cloud Curriculum Shelves
+app.post("/api/admin/sync-b2-supabase", async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7).trim() : undefined;
+    const sb = getServerSupabase(token);
+    const s3 = getS3Client();
+
+    if (!sb) {
+      return res.status(503).json({ error: "Supabase is not configured on the server." });
+    }
+    if (!s3 || !B2_BUCKET_NAME) {
+      return res.status(503).json({ error: "Backblaze B2 is not configured on the server." });
+    }
+
+    const { objects: b2Objects, keySet: b2KeySet } = await listAllB2Objects(s3, B2_BUCKET_NAME);
+    const { data: sbRows, error: sbFetchErr } = await sb
+      .from("books")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (sbFetchErr) {
+      return res.status(500).json({ error: `Failed to read Supabase books: ${sbFetchErr.message}` });
+    }
+
+    const deletedSet = new Set(readDeletedBookIds());
+    const validSbRows = (sbRows || []).filter((r: any) => !isSystemBookConfigRow(r));
+    const localCatalog = readLocalBooksCatalog();
+
+    let promotedToB2Shelves = 0;
+    let registeredInSupabase = 0;
+    let alreadyInSync = 0;
+    let skipped = 0;
+    const errors: string[] = [];
+    const updatedKeysByBookId = new Map<string, { fileUrl: string; subjectCategory: string }>();
+
+    // Step 1: Promote any Supabase book whose file isn't yet organized under B2 curriculums/<Shelf>/<SubjectCategory>/
+    for (const row of validSbRows) {
+      const mapped = mapSupabaseRowToCatalogBook(row, b2KeySet, B2_BUCKET_NAME);
+      if (!mapped.fileUrl) {
+        skipped += 1;
+        continue;
+      }
+
+      const targetPath = buildB2CurriculumPath({
+        curriculum: mapped.curriculum,
+        subjects: mapped.subjects,
+        subjectCategoryOverride: mapped.subjectCategory,
+        category: mapped.category,
+        level: mapped.level,
+        title: mapped.title,
+      });
+      const currentSafeKey = sanitizeB2ObjectKey(mapped.fileUrl);
+      const parsedCurrent = parseB2CurriculumKey(currentSafeKey);
+      const inExpectedFolder =
+        parsedCurrent.isCurriculumShelfPath &&
+        parsedCurrent.curriculumSlug?.toLowerCase() === targetPath.curriculumSlug.toLowerCase() &&
+        parsedCurrent.subjectCategorySlug?.toLowerCase() === targetPath.subjectCategorySlug.toLowerCase() &&
+        b2KeySet.has(currentSafeKey);
+
+      if (inExpectedFolder) {
+        alreadyInSync += 1;
+        continue;
+      }
+
+      const moveRes = await syncOrMoveBookToB2Shelf({
+        book: mapped,
+        uploadsDir: UPLOADS_DIR,
+        s3,
+        b2BucketName: B2_BUCKET_NAME,
+        sb,
+        b2KeySet,
+      });
+
+      if (moveRes.movedOrSynced) {
+        promotedToB2Shelves += 1;
+        updatedKeysByBookId.set(mapped.id, {
+          fileUrl: moveRes.newKey,
+          subjectCategory: moveRes.subjectCategory,
+        });
+      } else if (moveRes.error) {
+        errors.push(`${mapped.title}: ${moveRes.error}`);
+      }
+    }
+
+    // Step 2: Register any curriculum PDF/EPUB sitting in B2 Edu-AI-Cloud that isn't in Supabase public.books yet
+    const knownSbUrls = new Set(
+      validSbRows.map((r: any) => sanitizeB2ObjectKey(r.b2_key || r.file_url || "")).filter(Boolean)
+    );
+    for (const moved of updatedKeysByBookId.values()) {
+      knownSbUrls.add(sanitizeB2ObjectKey(moved.fileUrl));
+    }
+
+    for (const obj of b2Objects) {
+      const key = String(obj?.Key || "");
+      const safeKey = sanitizeB2ObjectKey(key);
+      const lower = safeKey.toLowerCase();
+      if (
+        (!lower.endsWith(".pdf") && !lower.endsWith(".epub")) ||
+        knownSbUrls.has(safeKey) ||
+        deletedSet.has(`b2-${safeKey}`) ||
+        deletedSet.has(`disk-${safeKey}`)
+      ) {
+        continue;
+      }
+      const parsedShelf = parseB2CurriculumKey(safeKey);
+      if (!parsedShelf.isCurriculumShelfPath) continue;
+
+      const filename = safeKey.split("/").pop() || safeKey;
+      const cleanName = filename.replace(/^\d+-/, "").replace(/\.(pdf|epub)$/i, "").replace(/[_\-]+/g, " ").trim();
+      const inferredKlb = cleanName.toLowerCase().includes("klb");
+      const upRes = await upsertBookInSupabase(
+        sb,
+        {
+          title: cleanName || getTitleFromKey(safeKey),
+          author: inferredKlb ? "Kenya Literature Bureau (KLB)" : "Cloud Library",
+          publisher: inferredKlb ? "Kenya Literature Bureau (KLB)" : undefined,
+          isKicdApproved: inferredKlb,
+          category: "Textbook",
+          subjectCategory: parsedShelf.subjectCategory,
+          level:
+            parsedShelf.curriculumShelf &&
+            ["University", "College", "Graduate", "Postgraduate", "Vocational"].includes(parsedShelf.curriculumShelf)
+              ? parsedShelf.curriculumShelf
+              : "School",
+          curriculum: parsedShelf.curriculumShelf ? [parsedShelf.curriculumShelf] : undefined,
+          subjects: parsedShelf.subjectCategory ? [parsedShelf.subjectCategory] : undefined,
+          description: `Cloud-synced ${parsedShelf.curriculumShelf} (${parsedShelf.subjectCategory}) curriculum material in ${B2_BUCKET_NAME}.`,
+          fileUrl: safeKey,
+          b2Bucket: B2_BUCKET_NAME,
+          format: lower.endsWith(".epub") ? "epub" : "pdf",
+          fileSizeBytes: typeof obj.Size === "number" ? obj.Size : undefined,
+        },
+        { b2Synced: true }
+      );
+      if (upRes.synced) {
+        registeredInSupabase += 1;
+        knownSbUrls.add(safeKey);
+      } else if (upRes.error) {
+        errors.push(`B2(${safeKey}): ${upRes.error}`);
+      }
+    }
+
+    // Update local books-catalog.json mirrors with any promoted keys
+    if (updatedKeysByBookId.size > 0) {
+      const nextLocal = localCatalog.map((b: any) => {
+        const upd = updatedKeysByBookId.get(b.id);
+        return upd
+          ? { ...b, fileUrl: upd.fileUrl, subjectCategory: upd.subjectCategory, b2Bucket: B2_BUCKET_NAME, b2Synced: true }
+          : b;
+      });
+      writeLocalBooksCatalog(nextLocal);
+    }
+
+    broadcastAllConnectedUsers({
+      type: "system:books-updated",
+      action: "sync",
+      updatedAt: new Date().toISOString(),
+    });
+
+    res.json({
+      success: true,
+      bucket: B2_BUCKET_NAME,
+      promotedToB2Shelves,
+      registeredInSupabase,
+      alreadyInSync,
+      skipped,
+      errors,
+    });
+  } catch (err: any) {
+    console.error("[B2-Supabase Sync] Error:", err);
+    res.status(500).json({ error: err.message || "Failed to synchronize B2 and Supabase" });
   }
 });
 
@@ -4202,53 +5031,159 @@ app.get("/api/client-log", (req, res) => {
 });
 
 // API Routes - Unified Direct Upload & Presigned Storage Flow
+const toAsciiMetadataValue = (val?: string | null) =>
+  String(val || "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\x20-\x7E]/g, "")
+    .trim()
+    .slice(0, 256);
+
+const resolveUploadPathAndMetadata = (params: {
+  filename: string;
+  prefix?: string;
+  customKey?: string;
+  curriculum?: string;
+  subjects?: string;
+  subjectCategory?: string;
+  category?: string;
+  level?: string;
+  title?: string;
+}) => {
+  const sanitizedFilename = params.filename.replace(/[^a-zA-Z0-9.\-_]/g, "_").replace(/^\.+/, "") || `file-${Date.now()}`;
+  const hasCurriculumIntent = Boolean(
+    (params.curriculum && params.curriculum.trim()) ||
+    (params.subjects && params.subjects.trim()) ||
+    (params.subjectCategory && params.subjectCategory.trim()) ||
+    (params.prefix && params.prefix.startsWith("curriculums"))
+  );
+
+  let curriculumShelf: string | undefined;
+  let subjectCategory: string | undefined;
+  let resolvedPrefix = sanitizeB2Prefix(params.prefix, "uploads");
+
+  if (hasCurriculumIntent) {
+    const pathInfo = buildB2CurriculumPath({
+      curriculum: params.curriculum,
+      subjects: params.subjects,
+      subjectCategoryOverride: params.subjectCategory,
+      category: params.category,
+      level: params.level,
+      title: params.title || params.filename,
+    });
+    resolvedPrefix = pathInfo.prefix;
+    curriculumShelf = pathInfo.curriculumShelf;
+    subjectCategory = pathInfo.subjectCategory;
+  }
+
+  const safeCustomKey = params.customKey ? sanitizeB2ObjectKey(params.customKey) : "";
+  const key = safeCustomKey || `${resolvedPrefix}/${Date.now()}-${sanitizedFilename}`;
+
+  const s3Metadata: Record<string, string> = {};
+  if (curriculumShelf) s3Metadata["edu-curriculum"] = toAsciiMetadataValue(curriculumShelf);
+  if (subjectCategory) s3Metadata["edu-subject-category"] = toAsciiMetadataValue(subjectCategory);
+  if (params.subjects) s3Metadata["edu-subjects"] = toAsciiMetadataValue(params.subjects);
+  if (params.category) s3Metadata["edu-category"] = toAsciiMetadataValue(params.category);
+  if (params.level) s3Metadata["edu-level"] = toAsciiMetadataValue(params.level);
+  if (params.title) s3Metadata["edu-title"] = toAsciiMetadataValue(params.title);
+
+  return { key, resolvedPrefix, curriculumShelf, subjectCategory, s3Metadata };
+};
+
 const handleDirectUpload = async (req: express.Request, res: express.Response) => {
   try {
     const filename = (req.query.filename as string) || `file-${Date.now()}`;
-    const prefix = (req.query.prefix as string) || 'uploads';
-    const customKey = (req.query.key as string);
-    const headerContentType = (req.headers['content-type'] as string) || '';
-    const contentType = headerContentType.split(';')[0] || getMimeType(filename);
-    
-    const sanitizedFilename = filename.replace(/[^a-zA-Z0-9.\-_]/g, '_');
-    const key = customKey || `${prefix}/${Date.now()}-${sanitizedFilename}`;
+    const rawPrefix = (req.query.prefix as string) || "uploads";
+    const customKey = (req.query.key as string) || undefined;
+    const curriculum = (req.query.curriculum as string) || (req.headers["x-edu-curriculum"] as string) || undefined;
+    const subjects = (req.query.subjects as string) || (req.headers["x-edu-subjects"] as string) || undefined;
+    const subjectCategoryQuery =
+      (req.query.subjectCategory as string) || (req.headers["x-edu-subject-category"] as string) || undefined;
+    const category = (req.query.category as string) || (req.headers["x-edu-category"] as string) || undefined;
+    const level = (req.query.level as string) || (req.headers["x-edu-level"] as string) || undefined;
+    const title = (req.query.title as string) || (req.headers["x-edu-title"] as string) || undefined;
 
-    // 1. Always store to local persistent disk for guaranteed instant access
-    const localFilePath = path.join(UPLOADS_DIR, key);
+    const headerContentType = (req.headers["content-type"] as string) || "";
+    const contentType = headerContentType.split(";")[0] || getMimeType(filename);
+
+    const { key, resolvedPrefix, curriculumShelf, subjectCategory, s3Metadata } = resolveUploadPathAndMetadata({
+      filename,
+      prefix: rawPrefix,
+      customKey,
+      curriculum,
+      subjects,
+      subjectCategory: subjectCategoryQuery,
+      category,
+      level,
+      title,
+    });
+
+    // 1. Confine local disk path strictly within UPLOADS_DIR
+    const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+    const localFilePath = path.resolve(resolvedUploadsDir, key);
+    if (!localFilePath.startsWith(resolvedUploadsDir + path.sep)) {
+      return res.status(400).json({ error: "Invalid upload destination path" });
+    }
     const localDir = path.dirname(localFilePath);
     if (!fs.existsSync(localDir)) {
       fs.mkdirSync(localDir, { recursive: true });
     }
 
-    // Check if body is a Buffer or stream
+    // Check if body is a Buffer or string
     let fileBuffer: Buffer = Buffer.from("");
     if (Buffer.isBuffer(req.body) && req.body.length > 0) {
       fileBuffer = req.body;
-    } else if (typeof req.body === 'string') {
+    } else if (typeof req.body === "string") {
       fileBuffer = Buffer.from(req.body);
     }
+    if (fileBuffer.length === 0) {
+      return res.status(400).json({ error: "Uploaded file payload was empty. Please select the PDF/EPUB file again." });
+    }
+
+    const lowerFile = filename.toLowerCase();
+    if (lowerFile.endsWith(".pdf") || contentType === "application/pdf") {
+      if (!isValidPdfBufferStructure(fileBuffer)) {
+        return res.status(400).json({
+          error: "The selected file is not a valid PDF document (missing %PDF- header or %%EOF trailer). Please choose an intact PDF.",
+        });
+      }
+    } else if (lowerFile.endsWith(".epub") || contentType === "application/epub+zip") {
+      if (!isValidEpubBufferHeader(fileBuffer)) {
+        return res.status(400).json({
+          error: "The selected file is not a valid EPUB archive.",
+        });
+      }
+    }
+
     fs.writeFileSync(localFilePath, fileBuffer);
 
-    // 2. Opportunistically sync with Backblaze B2 cloud storage
+    // 2. Sync with Backblaze B2 cloud storage (Edu-AI-Cloud bucket)
     const s3 = getS3Client();
+    let b2Synced = false;
+    let b2Error: string | undefined;
     if (s3 && B2_BUCKET_NAME) {
       try {
         const command = new PutObjectCommand({
           Bucket: B2_BUCKET_NAME,
           Key: key,
           ContentType: contentType,
+          ContentLength: fileBuffer.length,
           Body: fileBuffer,
+          ...(Object.keys(s3Metadata).length > 0 ? { Metadata: s3Metadata } : {}),
         });
         await s3.send(command);
+        b2Synced = true;
         console.log(`[Storage] Successfully synced ${key} to B2 bucket ${B2_BUCKET_NAME}`);
       } catch (b2Err: any) {
-        console.warn(`[Storage] B2 cloud sync notice for ${key}:`, b2Err.message || b2Err);
+        b2Error = b2Err?.message || String(b2Err);
+        console.warn(`[Storage] B2 cloud sync notice for ${key}:`, b2Error);
       }
     }
 
-    // 3. Mirror uploads to Supabase Storage so images/files survive container restarts
+    // 3. Mirror non-curriculum uploads (avatars/images/workspace) OR B2 fallback to Supabase Storage cleanly
     const sb = getServerSupabase();
-    if (sb && fileBuffer.length > 0) {
+    const isCurriculumBookBinary = key.startsWith("curriculums/") || key.startsWith("books/");
+    if (sb && fileBuffer.length > 0 && (!isCurriculumBookBinary || !b2Synced)) {
       const targetBucket = key.startsWith("avatars") || contentType.startsWith("image/") ? "avatars" : "workspace-files";
       try {
         if (sb.storage?.createBucket) {
@@ -4261,10 +5196,28 @@ const handleDirectUpload = async (req: express.Request, res: express.Response) =
       } catch (_) {}
     }
 
-    res.json({ 
-      key, 
-      success: true, 
-      url: `/api/download?key=${encodeURIComponent(key)}` 
+    if (s3 && B2_BUCKET_NAME && isCurriculumBookBinary && !b2Synced) {
+      try {
+        if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath);
+      } catch (_) {}
+      return res.status(502).json({
+        error: b2Error
+          ? `Failed to store textbook file in Backblaze B2 (${B2_BUCKET_NAME}): ${b2Error}`
+          : `Failed to store textbook file in Backblaze B2 (${B2_BUCKET_NAME}).`,
+      });
+    }
+
+    res.json({
+      key,
+      prefix: resolvedPrefix,
+      bucket: B2_BUCKET_NAME || null,
+      b2Synced,
+      sizeBytes: fileBuffer.length,
+      ...(b2Error ? { b2Error } : {}),
+      curriculumShelf: curriculumShelf || null,
+      subjectCategory: subjectCategory || null,
+      success: true,
+      url: `/api/download?key=${encodeURIComponent(key)}`,
     });
   } catch (error: any) {
     console.error("Error direct upload:", error);
@@ -4272,52 +5225,269 @@ const handleDirectUpload = async (req: express.Request, res: express.Response) =
   }
 };
 
-app.post("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-app.put("/api/upload-direct", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-app.post("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
-app.put("/api/upload", express.raw({ type: '*/*', limit: '100mb' }), handleDirectUpload);
+app.post("/api/upload-direct", express.raw({ type: "*/*", limit: "100mb" }), handleDirectUpload);
+app.put("/api/upload-direct", express.raw({ type: "*/*", limit: "100mb" }), handleDirectUpload);
+app.post("/api/upload", express.raw({ type: "*/*", limit: "100mb" }), handleDirectUpload);
+app.put("/api/upload", express.raw({ type: "*/*", limit: "100mb" }), handleDirectUpload);
+
+// Chunked binary upload endpoints (bypasses Cloud Run 32 MiB single-request body limit for large PDF/EPUB textbooks)
+app.post("/api/upload-chunk", express.raw({ type: "*/*", limit: "16mb" }), (req, res) => {
+  try {
+    const rawUploadId = String(req.query.uploadId || "");
+    if (!/^[a-zA-Z0-9_-]{8,64}$/.test(rawUploadId)) {
+      return res.status(400).json({ error: "Invalid uploadId" });
+    }
+    const chunkIndex = Number(req.query.chunkIndex);
+    const totalChunks = Number(req.query.totalChunks);
+    if (
+      !Number.isInteger(chunkIndex) ||
+      !Number.isInteger(totalChunks) ||
+      totalChunks < 1 ||
+      totalChunks > 256 ||
+      chunkIndex < 0 ||
+      chunkIndex >= totalChunks
+    ) {
+      return res.status(400).json({ error: "Invalid chunkIndex or totalChunks" });
+    }
+
+    const chunkBuf = Buffer.isBuffer(req.body) ? req.body : Buffer.from(String(req.body || ""));
+    if (chunkBuf.length === 0) {
+      return res.status(400).json({ error: "Empty upload chunk" });
+    }
+
+    const chunksRoot = path.resolve(UPLOADS_DIR, ".chunks");
+    const uploadChunkDir = path.resolve(chunksRoot, rawUploadId);
+    if (!uploadChunkDir.startsWith(chunksRoot + path.sep)) {
+      return res.status(400).json({ error: "Invalid chunk directory" });
+    }
+    fs.mkdirSync(uploadChunkDir, { recursive: true });
+
+    const chunkPath = path.resolve(uploadChunkDir, `part-${chunkIndex}`);
+    if (!chunkPath.startsWith(uploadChunkDir + path.sep)) {
+      return res.status(400).json({ error: "Invalid chunk path" });
+    }
+    fs.writeFileSync(chunkPath, chunkBuf);
+
+    return res.json({ success: true, uploadId: rawUploadId, chunkIndex, bytes: chunkBuf.length });
+  } catch (err: any) {
+    console.error("[UploadChunk] Error:", err);
+    return res.status(500).json({ error: err?.message || "Failed to store upload chunk" });
+  }
+});
+
+app.post("/api/upload-complete", async (req, res) => {
+  const rawUploadId = String(req.body?.uploadId || "");
+  if (!/^[a-zA-Z0-9_-]{8,64}$/.test(rawUploadId)) {
+    return res.status(400).json({ error: "Invalid uploadId" });
+  }
+  const totalChunks = Number(req.body?.totalChunks);
+  if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > 256) {
+    return res.status(400).json({ error: "Invalid totalChunks" });
+  }
+
+  const chunksRoot = path.resolve(UPLOADS_DIR, ".chunks");
+  const uploadChunkDir = path.resolve(chunksRoot, rawUploadId);
+  if (!uploadChunkDir.startsWith(chunksRoot + path.sep)) {
+    return res.status(400).json({ error: "Invalid chunk directory" });
+  }
+
+  try {
+    const filename = String(req.body?.filename || `file-${Date.now()}.pdf`);
+    const rawPrefix = String(req.body?.prefix || "uploads");
+    const customKey = typeof req.body?.key === "string" ? req.body.key : undefined;
+    const curriculum = typeof req.body?.curriculum === "string" ? req.body.curriculum : undefined;
+    const subjects = typeof req.body?.subjects === "string" ? req.body.subjects : undefined;
+    const subjectCategoryQuery = typeof req.body?.subjectCategory === "string" ? req.body.subjectCategory : undefined;
+    const category = typeof req.body?.category === "string" ? req.body.category : undefined;
+    const level = typeof req.body?.level === "string" ? req.body.level : undefined;
+    const title = typeof req.body?.title === "string" ? req.body.title : undefined;
+    const contentType = String(req.body?.contentType || "").split(";")[0] || getMimeType(filename);
+
+    const { key, resolvedPrefix, curriculumShelf, subjectCategory, s3Metadata } = resolveUploadPathAndMetadata({
+      filename,
+      prefix: rawPrefix,
+      customKey,
+      curriculum,
+      subjects,
+      subjectCategory: subjectCategoryQuery,
+      category,
+      level,
+      title,
+    });
+
+    const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+    const localFilePath = path.resolve(resolvedUploadsDir, key);
+    if (!localFilePath.startsWith(resolvedUploadsDir + path.sep)) {
+      return res.status(400).json({ error: "Invalid upload destination path" });
+    }
+    fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
+
+    for (let i = 0; i < totalChunks; i++) {
+      const partPath = path.resolve(uploadChunkDir, `part-${i}`);
+      if (!partPath.startsWith(uploadChunkDir + path.sep) || !fs.existsSync(partPath)) {
+        return res.status(400).json({ error: `Missing upload chunk ${i + 1} of ${totalChunks}. Please retry.` });
+      }
+    }
+
+    const writeStream = fs.createWriteStream(localFilePath);
+    await new Promise<void>((resolve, reject) => {
+      writeStream.on("error", reject);
+      writeStream.on("finish", () => resolve());
+      try {
+        for (let i = 0; i < totalChunks; i++) {
+          const partPath = path.resolve(uploadChunkDir, `part-${i}`);
+          writeStream.write(fs.readFileSync(partPath));
+        }
+        writeStream.end();
+      } catch (asmErr) {
+        writeStream.destroy();
+        reject(asmErr);
+      }
+    });
+
+    const fileStat = fs.statSync(localFilePath);
+    const lowerFile = filename.toLowerCase();
+    if (lowerFile.endsWith(".pdf") || contentType === "application/pdf") {
+      if (!isValidPdfFileOnDisk(localFilePath)) {
+        try { fs.unlinkSync(localFilePath); } catch (_) {}
+        return res.status(400).json({
+          error: "Uploaded PDF file appears corrupted or incomplete (missing %PDF- header or %%EOF trailer). Please re-select the file.",
+        });
+      }
+    } else if (lowerFile.endsWith(".epub") || contentType === "application/epub+zip") {
+      if (!isValidEpubFileOnDisk(localFilePath)) {
+        try { fs.unlinkSync(localFilePath); } catch (_) {}
+        return res.status(400).json({
+          error: "Uploaded EPUB archive appears invalid or corrupted.",
+        });
+      }
+    }
+
+    const s3 = getS3Client();
+    let b2Synced = false;
+    let b2Error: string | undefined;
+    if (s3 && B2_BUCKET_NAME) {
+      try {
+        await s3.send(
+          new PutObjectCommand({
+            Bucket: B2_BUCKET_NAME,
+            Key: key,
+            ContentType: contentType,
+            ContentLength: fileStat.size,
+            Body: fs.createReadStream(localFilePath),
+            ...(Object.keys(s3Metadata).length > 0 ? { Metadata: s3Metadata } : {}),
+          })
+        );
+        b2Synced = true;
+        console.log(`[Storage] Successfully chunk-synced ${key} (${fileStat.size} bytes) to B2 bucket ${B2_BUCKET_NAME}`);
+      } catch (b2Err: any) {
+        b2Error = b2Err?.message || String(b2Err);
+        console.warn(`[Storage] B2 chunk sync notice for ${key}:`, b2Error);
+      }
+    }
+
+    if (!b2Synced) {
+      try { if (fs.existsSync(localFilePath)) fs.unlinkSync(localFilePath); } catch (_) {}
+      return res.status(502).json({
+        error: b2Error ? `Failed to store file in Backblaze B2: ${b2Error}` : "Backblaze B2 is not configured on the server.",
+      });
+    }
+
+    return res.json({
+      key,
+      prefix: resolvedPrefix,
+      bucket: B2_BUCKET_NAME || null,
+      b2Synced,
+      sizeBytes: fileStat.size,
+      curriculumShelf: curriculumShelf || null,
+      subjectCategory: subjectCategory || null,
+      success: true,
+      url: `/api/download?key=${encodeURIComponent(key)}`,
+    });
+  } catch (err: any) {
+    console.error("[UploadComplete] Error:", err);
+    return res.status(500).json({ error: err?.message || "Failed to assemble chunked upload" });
+  } finally {
+    try {
+      fs.rmSync(uploadChunkDir, { recursive: true, force: true });
+    } catch (_) {}
+  }
+});
 
 app.post("/api/presigned-url", async (req, res) => {
   try {
-    const { filename, fileType, operation, prefix = 'uploads' } = req.body;
+    const {
+      filename,
+      fileType,
+      operation,
+      prefix = "uploads",
+      curriculum,
+      subjects,
+      subjectCategory,
+      category,
+      level,
+      title,
+    } = req.body || {};
     if (!filename || !fileType) {
       return res.status(400).json({ error: "filename and fileType are required" });
     }
 
-    const key = `${prefix}/${Date.now()}-${filename.replace(/[^a-zA-Z0-9.\-_]/g, '_')}`;
+    const { key, resolvedPrefix, curriculumShelf, subjectCategory: resolvedSubjCat, s3Metadata } =
+      resolveUploadPathAndMetadata({
+        filename,
+        prefix,
+        curriculum,
+        subjects,
+        subjectCategory,
+        category,
+        level,
+        title,
+      });
 
     const s3 = getS3Client();
     if (!s3 || !B2_BUCKET_NAME) {
-      return res.json({ 
-        presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
+      return res.json({
+        presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(resolvedPrefix)}&key=${encodeURIComponent(key)}`,
         fileKey: key,
-        directFallback: true 
+        bucket: B2_BUCKET_NAME || null,
+        curriculumShelf: curriculumShelf || null,
+        subjectCategory: resolvedSubjCat || null,
+        directFallback: true,
       });
     }
 
     try {
       let command;
-      if (operation === 'download') {
+      if (operation === "download") {
+        const safeDownloadKey = sanitizeB2ObjectKey(filename);
         command = new GetObjectCommand({
           Bucket: B2_BUCKET_NAME,
-          Key: filename,
+          Key: safeDownloadKey,
         });
       } else {
         command = new PutObjectCommand({
           Bucket: B2_BUCKET_NAME,
           Key: key,
           ContentType: fileType,
+          ...(Object.keys(s3Metadata).length > 0 ? { Metadata: s3Metadata } : {}),
         });
       }
 
       const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 3600 });
-      res.json({ presignedUrl, fileKey: key });
+      res.json({
+        presignedUrl,
+        fileKey: key,
+        bucket: B2_BUCKET_NAME,
+        curriculumShelf: curriculumShelf || null,
+        subjectCategory: resolvedSubjCat || null,
+      });
     } catch (signErr) {
       console.warn("[Storage] S3 presign warning, falling back to direct upload route:", signErr);
-      res.json({ 
-        presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(prefix)}&key=${encodeURIComponent(key)}`, 
+      res.json({
+        presignedUrl: `/api/upload-direct?filename=${encodeURIComponent(filename)}&prefix=${encodeURIComponent(resolvedPrefix)}&key=${encodeURIComponent(key)}`,
         fileKey: key,
-        directFallback: true 
+        bucket: B2_BUCKET_NAME || null,
+        directFallback: true,
       });
     }
   } catch (error) {
@@ -4326,22 +5496,124 @@ app.post("/api/presigned-url", async (req, res) => {
   }
 });
 
+app.get("/api/download/exists", async (req, res) => {
+  const { key } = req.query;
+  if (!key || typeof key !== "string") {
+    return res.json({ available: false, reason: "missing-key" });
+  }
+  const safeKey = sanitizeB2ObjectKey(key);
+  if (!safeKey) {
+    return res.json({ available: false, reason: "invalid-key" });
+  }
+  const strippedUploadsKey = safeKey.replace(/^uploads\/+/, "");
+  const filename = safeKey.split("/").pop() || "download";
+  const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+  const candidateLocalPaths = Array.from(
+    new Set([
+      path.resolve(resolvedUploadsDir, safeKey),
+      path.resolve(resolvedUploadsDir, strippedUploadsKey),
+    ])
+  ).filter((p) => p.startsWith(resolvedUploadsDir + path.sep));
+
+  const expectedMime = getMimeType(filename);
+  const expectsPdf = expectedMime === "application/pdf";
+  const expectsEpub = expectedMime === "application/epub+zip";
+
+  for (const p of candidateLocalPaths) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+        if (expectsPdf && !isValidPdfFileOnDisk(p)) {
+          return res.json({ available: false, reason: "invalid-pdf" });
+        }
+        if (expectsEpub && !isValidEpubFileOnDisk(p)) {
+          return res.json({ available: false, reason: "invalid-epub" });
+        }
+        return res.json({ available: true, source: "disk" });
+      }
+    } catch (_) {}
+  }
+
+  const s3 = getS3Client();
+  if (s3 && B2_BUCKET_NAME) {
+    for (const s3Key of getB2CandidateKeys(safeKey, strippedUploadsKey)) {
+      try {
+        const head = await s3.send(new HeadObjectCommand({ Bucket: B2_BUCKET_NAME, Key: s3Key }));
+        if ((expectsPdf || expectsEpub) && typeof head.ContentLength === "number" && head.ContentLength < 64) {
+          return res.json({ available: false, reason: expectsPdf ? "invalid-pdf" : "invalid-epub" });
+        }
+        if (expectsPdf || expectsEpub) {
+          const rangeEnd = Math.min(1023, Math.max(63, (head.ContentLength || 1024) - 1));
+          const peekRes = await s3.send(
+            new GetObjectCommand({ Bucket: B2_BUCKET_NAME, Key: s3Key, Range: `bytes=0-${rangeEnd}` })
+          );
+          const peekChunks: any[] = [];
+          if (peekRes.Body) {
+            for await (const ch of peekRes.Body as any) peekChunks.push(ch);
+          }
+          const peekBuf = Buffer.concat(peekChunks);
+          if (expectsPdf && !peekBuf.includes(Buffer.from("%PDF-"))) {
+            return res.json({ available: false, reason: "invalid-pdf" });
+          }
+          if (expectsEpub && (peekBuf.length < 4 || peekBuf[0] !== 0x50 || peekBuf[1] !== 0x4b)) {
+            return res.json({ available: false, reason: "invalid-epub" });
+          }
+        }
+        return res.json({ available: true, source: "b2" });
+      } catch (_) {}
+    }
+  }
+
+  const sb = getServerSupabase();
+  if (sb) {
+    const noAvatarsPrefix = safeKey.replace(/^avatars\/+/, "");
+    const noWorkspacePrefix = safeKey.replace(/^workspace-files\/+/, "");
+    const keyVariants = Array.from(new Set([safeKey, noAvatarsPrefix, noWorkspacePrefix, strippedUploadsKey, filename]));
+    for (const bucket of ["books", "avatars", "workspace-files", "uploads", "public"]) {
+      for (const variant of keyVariants) {
+        try {
+          const { data: existsFlag } = await sb.storage.from(bucket).exists(variant);
+          if (existsFlag) {
+            return res.json({ available: true, source: "supabase" });
+          }
+        } catch (_) {}
+      }
+    }
+  }
+
+  const isUploadedCloudKey =
+    safeKey.startsWith("avatars/") ||
+    safeKey.startsWith("curriculums/") ||
+    safeKey.startsWith("books/") ||
+    safeKey.startsWith("uploads/") ||
+    /(?:^|\/)\d{10,}-/.test(safeKey);
+
+  if (!isUploadedCloudKey && !getMimeType(filename).startsWith("image/")) {
+    return res.json({ available: true, source: "built-in-sample" });
+  }
+
+  return res.json({ available: false, source: "missing" });
+});
+
 app.get("/api/download", async (req, res) => {
   const { key, inline } = req.query;
-  if (!key || typeof key !== 'string') {
+  if (!key || typeof key !== "string") {
     return res.status(400).send("Key is required");
   }
 
-  const safeKey = key.replace(/^\/+/, "").replace(/\.\.(\/|\\|$)/g, "");
+  const safeKey = sanitizeB2ObjectKey(key);
+  if (!safeKey) {
+    return res.status(400).send("Invalid key");
+  }
   const strippedUploadsKey = safeKey.replace(/^uploads\/+/, "");
-  const filename = safeKey.split('/').pop() || 'download';
+  const filename = safeKey.split("/").pop() || "download";
+  const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
   const candidateLocalPaths = Array.from(
     new Set([
-      path.join(UPLOADS_DIR, safeKey),
-      path.join(UPLOADS_DIR, strippedUploadsKey),
+      path.resolve(resolvedUploadsDir, safeKey),
+      path.resolve(resolvedUploadsDir, strippedUploadsKey),
     ])
-  );
-  const localFilePath = candidateLocalPaths[0];
+  ).filter((p) => p.startsWith(resolvedUploadsDir + path.sep));
+  const localFilePath = candidateLocalPaths[0] || path.resolve(resolvedUploadsDir, filename);
   const existingLocalPath = candidateLocalPaths.find((p) => {
     try {
       return fs.existsSync(p) && fs.statSync(p).isFile();
@@ -4350,20 +5622,29 @@ app.get("/api/download", async (req, res) => {
     }
   });
 
+  const expectedMime = getMimeType(filename);
+  const expectsPdf = expectedMime === "application/pdf" && req.query.fallback !== "summary";
+  const expectsEpub = expectedMime === "application/epub+zip";
+
   // 1. Check local persistent storage first
   if (existingLocalPath) {
     try {
-      const mimeType = getMimeType(filename);
-      const stat = fs.statSync(existingLocalPath);
-      res.setHeader('Content-Type', mimeType);
-      res.setHeader('Content-Length', stat.size);
-      res.setHeader('Cache-Control', 'public, max-age=86400');
-      if (inline === 'true' || mimeType.startsWith('image/')) {
-        res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      if (expectsPdf && !isValidPdfFileOnDisk(existingLocalPath)) {
+        try { fs.unlinkSync(existingLocalPath); } catch (_) {}
+      } else if (expectsEpub && !isValidEpubFileOnDisk(existingLocalPath)) {
+        try { fs.unlinkSync(existingLocalPath); } catch (_) {}
       } else {
-        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+        const mimeType = expectedMime;
+        const stat = fs.statSync(existingLocalPath);
+        res.setHeader('Content-Type', mimeType);
+        res.setHeader('Content-Length', stat.size);
+        res.setHeader('Cache-Control', 'public, max-age=86400');
+        res.setHeader(
+          'Content-Disposition',
+          buildSafeContentDisposition(inline === 'true' || mimeType.startsWith('image/') ? 'inline' : 'attachment', filename)
+        );
+        return fs.createReadStream(existingLocalPath).pipe(res);
       }
-      return fs.createReadStream(existingLocalPath).pipe(res);
     } catch (readErr) {
       console.error("[Storage] Error streaming local file:", readErr);
     }
@@ -4371,8 +5652,9 @@ app.get("/api/download", async (req, res) => {
 
   // 2. If not local, try remote B2 bucket
   const s3 = getS3Client();
+  let corruptBinaryDetected = false;
   if (s3 && B2_BUCKET_NAME) {
-    for (const s3Key of Array.from(new Set([safeKey, strippedUploadsKey]))) {
+    for (const s3Key of getB2CandidateKeys(safeKey, strippedUploadsKey)) {
       try {
         const command = new GetObjectCommand({
           Bucket: B2_BUCKET_NAME,
@@ -4380,18 +5662,7 @@ app.get("/api/download", async (req, res) => {
         });
 
         const response = await s3.send(command);
-        
-        const mimeType = response.ContentType || getMimeType(filename);
-        res.setHeader('Content-Type', mimeType);
-        if (response.ContentLength) res.setHeader('Content-Length', response.ContentLength);
-        res.setHeader('Cache-Control', 'public, max-age=86400');
-        
-        if (inline === 'true' || mimeType.startsWith('image/')) {
-          res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
-        } else {
-          res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
-        }
-        
+
         if (response.Body) {
           try {
             const chunks: any[] = [];
@@ -4399,7 +5670,22 @@ app.get("/api/download", async (req, res) => {
               chunks.push(chunk);
             }
             const buffer = Buffer.concat(chunks);
-            
+
+            if ((expectsPdf && !isValidPdfBufferStructure(buffer)) || (expectsEpub && !isValidEpubBufferHeader(buffer))) {
+              corruptBinaryDetected = true;
+              console.warn(`[Storage] Rejected invalid ${expectsPdf ? "PDF" : "EPUB"} structure from B2 key ${s3Key} (${buffer.length} bytes)`);
+              continue;
+            }
+
+            const mimeType = response.ContentType || expectedMime;
+            res.setHeader('Content-Type', mimeType);
+            res.setHeader('Content-Length', buffer.length);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.setHeader(
+              'Content-Disposition',
+              buildSafeContentDisposition(inline === 'true' || mimeType.startsWith('image/') ? 'inline' : 'attachment', filename)
+            );
+
             // Cache to local disk so future requests are instant 0ms
             try {
               const localDir = path.dirname(localFilePath);
@@ -4423,22 +5709,37 @@ app.get("/api/download", async (req, res) => {
     }
   }
 
-  // 2b. Check Supabase Storage buckets before returning 404
+  // 2b. Check Supabase Storage buckets before returning 404 (also supports legacy avatars/<file> paths)
   const sb = getServerSupabase();
   if (sb) {
-    const keyVariants = Array.from(new Set([safeKey, strippedUploadsKey, filename]));
-    for (const bucket of ['avatars', 'workspace-files', 'uploads', 'public']) {
+    const noAvatarsPrefix = safeKey.replace(/^avatars\/+/, "");
+    const noWorkspacePrefix = safeKey.replace(/^workspace-files\/+/, "");
+    const keyVariants = Array.from(new Set([safeKey, noAvatarsPrefix, noWorkspacePrefix, strippedUploadsKey, filename]));
+    for (const bucket of ['books', 'avatars', 'workspace-files', 'uploads', 'public']) {
       for (const variant of keyVariants) {
         try {
           const { data: blobData, error: dlErr } = await sb.storage.from(bucket).download(variant);
           if (!dlErr && blobData) {
             const arrBuf = await blobData.arrayBuffer();
             const buffer = Buffer.from(arrBuf);
-            const mimeType = blobData.type || getMimeType(filename);
+            if ((expectsPdf && !isValidPdfBufferStructure(buffer)) || (expectsEpub && !isValidEpubBufferHeader(buffer))) {
+              corruptBinaryDetected = true;
+              continue;
+            }
+            const mimeType = blobData.type || expectedMime;
             try {
               fs.mkdirSync(path.dirname(localFilePath), { recursive: true });
               fs.writeFileSync(localFilePath, buffer);
             } catch (_) {}
+            // Mirror missing curriculum/book binary back to B2 self-healingly
+            if (s3 && B2_BUCKET_NAME && buffer.length > 0 && (safeKey.startsWith('curriculums/') || safeKey.startsWith('books/'))) {
+              s3.send(new PutObjectCommand({
+                Bucket: B2_BUCKET_NAME,
+                Key: safeKey,
+                Body: buffer,
+                ContentType: mimeType,
+              })).catch(() => {});
+            }
             res.setHeader('Content-Type', mimeType);
             res.setHeader('Content-Length', buffer.length);
             res.setHeader('Cache-Control', 'public, max-age=86400');
@@ -4450,12 +5751,35 @@ app.get("/api/download", async (req, res) => {
     }
   }
 
+  if (corruptBinaryDetected) {
+    return res.status(422).json({
+      error: "Stored book file has an invalid or incomplete structure. Re-attach the source PDF/EPUB in Admin.",
+      code: "INVALID_PDF_BINARY",
+      key: safeKey,
+    });
+  }
+
     const mimeType = getMimeType(filename);
     if (mimeType.startsWith('image/')) {
       return res.status(404).send("Image not found");
     }
 
-    // 3. Graceful fallback for study documents / syllabus materials (EPUB 3 or PDF)
+    const isUploadedCloudKey =
+      safeKey.startsWith('avatars/') ||
+      safeKey.startsWith('curriculums/') ||
+      safeKey.startsWith('books/') ||
+      safeKey.startsWith('uploads/') ||
+      /(?:^|\/)\d{10,}-/.test(safeKey);
+
+    if (isUploadedCloudKey && req.query.fallback !== 'summary') {
+      return res.status(404).json({
+        error: "Original book binary is missing from B2 and Supabase Storage. Re-upload or attach the source PDF/EPUB in Admin.",
+        code: "SOURCE_FILE_MISSING",
+        key: safeKey,
+      });
+    }
+
+    // 3. Graceful fallback for built-in sample/syllabus items (or explicit ?fallback=summary)
     const title = getTitleFromKey(key);
     const wantsEpub =
       req.query.format === 'epub' ||
@@ -4646,7 +5970,12 @@ app.get("/api/download", async (req, res) => {
   });
 
   function getUsableServerGeminiKey(): { apiKey: string | null; reason?: string } {
-    const raw = String(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || "").trim();
+    const raw = String(
+      process.env.GEMINI_API_KEY ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+      ""
+    ).trim();
     if (!raw || raw === "MY_GEMINI_API_KEY" || raw.startsWith("your_") || raw.length < 16) {
       return {
         apiKey: null,
@@ -4668,6 +5997,32 @@ app.get("/api/download", async (req, res) => {
     );
   }
 
+  function isGeminiPaymentOrCreditsError(err: any): boolean {
+    const raw = String(err?.message || err || "");
+    const lower = raw.toLowerCase();
+    return (
+      err?.status === 402 ||
+      err?.code === 402 ||
+      lower.includes("payment required") ||
+      lower.includes("prepayment credits") ||
+      lower.includes("billing#prepay") ||
+      lower.includes('"code": 402') ||
+      lower.includes('"code":402')
+    );
+  }
+
+  function isGeminiBillingOrQuotaError(err: any): boolean {
+    const raw = String(err?.message || err || "");
+    const lower = raw.toLowerCase();
+    return (
+      isGeminiPaymentOrCreditsError(err) ||
+      err?.status === 429 ||
+      err?.code === 429 ||
+      lower.includes("resource_exhausted") ||
+      lower.includes("quota")
+    );
+  }
+
   function formatGeminiErrorPayload(err: any): { status: number; message: string } {
     const raw = String(err?.message || err || "");
     const lower = raw.toLowerCase();
@@ -4677,10 +6032,16 @@ app.get("/api/download", async (req, res) => {
         message: "Your Gemini API key was rejected (API_KEY_INVALID). Please check or update GEMINI_API_KEY in Settings > Secrets.",
       };
     }
+    if (isGeminiPaymentOrCreditsError(err)) {
+      return {
+        status: 402,
+        message: "The attached Gemini API key/project has depleted prepayment credits (402). To use the Free Tier, create or select a Free-tier API key (not linked to a depleted prepayment project) at https://aistudio.google.com/apikey and set GEMINI_API_KEY in Settings > Secrets, or manage billing at https://ai.studio/projects.",
+      };
+    }
     if (err?.status === 429 || lower.includes("resource_exhausted") || lower.includes("quota") || lower.includes("429")) {
       return {
         status: 429,
-        message: "Your Gemini API quota or credits are exhausted. Please check billing/quota in Settings > Secrets or retry shortly.",
+        message: "Your Gemini Free Tier rate limit or quota was temporarily reached. Please wait a few seconds and click Retry.",
       };
     }
     if (err?.status === 503 || lower.includes("unavailable") || lower.includes("503") || lower.includes("high demand")) {
@@ -4760,10 +6121,10 @@ Return a JSON object with a single 'steps' array. Each step should have:
           }
         } catch (mErr: any) {
           lastErr = mErr;
-          if (isGeminiKeyOrPermissionError(mErr)) {
+          if (isGeminiKeyOrPermissionError(mErr) || isGeminiPaymentOrCreditsError(mErr)) {
             break;
           }
-          console.warn(`[Learning Path] Model ${modelName} error, trying next fallback:`, mErr?.message || mErr);
+          console.info(`[Learning Path] Model ${modelName} fallback notice:`, mErr?.status || "transient");
         }
       }
 
@@ -4783,13 +6144,19 @@ Return a JSON object with a single 'steps' array. Each step should have:
     try {
       const {
         prompt,
+        message,
         history,
         provider = 'gemini',
         allowDataCollection,
         bookContext,
         speedMode = 'fast', // 'fast' (default, low thinking latency) | 'deep' (extended thinking)
         stream = false
-      } = req.body;
+      } = req.body || {};
+
+      const effectivePrompt = String(prompt ?? message ?? "").trim();
+      if (!effectivePrompt) {
+        return res.status(400).json({ error: "Please enter a question or prompt for Sage AI." });
+      }
 
       const isStreamingRequested = Boolean(
         stream === true ||
@@ -4843,12 +6210,14 @@ Behavioral Persona:
         const anthropic = new Anthropic({ apiKey });
         const anthropicMessages: any[] = [];
         for (const msg of recentHistory) {
+          const content = String(msg?.content || "").trim();
+          if (!content) continue;
           anthropicMessages.push({
             role: msg.role === 'user' ? 'user' : 'assistant',
-            content: msg.content
+            content
           });
         }
-        anthropicMessages.push({ role: 'user', content: prompt });
+        anthropicMessages.push({ role: 'user', content: effectivePrompt });
 
         if (isStreamingRequested) {
           res.setHeader('Content-Type', 'text/event-stream');
@@ -4916,21 +6285,26 @@ Behavioral Persona:
         });
       }
 
-      let chatContext = '';
-      if (recentHistory.length > 0) {
-        chatContext += recentHistory.map((m: any) => `${m.role === 'user' ? 'Student' : 'Sage AI'}: ${m.content}`).join('\n\n');
-        chatContext += '\n\n';
+      const geminiContents: Array<{ role: 'user' | 'model'; parts: Array<{ text: string }> }> = [];
+      for (const m of recentHistory) {
+        const text = String(m?.content || "").trim();
+        if (!text) continue;
+        geminiContents.push({
+          role: m?.role === 'user' ? 'user' : 'model',
+          parts: [{ text }],
+        });
       }
-      chatContext += `Student: ${prompt}\n\nSage AI:`;
+      geminiContents.push({
+        role: 'user',
+        parts: [{ text: effectivePrompt }],
+      });
 
-      // Model cascade:
-      // In fast mode: prioritize gemini-3.1-flash-lite for immediate sub-second word-by-word streaming
-      // In deep mode: prioritize gemini-4-hydrogen for extended chain-of-thought mathematical derivation
-      const modelsToTry = speedMode === 'fast'
-        ? ["gemini-3.1-flash-lite", "gemini-4-hydrogen"]
-        : ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
+      // Model cascade using current @google/genai models:
+      // Primary: gemini-4-hydrogen (ThinkingLevel.LOW for fast responsiveness, MEDIUM for deep reasoning)
+      // Fallback: gemini-3.1-flash-lite
+      const modelsToTry = ["gemini-4-hydrogen", "gemini-3.1-flash-lite"];
 
-      // Helper to configure system instruction and thinking level for minimal latency
+      // Helper to configure system instruction and thinking level
       const getModelConfig = (modelName: string) => {
         const config: any = {
           systemInstruction: systemPrompt
@@ -4973,7 +6347,7 @@ Behavioral Persona:
             const config = getModelConfig(modelName);
             const responseStream = await ai.models.generateContentStream({
               model: modelName,
-              contents: chatContext,
+              contents: geminiContents,
               config,
             });
 
@@ -5008,10 +6382,10 @@ Behavioral Persona:
             }
           } catch (modelErr: any) {
             lastModelErr = modelErr;
-            if (isGeminiKeyOrPermissionError(modelErr)) {
+            if (isGeminiKeyOrPermissionError(modelErr) || isGeminiPaymentOrCreditsError(modelErr)) {
               break;
             }
-            console.warn(`[AI Tutor Stream] Model ${modelName} transient error, trying next fallback:`, modelErr?.message || modelErr);
+            console.info(`[AI Tutor Stream] Model ${modelName} fallback notice:`, modelErr?.status || "transient");
           }
         }
 
@@ -5035,7 +6409,7 @@ Behavioral Persona:
           const config = getModelConfig(modelName);
           const response = await ai.models.generateContent({
             model: modelName,
-            contents: chatContext,
+            contents: geminiContents,
             config,
           });
           if (response?.text) {
@@ -5044,10 +6418,10 @@ Behavioral Persona:
           }
         } catch (modelErr: any) {
           lastModelErr = modelErr;
-          if (isGeminiKeyOrPermissionError(modelErr)) {
+          if (isGeminiKeyOrPermissionError(modelErr) || isGeminiPaymentOrCreditsError(modelErr)) {
             break;
           }
-          console.warn(`[AI Tutor] Model ${modelName} transient error, trying next fallback:`, modelErr?.message || modelErr);
+          console.info(`[AI Tutor] Model ${modelName} fallback notice:`, modelErr?.status || "transient");
         }
       }
 

@@ -809,6 +809,16 @@ export async function downloadBookForOffline(
       blob = await response.blob();
     }
 
+    const expectedFormat =
+      book.format === 'epub' ||
+      String(book.fileUrl || '').toLowerCase().split('?')[0].endsWith('.epub')
+        ? 'epub'
+        : 'pdf';
+    const isValidDoc = await isValidDocumentBlob(blob, expectedFormat);
+    if (!isValidDoc) {
+      throw new Error(`Downloaded ${expectedFormat.toUpperCase()} file is incomplete or corrupted.`);
+    }
+
     if (onProgress) onProgress(92);
 
     // 3. Cache Cover Image as Data URL if possible
@@ -892,29 +902,57 @@ export async function downloadBookForOffline(
   }
 }
 
+async function isValidDocumentBlob(blob: Blob, expectedFormat: 'pdf' | 'epub'): Promise<boolean> {
+  try {
+    if (!blob || blob.size < 64) return false;
+    const headBuf = new Uint8Array(await blob.slice(0, Math.min(1024, blob.size)).arrayBuffer());
+    if (expectedFormat === 'epub') {
+      return headBuf.length >= 4 && headBuf[0] === 0x50 && headBuf[1] === 0x4b;
+    }
+    const headText = new TextDecoder('latin1').decode(headBuf);
+    if (!headText.includes('%PDF-')) return false;
+    const tailStart = Math.max(0, blob.size - 16384);
+    const tailBuf = new Uint8Array(await blob.slice(tailStart, blob.size).arrayBuffer());
+    const tailText = new TextDecoder('latin1').decode(tailBuf);
+    return tailText.includes('%%EOF');
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Retrieve cached blob URL for reader document
  */
 export async function getCachedBookBlobUrl(bookId: string): Promise<string | null> {
   try {
     const db = await openDB();
-    return new Promise((resolve) => {
+    const cachedRecord = await new Promise<{ blob?: Blob; format?: string } | null>((resolve) => {
       const tx = db.transaction('book_blobs', 'readonly');
       const store = tx.objectStore('book_blobs');
       const request = store.get(bookId);
 
       request.onsuccess = () => {
-        if (request.result && request.result.blob) {
-          const blob = request.result.blob as Blob;
-          const objectUrl = URL.createObjectURL(blob);
-          resolve(objectUrl);
-        } else {
-          resolve(null);
-        }
+        resolve(request.result || null);
       };
 
       request.onerror = () => resolve(null);
     });
+
+    if (!cachedRecord?.blob) return null;
+    const blob = cachedRecord.blob;
+    const format: 'pdf' | 'epub' =
+      cachedRecord.format === 'epub' || blob.type === 'application/epub+zip' ? 'epub' : 'pdf';
+    const isValid = await isValidDocumentBlob(blob, format);
+    if (!isValid) {
+      // Auto-evict invalid cached blob so Reader falls back cleanly to cloud download
+      try {
+        const cleanTx = db.transaction('book_blobs', 'readwrite');
+        cleanTx.objectStore('book_blobs').delete(bookId);
+      } catch {}
+      return null;
+    }
+
+    return URL.createObjectURL(blob);
   } catch {
     return null;
   }

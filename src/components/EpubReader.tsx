@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ChevronLeft, ChevronRight, List, Lock, BookOpen, Loader2, AlertCircle } from 'lucide-react';
 import { Book } from '../types';
 import { ParsedEpubDocument, parseEpubArrayBuffer } from '../lib/epubParser';
@@ -64,14 +64,21 @@ export function EpubReader({
     };
   }, [sourceUrl, book.title, book.author, book.publisher]);
 
+  const onChapterProgressRef = useRef(onChapterProgress);
+  onChapterProgressRef.current = onChapterProgress;
+  const lastReportedChapterRef = useRef<string>('');
+
   const activeChapter = epubDoc?.chapters[chapterIndex] || null;
   const totalChapters = epubDoc?.chapters.length || 0;
+  const activeChapterTitle = activeChapter?.title || '';
 
   useEffect(() => {
-    if (activeChapter && totalChapters > 0 && onChapterProgress) {
-      onChapterProgress(chapterIndex, totalChapters, activeChapter.title);
-    }
-  }, [chapterIndex, totalChapters, activeChapter, onChapterProgress]);
+    if (!activeChapter || totalChapters <= 0) return;
+    const signature = `${sourceUrl}::${chapterIndex}::${totalChapters}::${activeChapterTitle}`;
+    if (lastReportedChapterRef.current === signature) return;
+    lastReportedChapterRef.current = signature;
+    onChapterProgressRef.current?.(chapterIndex, totalChapters, activeChapterTitle);
+  }, [sourceUrl, chapterIndex, totalChapters, activeChapter, activeChapterTitle]);
 
   const sizeClass =
     fontSize === 'sm'

@@ -103,8 +103,11 @@ export function Header({
   const isSageOpen = propIsSageSidebarOpen !== undefined ? propIsSageSidebarOpen : internalSageSidebarOpen;
 
   const handleToggleSage = () => {
-    window.dispatchEvent(new CustomEvent('toggle-sage-sidebar'));
-    onToggleSageSidebar?.();
+    if (onToggleSageSidebar) {
+      onToggleSageSidebar();
+    } else {
+      window.dispatchEvent(new CustomEvent('toggle-sage-sidebar'));
+    }
   };
 
   const [unreadNotifCount, setUnreadNotifCount] = useState(() => {
@@ -270,7 +273,7 @@ export function Header({
           >
             <div className="absolute top-0 inset-x-3 h-[1px] bg-gradient-to-r from-transparent via-white/80 dark:via-white/30 to-transparent pointer-events-none rounded-full" />
             <MessageSquare className="w-4 h-4 text-brand-600 dark:text-brand-400 shrink-0" />
-            <span className="hidden xs:inline sm:inline">{isSageOpen ? 'Hide History' : 'Chat History'}</span>
+            <span className="inline">{isSageOpen ? 'Hide History' : 'Chat History'}</span>
           </button>
         )}
       </div>

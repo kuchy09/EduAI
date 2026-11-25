@@ -32,8 +32,13 @@ export interface Book {
   level?: 'Primary' | 'High School' | 'School' | 'College' | 'University' | 'Graduate' | 'Postgraduate' | 'Vocational' | 'All';
   curriculum?: string[];
   subjects?: string[];
+  subjectCategory?: string;
   country?: string[];
   fileUrl?: string; // added backblaze URL
+  b2Bucket?: string;
+  b2Synced?: boolean;
+  supabaseSynced?: boolean;
+  needsShelfMigration?: boolean;
   format?: BookFormat;
   securityPolicy?: PublisherSecurityPolicy;
   customCover?: CustomCoverConfig;

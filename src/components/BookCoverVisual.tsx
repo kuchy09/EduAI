@@ -5,24 +5,29 @@ import {
   Microscope, Dna, Globe, Languages, Landmark, TrendingUp, Wheat, Sparkles, Feather
 } from 'lucide-react';
 import { PdfCover } from './PdfCover';
+import { isDirectSafeCoverImageSrc } from '../lib/coverUrlUtils';
 
 interface BookCoverVisualProps {
   book: Book;
   className?: string;
+  onImageLoad?: (meta: { width: number; height: number; src: string }) => void;
+  onImageError?: (src: string) => void;
 }
 
-export function BookCoverVisual({ book, className }: BookCoverVisualProps) {
+export function BookCoverVisual({ book, className, onImageLoad, onImageError }: BookCoverVisualProps) {
+  const normalizedCoverImage = String(book.coverImage || '').trim();
+  const hasSafeCoverImage = isDirectSafeCoverImageSrc(normalizedCoverImage);
   const [imgError, setImgError] = useState(false);
   const [pdfError, setPdfError] = useState(false);
 
   useEffect(() => {
     setImgError(false);
     setPdfError(false);
-  }, [book.id, book.coverImage, book.coverMode, book.pdfCoverPage, book.fileUrl]);
+  }, [book.id, normalizedCoverImage, book.coverMode, book.pdfCoverPage, book.fileUrl]);
   
   const hasPdfFile = !!book.fileUrl;
   const customCover = book.customCover;
-  const coverMode = book.coverMode || (customCover?.mode || (book.coverImage ? 'image' : (hasPdfFile ? 'pdf' : 'auto')));
+  const coverMode = book.coverMode || (customCover?.mode || (hasSafeCoverImage ? 'image' : (hasPdfFile ? 'pdf' : 'auto')));
   const pdfPage = book.pdfCoverPage || customCover?.pdfPageNumber || 1;
 
   const renderIcon = (iconName?: string) => {
@@ -222,27 +227,43 @@ export function BookCoverVisual({ book, className }: BookCoverVisualProps) {
   }
 
   // Explicit image cover mode (or if coverImage exists and not overridden to pdf)
-  if ((coverMode === 'image' || (book.coverImage && coverMode !== 'pdf')) && !imgError && book.coverImage) {
+  if ((coverMode === 'image' || (hasSafeCoverImage && coverMode !== 'pdf')) && !imgError && hasSafeCoverImage) {
     return (
       <img 
-        src={book.coverImage} 
+        src={normalizedCoverImage} 
         alt={book.title} 
         className={`object-cover ${className}`} 
-        onError={() => setImgError(true)} 
+        onLoad={(e) => {
+          const img = e.currentTarget;
+          if (onImageLoad) {
+            onImageLoad({
+              width: img.naturalWidth || 0,
+              height: img.naturalHeight || 0,
+              src: normalizedCoverImage,
+            });
+          }
+        }}
+        onError={() => {
+          setImgError(true);
+          if (onImageError) {
+            onImageError(normalizedCoverImage);
+          }
+        }} 
         referrerPolicy="no-referrer" 
       />
     );
   }
 
-  // PDF cover mode
-  if ((coverMode === 'pdf' || (hasPdfFile && !book.coverImage)) && !pdfError && hasPdfFile) {
+  // PDF cover mode (skip fetching if server already flagged the uploaded binary missing / un-synced)
+  const knownMissingUploadedBinary = Boolean(book.b2Synced === false && book.needsShelfMigration);
+  if ((coverMode === 'pdf' || (hasPdfFile && !hasSafeCoverImage)) && !pdfError && hasPdfFile && !knownMissingUploadedBinary) {
     const pdfUrl = book.fileUrl?.startsWith('http') ? book.fileUrl : `/api/download?key=${encodeURIComponent(book.fileUrl!)}`;
     return (
       <PdfCover 
         url={pdfUrl} 
         alt={book.title} 
         pageNumber={pdfPage}
-        fallbackImage={imgError ? undefined : (book.coverImage || undefined)} 
+        fallbackImage={imgError ? undefined : (hasSafeCoverImage ? normalizedCoverImage : undefined)} 
         onLoadError={() => setPdfError(true)}
         className={className} 
       />

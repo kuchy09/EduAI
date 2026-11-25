@@ -284,6 +284,20 @@ export function mergeDeletedAiSessionsMap(
   return result;
 }
 
+function parseSessionActivityMs(s: any): number {
+  const upd = s?.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+  if (upd > 0) return upd;
+  const msgs = Array.isArray(s?.messages) ? s.messages : [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = String(msgs[i]?.id || '').match(/^(\d{10,})/);
+    if (m) return Number(m[1]);
+  }
+  const idMatch = String(s?.id || '').match(/(\d{10,})$/);
+  if (idMatch) return Number(idMatch[1]);
+  const createdTs = s?.createdAt ? Date.parse(s.createdAt) || 0 : 0;
+  return createdTs;
+}
+
 export function mergeAiChatSessions(
   localList: any[],
   cloudList: any[],
@@ -295,7 +309,7 @@ export function mergeAiChatSessions(
   const isDeleted = (s: any) => {
     if (!s?.id || !deletedMap || !deletedMap[s.id]) return false;
     const delTs = Date.parse(deletedMap[s.id]) || 0;
-    const sessTs = s.updatedAt ? Date.parse(s.updatedAt) || 0 : 0;
+    const sessTs = parseSessionActivityMs(s);
     return sessTs <= delTs;
   };
 
@@ -451,16 +465,38 @@ export function mergeBookmarksLists(localList: Bookmark[], cloudList: Bookmark[]
 
 export function mergeBooksLists(localBooks: Book[], cloudBooks: Book[]): Book[] {
   const map = new Map<string, Book>();
+  const resolveFreshFileFields = (a: Book, b: Book) => {
+    const scoreFile = (item: Book) => {
+      let s = 0;
+      if (item.b2Synced) s += 4;
+      if (item.fileUrl?.startsWith('curriculums/')) s += 2;
+      if (item.fileUrl && !item.fileUrl.startsWith('avatars/')) s += 1;
+      if (item.fileUrl) s += 0.5;
+      return s;
+    };
+    const winner = scoreFile(b) > scoreFile(a) ? b : a;
+    return {
+      fileUrl: winner.fileUrl || a.fileUrl || b.fileUrl,
+      b2Bucket: winner.b2Bucket || a.b2Bucket || b.b2Bucket,
+      b2Synced: winner.b2Synced ?? a.b2Synced ?? b.b2Synced,
+      needsShelfMigration: winner.needsShelfMigration ?? a.needsShelfMigration ?? b.needsShelfMigration,
+      subjectCategory: winner.subjectCategory || a.subjectCategory || b.subjectCategory,
+      format: winner.format || a.format || b.format,
+    };
+  };
+
   const pickCoverFields = (a: Book, b: Book): Book => {
+    const fileFields = resolveFreshFileFields(a, b);
     const aHasCover = Boolean(a.coverImage || a.customCover || a.coverMode);
     const bHasCover = Boolean(b.coverImage || b.customCover || b.coverMode);
     if (bHasCover && !aHasCover) {
-      return { ...a, ...b };
+      return { ...a, ...b, ...fileFields };
     }
     if (b.coverImage && !a.coverImage) {
       return {
         ...a,
         ...b,
+        ...fileFields,
         coverImage: b.coverImage,
         coverMode: b.coverMode || a.coverMode,
         pdfCoverPage: b.pdfCoverPage ?? a.pdfCoverPage,
@@ -470,6 +506,7 @@ export function mergeBooksLists(localBooks: Book[], cloudBooks: Book[]): Book[] 
     return {
       ...b,
       ...a,
+      ...fileFields,
       coverImage: a.coverImage || b.coverImage || '',
       coverMode: a.coverMode || b.coverMode,
       pdfCoverPage: a.pdfCoverPage ?? b.pdfCoverPage,
@@ -758,10 +795,10 @@ function claimLegacyAiChatsForUser(userId: string): any[] {
   try {
     const ownerKey = 'sage_ai_legacy_owner';
     const currentOwner = safeStorage.getItem(ownerKey);
-    if (currentOwner && currentOwner !== userId) {
-      return [];
-    }
-    const legacy = safeStorage.getJSON<any[]>('sage_ai_chats', []);
+    const legacy =
+      !currentOwner || currentOwner === userId
+        ? safeStorage.getJSON<any[]>('sage_ai_chats', [])
+        : [];
     const legacyGuest = safeStorage.getJSON<any[]>('sage_ai_chats_guest', []);
     const combined = mergeAiChatSessions(
       Array.isArray(legacy) ? legacy : [],
@@ -771,13 +808,76 @@ function claimLegacyAiChatsForUser(userId: string): any[] {
       (s) => s?.id !== 'default_session' || (Array.isArray(s?.messages) && s.messages.length > 1)
     );
     if (hasMeaningful) {
-      safeStorage.setItem(ownerKey, userId);
-      safeStorage.removeItem('sage_ai_chats');
+      if (!currentOwner) {
+        safeStorage.setItem(ownerKey, userId);
+      }
+      if (!currentOwner || currentOwner === userId) {
+        safeStorage.removeItem('sage_ai_chats');
+      }
       safeStorage.removeItem('sage_ai_chats_guest');
       return combined;
     }
   } catch (_) {}
   return [];
+}
+
+export function recordExternalSageChatSession(
+  userId: string | undefined,
+  externalSession: {
+    id: string;
+    title: string;
+    createdAt?: string;
+    updatedAt?: string;
+    source?: 'tutor' | 'reader' | 'edulab';
+    messages: any[];
+  }
+): void {
+  if (!externalSession?.id || !Array.isArray(externalSession.messages)) return;
+  const hasUserMsg = externalSession.messages.some((m) => m?.role === 'user');
+  if (!hasUserMsg) return;
+
+  const chatsKey = getAiChatsStorageKey(userId);
+  const delKey = getAiDeletedStorageKey(userId);
+  const nowIso = externalSession.updatedAt || new Date().toISOString();
+
+  const normalizedSession = {
+    ...externalSession,
+    createdAt: externalSession.createdAt || new Date().toLocaleDateString(),
+    updatedAt: nowIso,
+  };
+
+  // Clear tombstone for this specific session ID only if the user actively initiated new messages in it
+  const existingDeleted = safeStorage.getJSON<Record<string, string>>(delKey, {});
+  let nextDeleted = existingDeleted;
+  if (existingDeleted && existingDeleted[normalizedSession.id]) {
+    nextDeleted = { ...existingDeleted };
+    delete nextDeleted[normalizedSession.id];
+    safeStorage.setJSON(delKey, nextDeleted);
+  }
+
+  const existingLocal = safeStorage.getJSON<any[]>(chatsKey, []);
+  const merged = mergeAiChatSessions(existingLocal, [normalizedSession], nextDeleted);
+  safeStorage.setJSON(chatsKey, merged);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('sage-ai-chats-updated', {
+        detail: { userId: userId || 'guest', sessions: merged },
+      })
+    );
+  }
+
+  if (userId && userId !== 'guest') {
+    pushAccountSyncPatch(
+      userId,
+      {
+        aiChatSessions: merged,
+        deletedAiSessions: nextDeleted,
+      },
+      undefined,
+      { immediate: true }
+    );
+  }
 }
 
 async function fetchDirectSupabaseSyncCandidates(
@@ -1213,7 +1313,31 @@ export async function hydrateAccountSync(
       legacyAiChats,
       mergedDeletedAi
     );
-    const mergedAiChats = mergeAiChatSessions(localAiChats, cloudSync.aiChatSessions || [], mergedDeletedAi);
+
+    // 3. Merge Reader AI Hover Tutor chats per book (both cloud -> local and local -> cloud)
+    const localReaderChats = collectLocalReaderChats(userId);
+    const mergedReaderChats = mergeReaderChatsMap(localReaderChats, cloudSync.readerChats || {});
+    const readerMirroredSessions: any[] = [];
+    for (const [bookId, msgs] of Object.entries(mergedReaderChats)) {
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        safeStorage.setJSON(getReaderChatStorageKey(bookId, userId), msgs);
+        if (msgs.some((m) => m?.role === 'user')) {
+          readerMirroredSessions.push({
+            id: `reader_${bookId}`,
+            title: `Book Reader: ${bookId.replace(/[-_]+/g, ' ').slice(0, 40)}`,
+            source: 'reader',
+            createdAt: new Date().toLocaleDateString(),
+            messages: msgs,
+          });
+        }
+      }
+    }
+
+    const mergedAiChats = mergeAiChatSessions(
+      mergeAiChatSessions(localAiChats, cloudSync.aiChatSessions || [], mergedDeletedAi),
+      readerMirroredSessions,
+      mergedDeletedAi
+    );
     if (mergedAiChats.length > 0 || Object.keys(mergedDeletedAi).length > 0) {
       safeStorage.setJSON(getAiChatsStorageKey(userId), mergedAiChats);
     }
@@ -1225,15 +1349,6 @@ export async function hydrateAccountSync(
     }
     if (resolvedActiveAi) {
       safeStorage.setItem(getAiLastActiveStorageKey(userId), resolvedActiveAi);
-    }
-
-    // 3. Merge Reader AI Hover Tutor chats per book (both cloud -> local and local -> cloud)
-    const localReaderChats = collectLocalReaderChats(userId);
-    const mergedReaderChats = mergeReaderChatsMap(localReaderChats, cloudSync.readerChats || {});
-    for (const [bookId, msgs] of Object.entries(mergedReaderChats)) {
-      if (Array.isArray(msgs) && msgs.length > 0) {
-        safeStorage.setJSON(getReaderChatStorageKey(bookId, userId), msgs);
-      }
     }
 
     // 4. Hydrate Peer Chat conversations & messages (pruning sender-deleted message tombstones)
