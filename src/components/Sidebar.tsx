@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut, FlaskConical } from 'lucide-react';
+import { Map, Users, Settings, LifeBuoy, Code, User, LineChart, X, UserPlus, Moon, Sun, LogOut, FlaskConical, BookOpen, Brain, Zap } from 'lucide-react';
 import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
@@ -95,9 +95,12 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
     icon: React.ReactNode;
     subItems?: { id: ViewState; label: string; icon: React.ReactNode }[];
   }[] = [
-    { id: 'progress', label: 'My Progress', icon: <LineChart className="w-5 h-5" /> },
+    { id: 'library', label: '01 · Learn (Library)', icon: <BookOpen className="w-5 h-5" /> },
+    { id: 'ai-tutor', label: '02 · Understand (Sage AI)', icon: <Brain className="w-5 h-5" /> },
+    { id: 'edulab', label: '03 · Experiment (EduLab)', icon: <FlaskConical className="w-5 h-5" /> },
+    { id: 'quizzes', label: '04 · Test (Quizzes)', icon: <Zap className="w-5 h-5" /> },
+    { id: 'progress', label: '05 · Improve (Progress)', icon: <LineChart className="w-5 h-5" /> },
     { id: 'learning-path', label: 'Learning Path', icon: <Map className="w-5 h-5" /> },
-    { id: 'edulab', label: 'EduLab', icon: <FlaskConical className="w-5 h-5" /> },
     { id: 'community', label: 'Community', icon: <Users className="w-5 h-5" /> },
     { id: 'users-portal', label: 'Find Members & Friends', icon: <UserPlus className="w-5 h-5" /> },
     { 

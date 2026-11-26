@@ -8,13 +8,18 @@ import {
 import {
   FileQuestion, Play, Trophy, Sparkles, BookOpen, Clock,
   CheckCircle2, AlertCircle, RefreshCw, ChevronRight, Lock,
-  X, HelpCircle, ArrowLeft, Check, Award
+  X, HelpCircle, ArrowLeft, Check, Award, Brain, TrendingUp
 } from 'lucide-react';
+import { ViewState } from '../types';
 import {
   recordQuizCompleted,
   reconcileAchievementsSnapshot,
   EduPointsAwardResult,
 } from '../lib/achievementsService';
+import {
+  recordQuizWeaknesses,
+  clearSubjectWeaknesses,
+} from '../lib/learningCycleService';
 import {
   ACCOUNT_SYNC_EVENT,
   getGeneratedQuizzesStorageKey,
@@ -42,9 +47,10 @@ interface QuizzesProps {
   user?: any;
   profile?: any;
   books?: any[];
+  onNavigate?: (view: ViewState) => void;
 }
 
-export function Quizzes({ user, profile, books = [] }: QuizzesProps) {
+export function Quizzes({ user, profile, books = [], onNavigate }: QuizzesProps) {
   const quizStorageKey = getGeneratedQuizzesStorageKey(user?.id);
   const quizzesDirtyRef = React.useRef(false);
 
@@ -285,14 +291,30 @@ export function Quizzes({ user, profile, books = [] }: QuizzesProps) {
       setCurrentIdx(currentIdx + 1);
       setSelectedOption(null);
     } else if (activeQuiz) {
-      // Calculate score
+      // Calculate score and capture missed concepts for Stage 5 Improve loop
       let correctCount = 0;
+      const missedQuestions: string[] = [];
       activeQuiz.questions.forEach((q, idx) => {
         if (q.correctAnswer === newAnswers[idx]) {
           correctCount++;
+        } else {
+          missedQuestions.push(q.question);
         }
       });
       const finalScore = Math.round((correctCount / activeQuiz.questions.length) * 100);
+
+      if (missedQuestions.length > 0 || finalScore < 85) {
+        recordQuizWeaknesses(user?.id, {
+          quizId: activeQuiz.id,
+          quizTitle: activeQuiz.title,
+          subject: activeQuiz.subject,
+          score: finalScore,
+          missedQuestions,
+          recordedAt: new Date().toISOString(),
+        });
+      } else {
+        clearSubjectWeaknesses(user?.id, activeQuiz.subject);
+      }
       
       // Update quiz state
       setQuizzes(prev => prev.map(q => {
@@ -535,6 +557,52 @@ Do not add extra conversational markdown explanation outside the codeblock. Ensu
                       ))}
                     </div>
                   )}
+
+                  {(() => {
+                    const completedScore = quizzes.find(q => q.id === activeQuiz.id)?.score ?? 100;
+                    const missedQuestions = activeQuiz.questions
+                      .filter((q, idx) => q.correctAnswer !== userAnswers[idx])
+                      .map((q) => q.question);
+                    if (completedScore >= 100 || !onNavigate) return null;
+                    return (
+                      <div className="p-4 rounded-2xl bg-[#FAF8F4] dark:bg-[#141A20] border border-[#E2DDD3] dark:border-[#26313A] text-left space-y-3">
+                        <div>
+                          <div className="text-[10px] font-mono uppercase tracking-wider font-semibold text-amber-700 dark:text-amber-400">
+                            Stage 05 · Improve Loop
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-[#98A4AF] mt-0.5">
+                            {missedQuestions.length > 0
+                              ? `You missed ${missedQuestions.length} question${missedQuestions.length === 1 ? '' : 's'} in ${activeQuiz.subject}. Close the loop with targeted explanations.`
+                              : `Review ${activeQuiz.subject} concepts to reach 100% mastery.`}
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const promptText = missedQuestions.length > 0
+                                ? `I just finished "${activeQuiz.title}" (${activeQuiz.subject}) with ${completedScore}% and missed these questions:\n${missedQuestions.slice(0, 3).map((m, i) => `${i + 1}. ${m}`).join('\n')}\nPlease explain each concept clearly and give a worked example.`
+                                : `I scored ${completedScore}% on "${activeQuiz.title}" (${activeQuiz.subject}). Help me strengthen any remaining gaps.`;
+                              safeStorage.setItem('ai_tutor_prefill', promptText);
+                              onNavigate('ai-tutor');
+                            }}
+                            className="px-3 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                          >
+                            <Brain className="w-3.5 h-3.5" />
+                            <span>Explain Missed Concepts in Sage AI</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onNavigate('progress')}
+                            className="px-3 py-2 rounded-xl bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] text-slate-700 dark:text-[#F2EFE9] text-xs font-semibold hover:border-brand-400 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                          >
+                            <TrendingUp className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400" />
+                            <span>Track Weaknesses</span>
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="flex flex-col sm:flex-row gap-3">
                     <button

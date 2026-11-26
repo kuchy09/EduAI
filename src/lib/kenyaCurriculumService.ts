@@ -282,11 +282,52 @@ export async function searchCurriculumRAG(params: {
   bookId?: string;
   subjectId?: number;
   gradeLevelId?: number;
+  curriculum?: string;
+  subjects?: string[] | string;
   matchThreshold?: number;
   matchCount?: number;
 }): Promise<RAGSearchResult[]> {
   const matchThreshold = params.matchThreshold ?? 0.65;
   const matchCount = params.matchCount ?? 5;
+  const trimmedQuery = String(params.queryText || '').trim();
+  if (!trimmedQuery) return [];
+
+  // 0. Server-backed curriculum RAG search (combines Supabase chunks, taxonomy, and indexed textbook PDFs)
+  if (typeof fetch !== 'undefined') {
+    try {
+      const resp = await fetch('/api/curriculum/search', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: trimmedQuery,
+          queryEmbedding: params.queryEmbedding,
+          bookId: params.bookId,
+          curriculum: params.curriculum,
+          subjects: params.subjects,
+          maxResults: matchCount,
+        }),
+      });
+      if (resp.ok) {
+        const data = await resp.json();
+        if (Array.isArray(data?.sources)) {
+          return data.sources.map((src: any) => ({
+            id: String(src.id),
+            bookId: String(src.bookId || ''),
+            bookTitle: String(src.bookTitle || 'CBC / KCSE Textbook'),
+            publisher: String(src.publisher || 'Kenya Publisher'),
+            subTopicId: src.subTopicId,
+            subTopicTitle: src.subTopicTitle,
+            chapterTitle: src.chapterTitle,
+            pageNumber: Number(src.pageNumber) || 1,
+            contentText: String(src.excerpt || src.contentText || ''),
+            similarity: Number(src.similarity) || 0.75,
+          }));
+        }
+      }
+    } catch (err) {
+      console.warn('[kenyaCurriculumService] /api/curriculum/search unreachable, falling back to direct Supabase:', err);
+    }
+  }
 
   // 1. If vector embedding provided and Supabase RPC available
   if (supabase && params.queryEmbedding && params.queryEmbedding.length > 0) {
@@ -319,47 +360,61 @@ export async function searchCurriculumRAG(params: {
     }
   }
 
-  // 2. Full-text search fallback over chunks
-  if (supabase && params.queryText) {
+  // 2. Tokenized keyword search fallback over chunks
+  if (supabase && trimmedQuery) {
     try {
-      let query = supabase
-        .from('book_content_chunks')
-        .select(`
-          id,
-          book_id,
-          sub_topic_id,
-          page_number,
-          content_text,
-          curriculum_books(title, publisher),
-          book_sub_topics(title, book_chapters(title))
-        `)
-        .ilike('content_text', `%${params.queryText.trim()}%`)
-        .limit(matchCount);
+      const tokens = Array.from(
+        new Set(
+          trimmedQuery
+            .toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, ' ')
+            .split(/\s+/)
+            .map((t) => t.replace(/[^a-z0-9-]/g, ''))
+            .filter((t) => t.length >= 4)
+        )
+      ).slice(0, 5);
 
-      if (params.bookId) query = query.eq('book_id', params.bookId);
+      if (tokens.length > 0) {
+        const orClause = tokens.map((t) => `content_text.ilike.%${t}%`).join(',');
+        let query = supabase
+          .from('book_content_chunks')
+          .select(`
+            id,
+            book_id,
+            sub_topic_id,
+            page_number,
+            content_text,
+            curriculum_books(title, publisher),
+            book_sub_topics(title, book_chapters(title))
+          `)
+          .or(orClause)
+          .limit(matchCount);
 
-      const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        return data.map((row: any) => ({
-          id: row.id,
-          bookId: row.book_id,
-          bookTitle: row.curriculum_books?.title || 'CBC / KCSE Textbook',
-          publisher: row.curriculum_books?.publisher || 'Kenya Publisher',
-          subTopicId: row.sub_topic_id,
-          subTopicTitle: row.book_sub_topics?.title,
-          chapterTitle: row.book_sub_topics?.book_chapters?.title,
-          pageNumber: row.page_number,
-          contentText: row.content_text,
-          similarity: 0.85
-        }));
+        if (params.bookId) query = query.eq('book_id', params.bookId);
+
+        const { data, error } = await query;
+        if (!error && data && data.length > 0) {
+          return data.map((row: any) => ({
+            id: row.id,
+            bookId: row.book_id,
+            bookTitle: row.curriculum_books?.title || 'CBC / KCSE Textbook',
+            publisher: row.curriculum_books?.publisher || 'Kenya Publisher',
+            subTopicId: row.sub_topic_id,
+            subTopicTitle: row.book_sub_topics?.title,
+            chapterTitle: row.book_sub_topics?.book_chapters?.title,
+            pageNumber: row.page_number,
+            contentText: row.content_text,
+            similarity: 0.85
+          }));
+        }
       }
     } catch (err) {
       console.warn('[kenyaCurriculumService] Text search fallback notice:', err);
     }
   }
 
-  // 3. Static mock RAG matches for prototype & offline resilience
-  return getMockRAGResults(params.queryText);
+  // 3. Query-filtered offline fallback (never returns unrelated mock citations)
+  return getMockRAGResults(trimmedQuery);
 }
 
 // ==============================================================================
@@ -569,7 +624,14 @@ function getMockBookTaxonomy(bookId: string): BookChapter[] {
 }
 
 function getMockRAGResults(query: string): RAGSearchResult[] {
-  return [
+  const tokens = String(query || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 4);
+  if (tokens.length === 0) return [];
+
+  const candidates: RAGSearchResult[] = [
     {
       id: 'rag-chunk-01',
       bookId: '11111111-1111-4000-8000-000000000001',
@@ -595,4 +657,9 @@ function getMockRAGResults(query: string): RAGSearchResult[] {
       similarity: 0.88
     }
   ];
+
+  return candidates.filter((item) => {
+    const haystack = `${item.bookTitle} ${item.chapterTitle || ''} ${item.subTopicTitle || ''} ${item.contentText}`.toLowerCase();
+    return tokens.some((t) => haystack.includes(t));
+  });
 }

@@ -541,3 +541,34 @@ export function parseB2CurriculumKey(key: string): ParsedB2CurriculumKey {
     filename,
   };
 }
+
+export function sanitizeStorageBookId(bookId: string): string {
+  return String(bookId || 'book')
+    .replace(/[^a-zA-Z0-9_-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 96) || 'book';
+}
+
+export function buildGeneratedEpubKey(bookId: string, version = 1): string {
+  const safeId = sanitizeStorageBookId(bookId);
+  const v = Math.max(1, Math.floor(version));
+  return `generated-epubs/${safeId}/v${v}/book.epub`;
+}
+
+export function buildExtractedAssetKey(bookId: string, filename: string): string {
+  const safeId = sanitizeStorageBookId(bookId);
+  const safeFile = sanitizePathSegment(filename, `asset-${Date.now()}.png`).replace(/^-+/, '');
+  return `extracted-assets/${safeId}/${safeFile}`;
+}
+
+export function isDerivedStorageKey(key?: string | null): boolean {
+  const clean = String(key || '').replace(/^\/+/, '').toLowerCase();
+  return (
+    clean.startsWith('generated-epubs/') ||
+    clean.startsWith('extracted-assets/') ||
+    clean.startsWith('user-sync/') ||
+    clean.startsWith('audiobook-cache/') ||
+    clean.startsWith('.chunks/')
+  );
+}

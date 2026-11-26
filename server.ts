@@ -24,6 +24,11 @@ import {
   streamQwenCompletion,
 } from "./server/qwenClient";
 import {
+  buildCurriculumGroundingPromptSection,
+  retrieveCurriculumSources,
+  warmCurriculumPdfIndex,
+} from "./server/curriculumRag";
+import {
   BookCoverOverride,
   CANONICAL_BOOK_COVERS,
   GLOBAL_BOOK_COVERS_ROW_ID,
@@ -38,6 +43,7 @@ import {
 import { ADMIN_EMAILS, isAuthorizedAdminEmail } from "./shared/adminAuth";
 import {
   buildB2CurriculumPath,
+  isDerivedStorageKey,
   parseB2CurriculumKey,
   resolveSubjectCategory,
   sanitizeB2ObjectKey,
@@ -51,6 +57,25 @@ import {
   upsertBookInSupabase,
 } from "./server/b2SupabaseSync";
 import { fetchAndValidateRemoteCoverImage } from "./server/coverImageImporter";
+import {
+  enqueuePdfToEpubJob,
+  rebuildAndPublishFromEditedStructure,
+  PipelineRuntimeDeps,
+} from "./server/pdfToEpubPipeline";
+import {
+  computeSha256,
+  deleteUserBookmark,
+  readCanonicalStructure,
+  readEpubArtifact,
+  readUserBookmarks,
+  readUserReadingProgress,
+  recordAdminAuditLog,
+  resolveBookConversionOverview,
+  saveCanonicalStructure,
+  saveUserBookmark,
+  saveUserReadingProgress,
+  searchCanonicalBook,
+} from "./server/canonicalBookStore";
 import {
   addCommunityReplyAction,
   addGroupMemberAction,
@@ -199,6 +224,7 @@ function isValidEpubFileOnDisk(filePath: string): boolean {
 function isNonCatalogProbeObject(key: string, sizeBytes?: number): boolean {
   const safe = String(key || "").trim();
   if (!safe) return true;
+  if (isDerivedStorageKey(safe) || safe.startsWith(".library-pipeline")) return true;
   if (typeof sizeBytes === "number" && sizeBytes < 256) return true;
   if (/^etc\//i.test(safe) && /probe/i.test(safe)) return true;
   return false;
@@ -3790,6 +3816,15 @@ app.get("/api/books", async (req, res) => {
       }
       for (const entry of entries) {
         if (entry.isDirectory()) {
+          if (
+            entry.name.startsWith(".") ||
+            entry.name === "generated-epubs" ||
+            entry.name === "extracted-assets" ||
+            entry.name === "user-sync" ||
+            entry.name === "audiobook-cache"
+          ) {
+            continue;
+          }
           const nextRel = relBase ? `${relBase}/${entry.name}` : entry.name;
           collected.push(...walkUploadFiles(path.join(dir, entry.name), nextRel));
         } else if (entry.isFile()) {
@@ -4126,6 +4161,7 @@ app.get("/api/books", async (req, res) => {
       const inB2 = Boolean(safeKey && b2KeySet.has(safeKey));
       const hasShelfPath = Boolean(parsedShelf.isCurriculumShelfPath);
       const isSupabaseRow = Boolean(withCover.supabaseSynced || isUuid(withCover.id));
+      const conv = resolveBookConversionOverview(UPLOADS_DIR, withCover.id, withCover);
       return {
         ...withCover,
         ...(parsedShelf.isCurriculumShelfPath && !withCover.subjectCategory
@@ -4142,6 +4178,16 @@ app.get("/api/books", async (req, res) => {
         supabaseSynced: isSupabaseRow,
         needsShelfMigration: Boolean(safeKey && (!hasShelfPath || !inB2)),
         format: inferredFormat,
+        processingStatus: conv.processingStatus,
+        epubFileKey: conv.epubFileKey,
+        epubPublished: conv.epubPublished,
+        conversionConfidence: conv.confidenceStatus,
+        conversionQualityScore: conv.qualityScore,
+        rightsConversionAllowed: conv.rightsConversionAllowed,
+        sha256Checksum: conv.sha256Checksum,
+        fileSizeBytes: conv.fileSizeBytes || withCover.fileSizeBytes,
+        pageCount: conv.pageCount || withCover.pageCount,
+        language: conv.language || withCover.language,
         securityPolicy: withCover.securityPolicy || {
           requireEncryptedOffline: true,
           watermarkUser: true,
@@ -4367,8 +4413,29 @@ app.post("/api/books", async (req, res) => {
         allowRawExport: false,
         offlineLeaseDays: 90,
       },
+      rightsConversionAllowed: payload.rightsConversionAllowed !== false,
+      sha256Checksum: typeof payload.sha256Checksum === "string" ? payload.sha256Checksum : undefined,
+      mimeType: typeof payload.mimeType === "string" ? payload.mimeType : undefined,
+      fileSizeBytes: typeof payload.fileSizeBytes === "number" ? payload.fileSizeBytes : undefined,
+      language: typeof payload.language === "string" ? payload.language : "en",
+      processingStatus: "pending",
       createdAt: new Date().toISOString(),
     };
+
+    // Preserve checksum/size from local file if uploaded directly
+    const safeFileKey = sanitizeB2ObjectKey(String(createdBook.fileUrl || ""));
+    if (safeFileKey) {
+      const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+      const localSrc = path.resolve(resolvedUploadsDir, safeFileKey);
+      if (localSrc.startsWith(resolvedUploadsDir + path.sep) && fs.existsSync(localSrc)) {
+        try {
+          const buf = fs.readFileSync(localSrc);
+          createdBook.sha256Checksum = createdBook.sha256Checksum || computeSha256(buf);
+          createdBook.fileSizeBytes = createdBook.fileSizeBytes || buf.length;
+          createdBook.mimeType = createdBook.mimeType || getMimeType(localSrc);
+        } catch (_) {}
+      }
+    }
 
     // Persist into Supabase public.books (passing caller JWT when present so RLS succeeds cleanly)
     const authHeader = req.headers.authorization || "";
@@ -4411,6 +4478,46 @@ app.post("/api/books", async (req, res) => {
     const deletedIds = readDeletedBookIds().filter((id) => !unmarkSet.has(id));
     writeDeletedBookIds(deletedIds);
 
+    // Enqueue background PDF-to-EPUB 3 conversion when a PDF textbook is registered
+    let conversionJob = null;
+    if (createdBook.format === "pdf" && safeNewFileUrl && createdBook.rightsConversionAllowed !== false) {
+      const queued = enqueuePdfToEpubJob(
+        {
+          bookId: createdBook.id,
+          title: createdBook.title,
+          author: createdBook.author,
+          publisher: createdBook.publisher,
+          description: createdBook.description,
+          language: createdBook.language || "en",
+          sourcePdfKey: safeNewFileUrl,
+          rightsConversionAllowed: createdBook.rightsConversionAllowed,
+        },
+        getPipelineDeps()
+      );
+      if (queued.queued) {
+        createdBook.processingStatus = "queued";
+        conversionJob = queued.job;
+      }
+    }
+
+    const verifiedActor = reqToken ? await verifySocialToken(reqToken) : null;
+    await recordAdminAuditLog(
+      UPLOADS_DIR,
+      {
+        actorUserId: verifiedActor?.user?.id,
+        actorEmail: verifiedActor?.user?.email,
+        action: "book_registered",
+        bookId: createdBook.id,
+        details: {
+          title: createdBook.title,
+          format: createdBook.format,
+          fileUrl: createdBook.fileUrl,
+          conversionQueued: Boolean(conversionJob),
+        },
+      },
+      getServerSupabase() || sb
+    );
+
     broadcastAllConnectedUsers({
       type: "system:books-updated",
       bookId: createdBook.id,
@@ -4420,6 +4527,7 @@ app.post("/api/books", async (req, res) => {
 
     res.json({
       book: createdBook,
+      conversionJob,
       supabaseSynced: supabaseResult.synced,
       ...(supabaseResult.error ? { supabaseError: supabaseResult.error } : {}),
       success: true,
@@ -4500,6 +4608,29 @@ app.patch("/api/books/:id", async (req, res) => {
       writeLocalBooksCatalog([currentBook, ...dedupedExisting]);
     } else if (dedupedExisting.length !== existing.length) {
       writeLocalBooksCatalog(dedupedExisting);
+    }
+
+    // Trigger conversion if a PDF was attached/replaced on an existing catalog entry
+    if (
+      updates.fileUrl &&
+      sanitizeB2ObjectKey(String(updates.fileUrl)) !== previousSafeUrl &&
+      currentBook.format !== "epub" &&
+      !String(updates.fileUrl).toLowerCase().endsWith(".epub") &&
+      currentBook.rightsConversionAllowed !== false
+    ) {
+      enqueuePdfToEpubJob(
+        {
+          bookId,
+          title: currentBook.title || "Textbook",
+          author: currentBook.author,
+          publisher: currentBook.publisher,
+          description: currentBook.description,
+          language: currentBook.language || "en",
+          sourcePdfKey: sanitizeB2ObjectKey(String(updates.fileUrl)),
+          rightsConversionAllowed: currentBook.rightsConversionAllowed,
+        },
+        getPipelineDeps()
+      );
     }
 
     // Sync metadata updates to Supabase public.books so all accounts see canonical catalog updates
@@ -5223,12 +5354,15 @@ const handleDirectUpload = async (req: express.Request, res: express.Response) =
       });
     }
 
+    const sha256Checksum = computeSha256(fileBuffer);
     res.json({
       key,
       prefix: resolvedPrefix,
       bucket: B2_BUCKET_NAME || null,
       b2Synced,
       sizeBytes: fileBuffer.length,
+      mimeType: contentType,
+      sha256Checksum,
       ...(b2Error ? { b2Error } : {}),
       curriculumShelf: curriculumShelf || null,
       subjectCategory: subjectCategory || null,
@@ -5409,12 +5543,16 @@ app.post("/api/upload-complete", async (req, res) => {
       });
     }
 
+    const fileBufForHash = fs.readFileSync(localFilePath);
+    const sha256Checksum = computeSha256(fileBufForHash);
     return res.json({
       key,
       prefix: resolvedPrefix,
       bucket: B2_BUCKET_NAME || null,
       b2Synced,
       sizeBytes: fileStat.size,
+      mimeType: contentType,
+      sha256Checksum,
       curriculumShelf: curriculumShelf || null,
       subjectCategory: subjectCategory || null,
       success: true,
@@ -5642,6 +5780,39 @@ app.get("/api/download", async (req, res) => {
   const expectsPdf = expectedMime === "application/pdf" && req.query.fallback !== "summary";
   const expectsEpub = expectedMime === "application/epub+zip";
 
+  const wantsEpub =
+    req.query.format === 'epub' ||
+    filename.toLowerCase().endsWith('.epub') ||
+    key.toLowerCase().endsWith('.epub');
+
+  // 0. If caller asks for ?format=epub on a PDF book, serve its real converted EPUB 3 artifact when published!
+  if (wantsEpub && expectedMime === 'application/pdf') {
+    const matchedBook = readLocalBooksCatalog().find(
+      (b: any) =>
+        sanitizeB2ObjectKey(String(b?.fileUrl || '')) === safeKey ||
+        b?.id === key ||
+        b?.id === `disk-${safeKey}` ||
+        b?.id === `b2-${safeKey}`
+    );
+    const lookupIds = Array.from(
+      new Set([matchedBook?.id, `disk-${safeKey}`, `b2-${safeKey}`, String(req.query.bookId || '')].filter(Boolean))
+    );
+    for (const bid of lookupIds) {
+      const artifact = readEpubArtifact(UPLOADS_DIR, bid);
+      if (artifact?.epubKey && (artifact.published || req.query.preview === 'true')) {
+        const epubBuf = await resolveStoredFileBuffer(artifact.epubKey);
+        if (epubBuf) {
+          const epubFilename = `${filename.replace(/\.pdf$/i, '')}.epub`;
+          res.setHeader('Content-Type', 'application/epub+zip');
+          res.setHeader('Content-Length', epubBuf.length);
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          res.setHeader('Content-Disposition', buildSafeContentDisposition('inline', epubFilename));
+          return res.send(epubBuf);
+        }
+      }
+    }
+  }
+
   // 1. Check local persistent storage first
   if (existingLocalPath) {
     try {
@@ -5797,10 +5968,6 @@ app.get("/api/download", async (req, res) => {
 
     // 3. Graceful fallback for built-in sample/syllabus items (or explicit ?fallback=summary)
     const title = getTitleFromKey(key);
-    const wantsEpub =
-      req.query.format === 'epub' ||
-      filename.toLowerCase().endsWith('.epub') ||
-      key.toLowerCase().endsWith('.epub');
 
     if (wantsEpub) {
       try {
@@ -5842,6 +6009,585 @@ app.get("/api/download", async (req, res) => {
       console.error("[Storage] Error generating educational PDF for " + title + ":", genErr);
       return res.status(500).send("Error generating study material");
     }
+  });
+
+  // ==========================================================================
+  // PDF-to-EPUB 3 Pipeline, Canonical Structure & Hybrid Reader API Endpoints
+  // ==========================================================================
+
+  function getPipelineDeps(): PipelineRuntimeDeps {
+    return {
+      uploadsDir: UPLOADS_DIR,
+      b2BucketName: B2_BUCKET_NAME || undefined,
+      getS3Client,
+      getSupabase: () => getServerSupabase(),
+      onBookMetadataUpdated: (bookId: string, patch: Record<string, any>) => {
+        const list = readLocalBooksCatalog();
+        const idx = list.findIndex((b: any) => b?.id === bookId);
+        if (idx >= 0) {
+          list[idx] = { ...list[idx], ...patch };
+          writeLocalBooksCatalog(list);
+        }
+      },
+      onBroadcast: (event: any) => broadcastAllConnectedUsers(event),
+    };
+  }
+
+  async function resolveStoredFileBuffer(rawKey: string): Promise<Buffer | null> {
+    const safeKey = sanitizeB2ObjectKey(rawKey);
+    if (!safeKey) return null;
+    const stripped = safeKey.replace(/^uploads\/+/, "");
+    const resolvedUploadsDir = path.resolve(UPLOADS_DIR);
+    const localCandidates = Array.from(
+      new Set([
+        path.resolve(resolvedUploadsDir, safeKey),
+        path.resolve(resolvedUploadsDir, stripped),
+      ])
+    ).filter((p) => p.startsWith(resolvedUploadsDir + path.sep));
+
+    for (const p of localCandidates) {
+      try {
+        if (fs.existsSync(p) && fs.statSync(p).isFile()) {
+          return fs.readFileSync(p);
+        }
+      } catch (_) {}
+    }
+
+    const s3 = getS3Client();
+    if (s3 && B2_BUCKET_NAME) {
+      for (const s3Key of getB2CandidateKeys(safeKey, stripped)) {
+        try {
+          const resp = await s3.send(new GetObjectCommand({ Bucket: B2_BUCKET_NAME, Key: s3Key }));
+          if (resp.Body) {
+            const chunks: Buffer[] = [];
+            for await (const ch of resp.Body as any) {
+              chunks.push(Buffer.isBuffer(ch) ? ch : Buffer.from(ch));
+            }
+            const buf = Buffer.concat(chunks);
+            if (buf.length > 0) {
+              const cacheDest = localCandidates[0];
+              if (cacheDest) {
+                try {
+                  fs.mkdirSync(path.dirname(cacheDest), { recursive: true });
+                  fs.writeFileSync(cacheDest, buf);
+                } catch (_) {}
+              }
+              return buf;
+            }
+          }
+        } catch (_) {}
+      }
+    }
+    return null;
+  }
+
+  async function findCatalogBookById(bookId: string): Promise<any | null> {
+    const localMatch = readLocalBooksCatalog().find((b: any) => b?.id === bookId);
+    if (localMatch) return localMatch;
+    const sb = getServerSupabase();
+    if (sb && isUuid(bookId)) {
+      try {
+        const { data } = await sb.from("books").select("*").eq("id", bookId).maybeSingle();
+        if (data) return mapSupabaseRowToCatalogBook(data, new Set<string>(), B2_BUCKET_NAME);
+      } catch (_) {}
+    }
+    if (bookId.startsWith("disk-") || bookId.startsWith("b2-")) {
+      return { id: bookId, fileUrl: bookId.replace(/^(disk-|b2-)/, "") };
+    }
+    return null;
+  }
+
+  async function requireAdminOrLocalAuth(
+    req: express.Request,
+    res: express.Response
+  ): Promise<{ user: any } | null> {
+    const sbConfigured = Boolean(getServerSupabase());
+    if (!sbConfigured && process.env.NODE_ENV !== "production") {
+      return { user: { id: "local-admin", email: ADMIN_EMAILS[0] } };
+    }
+    const auth = await requireSocialAuth(req, res);
+    if (!auth) return null;
+    const role = normalizeCanonicalProfileRole(auth.user?.user_metadata?.role, auth.user?.email);
+    if (role !== "admin" && !isAuthorizedAdminEmail(auth.user?.email)) {
+      res.status(403).json({ error: "Admin privileges required for this operation." });
+      return null;
+    }
+    return { user: auth.user };
+  }
+
+  app.get("/api/books/:id/conversion", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const bookRecord = await findCatalogBookById(bookId);
+      const overview = resolveBookConversionOverview(UPLOADS_DIR, bookId, bookRecord);
+      res.json(overview);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to load conversion status" });
+    }
+  });
+
+  app.post("/api/books/:id/reprocess", async (req, res) => {
+    const adminAuth = await requireAdminOrLocalAuth(req, res);
+    if (!adminAuth) return;
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const bookRecord = await findCatalogBookById(bookId);
+      const sourcePdfKey = sanitizeB2ObjectKey(
+        String(req.body?.sourcePdfKey || bookRecord?.fileUrl || (bookId.startsWith("disk-") || bookId.startsWith("b2-") ? bookId.replace(/^(disk-|b2-)/, "") : ""))
+      );
+      if (!sourcePdfKey || sourcePdfKey.toLowerCase().endsWith(".epub")) {
+        return res.status(400).json({ error: "A valid source PDF key is required for PDF-to-EPUB conversion." });
+      }
+      if (bookRecord?.rightsConversionAllowed === false && req.body?.rightsConversionAllowed !== true) {
+        return res.status(403).json({ error: "Conversion is disabled for this textbook by publisher licensing rights." });
+      }
+
+      const queued = enqueuePdfToEpubJob(
+        {
+          bookId,
+          title: req.body?.title || bookRecord?.title || getTitleFromKey(sourcePdfKey),
+          author: bookRecord?.author,
+          publisher: bookRecord?.publisher,
+          description: bookRecord?.description,
+          language: req.body?.language || bookRecord?.language || "en",
+          sourcePdfKey,
+          rightsConversionAllowed: req.body?.rightsConversionAllowed !== false,
+          forceRepublish: Boolean(req.body?.forceRepublish),
+        },
+        getPipelineDeps()
+      );
+
+      await recordAdminAuditLog(
+        UPLOADS_DIR,
+        {
+          actorUserId: adminAuth.user?.id,
+          actorEmail: adminAuth.user?.email,
+          action: "reprocess_conversion",
+          bookId,
+          details: { sourcePdfKey, queued: queued.queued, reason: queued.reason },
+        },
+        getServerSupabase()
+      );
+
+      res.json({
+        ok: true,
+        queued: queued.queued,
+        reason: queued.reason,
+        job: queued.job,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to enqueue conversion job" });
+    }
+  });
+
+  app.get("/api/books/:id/toc", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const structure = readCanonicalStructure(UPLOADS_DIR, bookId);
+      if (!structure) {
+        return res.json({
+          bookId,
+          available: false,
+          epubPublished: false,
+          tocSource: null,
+          chapters: [],
+        });
+      }
+      res.json({
+        bookId: structure.bookId,
+        available: true,
+        title: structure.title,
+        totalPages: structure.totalPages,
+        epubPublished: structure.epubPublished,
+        epubKey: structure.epubKey,
+        tocSource: structure.tocSource,
+        confidenceStatus: structure.confidenceStatus,
+        qualityScore: structure.qualityScore,
+        chapters: structure.chapters.map((ch) => ({
+          id: ch.id,
+          stableId: ch.stableId,
+          chapterNumber: ch.chapterNumber,
+          title: ch.title,
+          hierarchyLevel: ch.hierarchyLevel,
+          sectionType: ch.sectionType,
+          orderIndex: ch.orderIndex,
+          pdfPageStart: ch.pdfPageStart,
+          pdfPageEnd: ch.pdfPageEnd,
+          epubHref: ch.epubHref,
+          epubAnchor: ch.epubAnchor,
+          contentRef: ch.contentRef,
+          summary: ch.summary,
+          sections: (ch.sections || []).map((s) => ({
+            id: s.id,
+            stableId: s.stableId,
+            chapterId: s.chapterId,
+            parentSectionId: s.parentSectionId,
+            title: s.title,
+            hierarchyLevel: s.hierarchyLevel,
+            sectionType: s.sectionType,
+            orderIndex: s.orderIndex,
+            pdfPageStart: s.pdfPageStart,
+            pdfPageEnd: s.pdfPageEnd,
+            epubHref: s.epubHref,
+            epubAnchor: s.epubAnchor,
+            contentRef: s.contentRef,
+          })),
+        })),
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to load table of contents" });
+    }
+  });
+
+  app.get("/api/books/:id/structure", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const structure = readCanonicalStructure(UPLOADS_DIR, bookId);
+      if (!structure) {
+        return res.status(404).json({ error: "Canonical book structure not yet generated for this book." });
+      }
+      res.json({ structure });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to load book structure" });
+    }
+  });
+
+  app.patch("/api/books/:id/structure", async (req, res) => {
+    const adminAuth = await requireAdminOrLocalAuth(req, res);
+    if (!adminAuth) return;
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const existing = readCanonicalStructure(UPLOADS_DIR, bookId);
+      if (!existing) {
+        return res.status(404).json({ error: "No canonical structure exists yet. Run PDF conversion first." });
+      }
+
+      const incomingChapters = Array.isArray(req.body?.chapters) ? req.body.chapters : null;
+      const publishRequested = req.body?.publish !== undefined ? Boolean(req.body.publish) : existing.epubPublished;
+
+      const updatedChapters = incomingChapters
+        ? incomingChapters.map((ch: any, idx: number) => {
+            const orig = existing.chapters.find((c) => c.id === ch.id) || existing.chapters[idx];
+            const epubHref = `chapters/chapter-${idx + 1}.xhtml`;
+            const epubAnchor = `ch-${idx + 1}`;
+            const pdfPageStart = Math.max(1, Math.min(existing.totalPages, Number(ch.pdfPageStart) || orig?.pdfPageStart || 1));
+            const pdfPageEnd = Math.max(pdfPageStart, Math.min(existing.totalPages, Number(ch.pdfPageEnd) || orig?.pdfPageEnd || pdfPageStart));
+
+            const origSections = orig?.sections || [];
+            const editedSections = Array.isArray(ch.sections) ? ch.sections : origSections;
+            const mappedSections = editedSections.map((sec: any, sIdx: number) => {
+              const origSec = origSections.find((os) => os.id === sec.id) || origSections[sIdx];
+              const secAnchor = origSec?.epubAnchor || `sec-${idx + 1}-${sIdx + 1}`;
+              const sStart = Math.max(pdfPageStart, Math.min(pdfPageEnd, Number(sec.pdfPageStart) || origSec?.pdfPageStart || pdfPageStart));
+              const sEnd = Math.max(sStart, Math.min(pdfPageEnd, Number(sec.pdfPageEnd) || origSec?.pdfPageEnd || sStart));
+              return {
+                ...(origSec || {
+                  id: sec.id || `sec-${bookId}-${idx + 1}-${sIdx + 1}`,
+                  stableId: sec.stableId || secAnchor,
+                  chapterId: orig?.id || ch.id,
+                  hierarchyLevel: Number(sec.hierarchyLevel) || 2,
+                  sectionType: sec.sectionType || "section",
+                  blocks: [],
+                }),
+                title: String(sec.title || origSec?.title || `Section ${sIdx + 1}`).trim(),
+                hierarchyLevel: Number(sec.hierarchyLevel) || origSec?.hierarchyLevel || 2,
+                orderIndex: sIdx + 1,
+                pdfPageStart: sStart,
+                pdfPageEnd: sEnd,
+                epubHref,
+                epubAnchor: secAnchor,
+                contentRef: `${epubHref}#${secAnchor}`,
+              };
+            });
+
+            return {
+              ...(orig || {
+                id: ch.id || `ch-${bookId}-${idx + 1}`,
+                stableId: ch.stableId || epubAnchor,
+                hierarchyLevel: 1,
+                sectionType: ch.sectionType || "chapter",
+                blocks: [],
+              }),
+              chapterNumber: ch.chapterNumber !== undefined ? Number(ch.chapterNumber) : idx + 1,
+              title: String(ch.title || orig?.title || `Chapter ${idx + 1}`).trim(),
+              sectionType: ch.sectionType || orig?.sectionType || "chapter",
+              orderIndex: idx,
+              pdfPageStart,
+              pdfPageEnd,
+              epubHref,
+              epubAnchor,
+              contentRef: `${epubHref}#${epubAnchor}`,
+              sections: mappedSections,
+            };
+          })
+        : existing.chapters;
+
+      const updatedStructure = {
+        ...existing,
+        chapters: updatedChapters,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const rebuilt = await rebuildAndPublishFromEditedStructure(
+        {
+          structure: updatedStructure,
+          publish: publishRequested,
+        },
+        getPipelineDeps()
+      );
+
+      await recordAdminAuditLog(
+        UPLOADS_DIR,
+        {
+          actorUserId: adminAuth.user?.id,
+          actorEmail: adminAuth.user?.email,
+          action: "update_structure_and_publish",
+          bookId,
+          details: {
+            chaptersCount: rebuilt.structure.chapters.length,
+            published: rebuilt.artifact.published,
+            validationPassed: rebuilt.artifact.validationPassed,
+          },
+        },
+        getServerSupabase()
+      );
+
+      res.json({
+        ok: true,
+        structure: rebuilt.structure,
+        artifact: rebuilt.artifact,
+        validationErrors: rebuilt.validationErrors,
+        validationWarnings: rebuilt.validationWarnings,
+      });
+    } catch (err: any) {
+      res.status(400).json({ error: err?.message || "Failed to update canonical structure" });
+    }
+  });
+
+  app.get("/api/books/:id/chapters/:chapterId", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const chapterId = decodeURIComponent(req.params.chapterId);
+      const structure = readCanonicalStructure(UPLOADS_DIR, bookId);
+      if (!structure) {
+        return res.status(404).json({ error: "Book structure not available" });
+      }
+      const chapter = structure.chapters.find(
+        (c) => c.id === chapterId || c.stableId === chapterId || String(c.chapterNumber) === chapterId
+      );
+      if (!chapter) {
+        return res.status(404).json({ error: "Chapter not found" });
+      }
+      res.json({ bookId, chapter });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to retrieve chapter content" });
+    }
+  });
+
+  app.get("/api/books/:id/search", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const query = String(req.query.q || "").trim();
+      const structure = readCanonicalStructure(UPLOADS_DIR, bookId);
+      if (!structure) {
+        return res.json({ bookId, query, hits: [] });
+      }
+      const hits = searchCanonicalBook(structure, query, 40);
+      res.json({ bookId, query, hits });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to search textbook" });
+    }
+  });
+
+  app.get("/api/books/:id/pdf", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const bookRecord = await findCatalogBookById(bookId);
+      const pdfKey = sanitizeB2ObjectKey(
+        String(bookRecord?.fileUrl || (bookId.startsWith("disk-") || bookId.startsWith("b2-") ? bookId.replace(/^(disk-|b2-)/, "") : ""))
+      );
+      if (!pdfKey) {
+        return res.status(404).json({ error: "Original PDF not found for this book." });
+      }
+      const buffer = await resolveStoredFileBuffer(pdfKey);
+      if (!buffer) {
+        return res.status(404).json({ error: "Original PDF binary unavailable in storage." });
+      }
+      const filename = pdfKey.split("/").pop() || "textbook.pdf";
+      res.setHeader("Content-Type", "application/pdf");
+      res.setHeader("Content-Length", buffer.length);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.setHeader("Content-Disposition", buildSafeContentDisposition("inline", filename));
+      return res.send(buffer);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to stream PDF" });
+    }
+  });
+
+  app.get("/api/books/:id/epub", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const preview = req.query.preview === "true";
+      if (preview) {
+        const adminAuth = await requireAdminOrLocalAuth(req, res);
+        if (!adminAuth) return;
+      }
+      const artifact = readEpubArtifact(UPLOADS_DIR, bookId);
+      const bookRecord = await findCatalogBookById(bookId);
+
+      // Native EPUB uploaded directly
+      if (!artifact?.epubKey && bookRecord?.format === "epub" && bookRecord?.fileUrl) {
+        const nativeKey = sanitizeB2ObjectKey(String(bookRecord.fileUrl));
+        const nativeBuf = nativeKey ? await resolveStoredFileBuffer(nativeKey) : null;
+        if (!nativeBuf) return res.status(404).json({ error: "EPUB file not found in storage." });
+        res.setHeader("Content-Type", "application/epub+zip");
+        res.setHeader("Content-Length", nativeBuf.length);
+        res.setHeader("Content-Disposition", buildSafeContentDisposition("inline", `${bookId}.epub`));
+        return res.send(nativeBuf);
+      }
+
+      if (!artifact?.epubKey || (!artifact.published && !preview)) {
+        return res.status(404).json({
+          error: "Converted EPUB 3 edition is not published yet; original PDF remains available.",
+          code: "EPUB_NOT_PUBLISHED",
+        });
+      }
+
+      const buf = await resolveStoredFileBuffer(artifact.epubKey);
+      if (!buf) {
+        return res.status(404).json({ error: "EPUB 3 artifact missing from storage." });
+      }
+      const safeTitle = String(bookRecord?.title || bookId).replace(/[^a-zA-Z0-9._-]/g, "_");
+      res.setHeader("Content-Type", "application/epub+zip");
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "private, max-age=3600");
+      res.setHeader("Content-Disposition", buildSafeContentDisposition("inline", `${safeTitle}.epub`));
+      return res.send(buf);
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message || "Failed to stream EPUB" });
+    }
+  });
+
+  app.get("/api/books/:id/assets/:assetName", async (req, res) => {
+    try {
+      const bookId = decodeURIComponent(req.params.id);
+      const assetName = String(req.params.assetName || "").replace(/[^a-zA-Z0-9._-]/g, "");
+      if (!assetName) return res.status(400).send("Invalid asset name");
+      const structure = readCanonicalStructure(UPLOADS_DIR, bookId);
+      const asset = structure?.assets?.find((a) => a.storageKey.endsWith(`/${assetName}`));
+      const key = asset?.storageKey || `extracted-assets/${bookId.replace(/[^a-zA-Z0-9_-]/g, "-")}/${assetName}`;
+      const buf = await resolveStoredFileBuffer(key);
+      if (!buf) return res.status(404).send("Asset not found");
+      res.setHeader("Content-Type", asset?.mimeType || "image/png");
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "private, max-age=86400");
+      return res.send(buf);
+    } catch (err: any) {
+      res.status(500).send(err?.message || "Failed to load asset");
+    }
+  });
+
+  app.get("/api/books/:id/progress", async (req, res) => {
+    const { token } = extractRequestAuthTokens(req);
+    const verified = token ? await verifySocialToken(token) : null;
+    const userId = verified?.user?.id || "guest";
+    const bookId = decodeURIComponent(req.params.id);
+    const record = readUserReadingProgress(UPLOADS_DIR, userId, bookId);
+    res.json({ progress: record });
+  });
+
+  app.post("/api/books/:id/progress", async (req, res) => {
+    const { token } = extractRequestAuthTokens(req);
+    const verified = token ? await verifySocialToken(token) : null;
+    const userId = verified?.user?.id || "guest";
+    const bookId = decodeURIComponent(req.params.id);
+    const body = req.body || {};
+    const record = saveUserReadingProgress(UPLOADS_DIR, {
+      bookId,
+      userId,
+      progress: Math.max(0, Math.min(100, Number(body.progress) || 0)),
+      currentPage: body.currentPage ? Number(body.currentPage) : undefined,
+      totalPages: body.totalPages ? Number(body.totalPages) : undefined,
+      activeFormat: body.activeFormat === "epub" ? "epub" : "pdf",
+      epubChapterHref: body.epubChapterHref ? String(body.epubChapterHref) : undefined,
+      canonicalSectionId: body.canonicalSectionId ? String(body.canonicalSectionId) : undefined,
+      scrollOffset: typeof body.scrollOffset === "number" ? body.scrollOffset : undefined,
+      updatedAt: new Date().toISOString(),
+    });
+    const sb = getServerSupabase();
+    if (sb && verified?.user?.id) {
+      try {
+        await sb.from("reading_progress").upsert({
+          user_id: verified.user.id,
+          book_id: bookId,
+          progress: record.progress,
+          current_page: record.currentPage || null,
+          total_pages: record.totalPages || null,
+          active_format: record.activeFormat,
+          epub_chapter_href: record.epubChapterHref || null,
+          canonical_section_id: record.canonicalSectionId || null,
+          scroll_offset: record.scrollOffset ?? null,
+          updated_at: record.updatedAt,
+        });
+      } catch (_) {}
+    }
+    res.json({ ok: true, progress: record });
+  });
+
+  app.get("/api/books/:id/bookmarks", async (req, res) => {
+    const { token } = extractRequestAuthTokens(req);
+    const verified = token ? await verifySocialToken(token) : null;
+    const userId = verified?.user?.id || "guest";
+    const bookId = decodeURIComponent(req.params.id);
+    const bookmarks = readUserBookmarks(UPLOADS_DIR, userId, bookId);
+    res.json({ bookmarks });
+  });
+
+  app.post("/api/books/:id/bookmarks", async (req, res) => {
+    const { token } = extractRequestAuthTokens(req);
+    const verified = token ? await verifySocialToken(token) : null;
+    const userId = verified?.user?.id || "guest";
+    const bookId = decodeURIComponent(req.params.id);
+    const body = req.body || {};
+    const record = {
+      id: String(body.id || `bm-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`),
+      bookId,
+      userId,
+      bookTitle: String(body.bookTitle || "Textbook"),
+      title: String(body.title || body.chapter || `Page ${body.pageNumber || 1}`),
+      chapter: String(body.chapter || body.title || "Section"),
+      textSnippet: String(body.textSnippet || ""),
+      canonicalSectionId: body.canonicalSectionId ? String(body.canonicalSectionId) : undefined,
+      epubHref: body.epubHref ? String(body.epubHref) : undefined,
+      epubAnchor: body.epubAnchor ? String(body.epubAnchor) : undefined,
+      format: body.format === "epub" ? ("epub" as const) : ("pdf" as const),
+      pageNumber: body.pageNumber ? Number(body.pageNumber) : undefined,
+      timestamp: Number(body.timestamp) || Date.now(),
+    };
+    const bookmarks = saveUserBookmark(UPLOADS_DIR, record);
+    res.json({ ok: true, bookmark: record, bookmarks });
+  });
+
+  app.delete("/api/books/:id/bookmarks/:bookmarkId", async (req, res) => {
+    const { token } = extractRequestAuthTokens(req);
+    const verified = token ? await verifySocialToken(token) : null;
+    const userId = verified?.user?.id || "guest";
+    const bookmarkId = decodeURIComponent(req.params.bookmarkId);
+    const deleted = deleteUserBookmark(UPLOADS_DIR, userId, bookmarkId);
+    res.json({ ok: deleted });
+  });
+
+  app.get("/api/admin/audit-logs", async (req, res) => {
+    const adminAuth = await requireAdminOrLocalAuth(req, res);
+    if (!adminAuth) return;
+    const logPath = path.join(UPLOADS_DIR, ".library-pipeline", "admin-audit-logs.json");
+    let logs: any[] = [];
+    try {
+      if (fs.existsSync(logPath)) {
+        logs = JSON.parse(fs.readFileSync(logPath, "utf-8"));
+      }
+    } catch (_) {}
+    res.json({ logs: Array.isArray(logs) ? logs.slice(0, 100) : [] });
   });
 
   // Flutter Mobile Companion & Publisher EPUB Readiness Manifest
@@ -6191,6 +6937,50 @@ Return ONLY a valid JSON object with a single "steps" array (no surrounding mark
     }
   });
 
+  app.post("/api/curriculum/search", async (req, res) => {
+    try {
+      const {
+        query,
+        queryText,
+        queryEmbedding,
+        bookId,
+        curriculum,
+        educationLevel,
+        subjects,
+        maxResults = 5,
+      } = req.body || {};
+
+      const effectiveQuery = String(query ?? queryText ?? "").trim();
+      if (!effectiveQuery) {
+        return res.status(400).json({ error: "A search query is required." });
+      }
+
+      const authHeader = String(req.headers.authorization || "");
+      const userJwt = authHeader.toLowerCase().startsWith("bearer ")
+        ? authHeader.slice(7).trim()
+        : undefined;
+
+      const retrieval = await retrieveCurriculumSources({
+        query: effectiveQuery,
+        queryEmbedding: Array.isArray(queryEmbedding) ? queryEmbedding : undefined,
+        academicProfile: {
+          bookId: bookId ? String(bookId) : undefined,
+          curriculum: curriculum ? String(curriculum) : undefined,
+          educationLevel: educationLevel ? String(educationLevel) : undefined,
+          subjects,
+        },
+        uploadsDir: UPLOADS_DIR,
+        supabase: getServerSupabase(userJwt),
+        maxResults: Number(maxResults) || 5,
+      });
+
+      return res.json(retrieval);
+    } catch (err: any) {
+      console.error("[CurriculumRAG Search Error]:", err?.message || err);
+      return res.status(500).json({ error: "Failed to search curriculum sources." });
+    }
+  });
+
   app.post("/api/chat", async (req, res) => {
     try {
       const {
@@ -6200,6 +6990,7 @@ Return ONLY a valid JSON object with a single "steps" array (no surrounding mark
         provider = 'qwen3',
         allowDataCollection,
         bookContext,
+        ragContext,
         speedMode = 'fast', // 'fast' (default, low thinking latency) | 'deep' (extended thinking)
         stream = false
       } = req.body || {};
@@ -6217,6 +7008,29 @@ Return ONLY a valid JSON object with a single "steps" array (no surrounding mark
         req.query?.stream === 'true'
       );
 
+      const authHeader = String(req.headers.authorization || "");
+      const userJwt = authHeader.toLowerCase().startsWith("bearer ")
+        ? authHeader.slice(7).trim()
+        : undefined;
+
+      const retrievalQuery = bookContext?.selectedText
+        ? `${effectivePrompt} ${bookContext.selectedText}`
+        : effectivePrompt;
+
+      const curriculumRetrieval = await retrieveCurriculumSources({
+        query: retrievalQuery,
+        bookContext: bookContext || undefined,
+        academicProfile: ragContext || undefined,
+        uploadsDir: UPLOADS_DIR,
+        supabase: getServerSupabase(userJwt),
+        maxResults: 5,
+      });
+
+      const curriculumGroundingSection = buildCurriculumGroundingPromptSection(
+        curriculumRetrieval,
+        bookContext || undefined
+      );
+
       const studyPatternsText = allowDataCollection 
         ? "The user has allowed data collection for their learning patterns. Please analyze the user's progress implicitly, be encouraging about their reading habits, and adjust your tutoring style based on any apparent strengths or weaknesses in the conversation."
         : "The user has disabled data collection. Please act entirely statelessly and do not refer to or assume any longitudinal study patterns.";
@@ -6230,7 +7044,7 @@ ${bookContext.selectedText ? `- User Highlighted Selection: "${bookContext.selec
 
 CRITICAL READING HOVER TUTOR RULES:
 1. The student is reading this book right now. Provide clear, direct, and well-structured explanations so they can immediately grasp the concept and continue reading.
-2. Ground explanations strictly in the syllabus, concepts, formulas, or themes of this specific book.
+2. Ground explanations strictly in the syllabus, concepts, formulas, or themes of this specific book when retrieved sources match.
 3. Use bullet points with bold prefixes for key takeaways to ensure maximum scannability on a compact hovering card.
 4. For formulas, math, or physics equations, always use LaTeX notation (e.g., $E = mc^2$ or $$\\Delta x = v_0 t + \\frac{1}{2} a t^2$$).
 5. If the user asks about highlighted text, directly analyze and explain the highlighted excerpt.
@@ -6243,6 +7057,7 @@ CRITICAL READING HOVER TUTOR RULES:
 
 ${studyPatternsText}
 ${bookGroundingText}
+${curriculumGroundingSection}
 
 Core Pedagogical & Speed Rules:
 - Direct Intuition First: Explain the 'why' behind a concept with immediate, vivid real-world metaphors or practical intuition before formal definitions.
@@ -6280,6 +7095,7 @@ Behavioral Persona:
           res.setHeader('X-Accel-Buffering', 'no');
           res.flushHeaders?.();
           res.write(`: ping\n\n`);
+          res.write(`data: ${JSON.stringify({ sources: curriculumRetrieval.sources, groundingMode: curriculumRetrieval.groundingMode })}\n\n`);
           if (typeof (res as any).flush === 'function') (res as any).flush();
 
           const abortController = new AbortController();
@@ -6335,6 +7151,8 @@ Behavioral Persona:
             thought: result.thought || undefined,
             model: result.model,
             provider: result.providerLabel,
+            sources: curriculumRetrieval.sources,
+            groundingMode: curriculumRetrieval.groundingMode,
           });
         } catch (qwenErr: any) {
           const formatted = formatQwenErrorPayload(qwenErr);
@@ -6366,6 +7184,7 @@ Behavioral Persona:
           res.setHeader('Cache-Control', 'no-cache, no-transform');
           res.setHeader('Connection', 'keep-alive');
           res.flushHeaders?.();
+          res.write(`data: ${JSON.stringify({ sources: curriculumRetrieval.sources, groundingMode: curriculumRetrieval.groundingMode })}\n\n`);
 
           let clientAborted = false;
           res.on('close', () => {
@@ -6416,7 +7235,11 @@ Behavioral Persona:
         });
 
         const replyText = response.content[0].type === 'text' ? response.content[0].text : '';
-        return res.json({ reply: replyText });
+        return res.json({
+          reply: replyText,
+          sources: curriculumRetrieval.sources,
+          groundingMode: curriculumRetrieval.groundingMode,
+        });
       }
 
       // Gemini Handler (explicitly selected fallback option)
@@ -6467,6 +7290,7 @@ Behavioral Persona:
         res.setHeader('X-Accel-Buffering', 'no');
         res.flushHeaders?.();
         res.write(`: ping\n\n`);
+        res.write(`data: ${JSON.stringify({ sources: curriculumRetrieval.sources, groundingMode: curriculumRetrieval.groundingMode })}\n\n`);
         if (typeof (res as any).flush === 'function') (res as any).flush();
 
         let clientAborted = false;
@@ -6562,7 +7386,11 @@ Behavioral Persona:
       }
 
       if (generatedText) {
-        return res.json({ reply: generatedText });
+        return res.json({
+          reply: generatedText,
+          sources: curriculumRetrieval.sources,
+          groundingMode: curriculumRetrieval.groundingMode,
+        });
       }
 
       const formatted = formatGeminiErrorPayload(lastModelErr);
@@ -6836,6 +7664,7 @@ async function startDevServer() {
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT} (HTTP + WS /ws/chat)`);
     void reconcileAdminProfilesOnBoot();
+    warmCurriculumPdfIndex(UPLOADS_DIR);
   });
 }
 

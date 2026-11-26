@@ -340,8 +340,10 @@ export function EduLab({ user, profile, onNavigate }: EduLabProps) {
             <div className="space-y-1">
               <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-[#98A4AF]">
                 <span className="text-brand-700 dark:text-brand-400 font-semibold">
-                  EDULAB VIRTUAL LABORATORY
+                  Cycle Stage 03 · Experiment
                 </span>
+                <span>·</span>
+                <span>EduLab Virtual Laboratory</span>
                 <span>·</span>
                 <span>{headerInfo.code}</span>
                 {profile?.curriculum && (
@@ -360,14 +362,23 @@ export function EduLab({ user, profile, onNavigate }: EduLabProps) {
             </div>
 
             {onNavigate && (
-              <button
-                type="button"
-                onClick={() => onNavigate('library')}
-                className="self-start flex items-center gap-1.5 px-3 py-2 rounded-xl bg-white dark:bg-[#18181a] border border-slate-200 dark:border-white/10 text-xs font-medium text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-white/5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
-              >
-                <BookOpen className="w-3.5 h-3.5 text-indigo-500" />
-                <span>Textbooks</span>
-              </button>
+              <div className="flex items-center gap-2 self-start shrink-0">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('quizzes')}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-brand-600 hover:bg-brand-700 text-white transition-colors cursor-pointer"
+                >
+                  <span>Next: Test in Quizzes</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('library')}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-medium bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] text-slate-700 dark:text-[#F2EFE9] hover:border-brand-400 transition-colors cursor-pointer"
+                >
+                  <BookOpen className="w-3.5 h-3.5 text-brand-600 dark:text-brand-400" />
+                  <span>Library</span>
+                </button>
+              </div>
             )}
           </div>
 

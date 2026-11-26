@@ -4,11 +4,11 @@ import { Book } from '../types';
 import {
   Clock, PlayCircle, Flame, BookOpen,
   CheckCircle2, Target, ArrowRight, Compass,
-  Brain, Headphones, ChevronRight, Layers,
-  Zap, X, Check, FlaskConical, SlidersHorizontal
+  ChevronRight, X, Check, FlaskConical, SlidersHorizontal
 } from 'lucide-react';
 import { BookCoverVisual } from './BookCoverVisual';
 import { DailyReadingGoalCard } from './DailyReadingGoalCard';
+import { LearningCycleSection } from './LearningCycleSection';
 import { HomeSearchBar } from './HomeSearchBar';
 import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
 import { fetchUserDashboardMetrics, UserStatsSummary } from '../lib/userHomeDataService';
@@ -297,37 +297,6 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
           ]
     )
   ).filter(Boolean);
-
-  const studyPortals = [
-    {
-      index: '01',
-      id: 'ai-tutor',
-      title: 'Sage AI Tutor',
-      desc: 'Socratic explanations & step-by-step LaTeX',
-      icon: Brain,
-    },
-    {
-      index: '02',
-      id: 'quizzes',
-      title: 'Smart Quizzes',
-      desc: 'Diagnostic recall & chapter checks',
-      icon: Zap,
-    },
-    {
-      index: '03',
-      id: 'audiobooks',
-      title: 'Audiobooks',
-      desc: 'Guided narrations & visual cues',
-      icon: Headphones,
-    },
-    {
-      index: '04',
-      id: 'workspace',
-      title: 'Workspace',
-      desc: 'Field notes, highlights & citations',
-      icon: Layers,
-    },
-  ];
 
   return (
     <div className="w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-4 sm:py-6 md:py-8 space-y-6 sm:space-y-8 min-w-0 transition-all duration-300">
@@ -727,6 +696,15 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
         </AnimatePresence>
       </motion.section>
 
+      {/* Foundational 5-Stage EduAI Learning Cycle */}
+      <LearningCycleSection
+        books={books}
+        user={user}
+        profile={profile}
+        onNavigate={(view) => onNavigate?.(view)}
+        onBookSelect={onBookSelect}
+      />
+
       {/* Daily Reading Goal Widget */}
       <DailyReadingGoalCard />
 
@@ -802,38 +780,6 @@ export function Dashboard({ books, onBookSelect, user, profile, onNavigate, onAd
           </div>
         </section>
       )}
-
-      {/* Study Portals — Unified Architectural Grid */}
-      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
-        {studyPortals.map((portal) => {
-          const Icon = portal.icon;
-          return (
-            <button
-              key={portal.id}
-              onClick={() => onNavigate?.(portal.id)}
-              className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] hover:border-brand-400 dark:hover:border-brand-400/70 transition-all text-left flex flex-col justify-between gap-4 group cursor-pointer active:scale-[0.99]"
-            >
-              <div className="flex items-center justify-between w-full">
-                <div className="w-9 h-9 rounded-xl bg-brand-50 dark:bg-brand-100/80 text-brand-600 dark:text-brand-400 border border-brand-200/70 dark:border-brand-300/20 flex items-center justify-center">
-                  <Icon className="w-4.5 h-4.5" />
-                </div>
-                <span className="font-mono text-[11px] text-slate-400 dark:text-slate-400">
-                  {portal.index}
-                </span>
-              </div>
-              <div>
-                <div className="font-display font-semibold text-slate-900 dark:text-white text-sm sm:text-base flex items-center justify-between gap-1 group-hover:text-brand-600 dark:group-hover:text-brand-400 transition-colors">
-                  <span>{portal.title}</span>
-                  <ArrowRight className="w-3.5 h-3.5 opacity-0 -translate-x-1 group-hover:opacity-100 group-hover:translate-x-0 transition-all shrink-0" />
-                </div>
-                <div className="text-[11px] sm:text-xs text-slate-500 dark:text-slate-400 mt-1 leading-snug">
-                  {portal.desc}
-                </div>
-              </div>
-            </button>
-          );
-        })}
-      </section>
 
       {/* Curriculum STEM Atlas Feature Plate */}
       <section className="rounded-2xl sm:rounded-3xl bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] overflow-hidden grid grid-cols-1 md:grid-cols-[1.1fr_1.4fr] items-center">

@@ -25,9 +25,11 @@ import {
   Pencil
 } from 'lucide-react';
 import { AstroidIcon } from './icons/AstroidIcon';
-import { Book } from '../types';
+import { Book, CurriculumSourceReference, GroundingMode } from '../types';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { safeStorage } from '../lib/safeStorage';
+import { extractUserAcademicProfile } from '../lib/bookPersonalization';
+import { CurriculumGroundingPanel } from './CurriculumGroundingPanel';
 import {
   getReaderChatStorageKey,
   mergeChatMessagesArray,
@@ -42,6 +44,8 @@ interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  sources?: CurriculumSourceReference[];
+  groundingMode?: GroundingMode;
 }
 
 interface ReaderAiHoverTutorProps {
@@ -96,6 +100,8 @@ export function ReaderAiHoverTutor({
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [liveStreamingText, setLiveStreamingText] = useState<string>('');
+  const [liveSources, setLiveSources] = useState<CurriculumSourceReference[]>([]);
+  const [liveGroundingMode, setLiveGroundingMode] = useState<GroundingMode | undefined>(undefined);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [isListening, setIsListening] = useState(false);
@@ -310,10 +316,14 @@ export function ReaderAiHoverTutor({
           id: Date.now().toString() + '_ai',
           role: 'assistant',
           content: liveStreamingText.trim(),
+          sources: liveSources.length > 0 ? liveSources : undefined,
+          groundingMode: liveGroundingMode,
         },
       ]);
     }
     setLiveStreamingText('');
+    setLiveSources([]);
+    setLiveGroundingMode(undefined);
     setIsGenerating(false);
   };
 
@@ -330,6 +340,8 @@ export function ReaderAiHoverTutor({
     triggerCapsuleFeedback({ pitch: 680, volume: 0.15, hapticDuration: 14 });
     setInput('');
     setLiveStreamingText('');
+    setLiveSources([]);
+    setLiveGroundingMode(undefined);
     if (selectedText) onClearSelectedText();
     setIsGenerating(true);
 
@@ -345,6 +357,7 @@ export function ReaderAiHoverTutor({
 
     try {
       const allowDataCollection = JSON.parse(localStorage.getItem('privacy_data') ?? 'true');
+      const academicProfile = extractUserAcademicProfile(undefined, user);
 
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -360,9 +373,19 @@ export function ReaderAiHoverTutor({
           stream: true,
           allowDataCollection,
           history: messages.slice(-6).map((m) => ({ role: m.role, content: m.content })),
+          ragContext: {
+            curriculum: academicProfile.curriculum || (Array.isArray(book.curriculum) ? book.curriculum[0] : undefined),
+            educationLevel: academicProfile.educationLevel,
+            subjects: academicProfile.subjects.length > 0 ? academicProfile.subjects : book.subjects,
+            bookId: book.id,
+          },
           bookContext: {
+            bookId: book.id,
             title: book.title,
             author: book.author,
+            publisher: book.publisher,
+            curriculum: book.curriculum,
+            subjects: book.subjects,
             page: pageNumber,
             numPages: numPages || undefined,
             description: book.description,
@@ -377,6 +400,8 @@ export function ReaderAiHoverTutor({
         const decoder = new TextDecoder();
         let buffer = '';
         let accumulated = '';
+        let accumulatedSources: CurriculumSourceReference[] = [];
+        let accumulatedGroundingMode: GroundingMode | undefined = undefined;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -393,6 +418,14 @@ export function ReaderAiHoverTutor({
 
             try {
               const parsed = JSON.parse(dataStr);
+              if (Array.isArray(parsed.sources)) {
+                accumulatedSources = parsed.sources;
+                setLiveSources(parsed.sources);
+              }
+              if (parsed.groundingMode) {
+                accumulatedGroundingMode = parsed.groundingMode;
+                setLiveGroundingMode(parsed.groundingMode);
+              }
               if (parsed.text) {
                 accumulated += parsed.text;
                 setLiveStreamingText(accumulated);
@@ -413,6 +446,8 @@ export function ReaderAiHoverTutor({
           if (dataStr && dataStr !== '[DONE]') {
             try {
               const parsed = JSON.parse(dataStr);
+              if (Array.isArray(parsed.sources)) accumulatedSources = parsed.sources;
+              if (parsed.groundingMode) accumulatedGroundingMode = parsed.groundingMode;
               if (parsed.text) accumulated += parsed.text;
               else if (parsed.error) accumulated += `\n\n*(Error: ${parsed.error})*`;
             } catch {}
@@ -426,6 +461,8 @@ export function ReaderAiHoverTutor({
                 id: assistantMsgId,
                 role: 'assistant',
                 content: accumulated.trim(),
+                sources: accumulatedSources.length > 0 ? accumulatedSources : undefined,
+                groundingMode: accumulatedGroundingMode,
               }
             : {
                 id: Date.now().toString() + '_err',
@@ -441,6 +478,8 @@ export function ReaderAiHoverTutor({
             id: assistantMsgId,
             role: 'assistant',
             content: data.reply || 'I analyzed the book context for you.',
+            sources: Array.isArray(data.sources) ? data.sources : undefined,
+            groundingMode: data.groundingMode,
           },
         ]);
       } else {
@@ -469,6 +508,8 @@ export function ReaderAiHoverTutor({
     } finally {
       abortControllerRef.current = null;
       setLiveStreamingText('');
+      setLiveSources([]);
+      setLiveGroundingMode(undefined);
       setIsGenerating(false);
     }
   };
@@ -519,13 +560,12 @@ export function ReaderAiHoverTutor({
                 <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-brand-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-md shadow-brand-500/30">
                   <AstroidIcon className="w-4 h-4 animate-spin-slow" />
                 </div>
-                <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 rounded-full border-2 border-white dark:border-slate-900 animate-pulse" />
               </div>
 
               <div className="flex flex-col text-left">
                 <div className="flex items-center gap-1.5">
                   <span className="text-xs font-bold font-display text-brand-700 dark:text-brand-300">Sage AI Tutor</span>
-                  <span className="text-[10px] font-mono px-1.5 py-0.2 rounded-md bg-brand-500/15 text-brand-700 dark:text-brand-300 font-semibold">
+                  <span className="text-[10px] font-mono tabular-nums text-brand-700 dark:text-brand-300 font-semibold">
                     p.{pageNumber}
                   </span>
                 </div>
@@ -564,18 +604,17 @@ export function ReaderAiHoverTutor({
                   <div className="w-7 h-7 rounded-xl bg-gradient-to-tr from-brand-600 via-indigo-600 to-purple-600 flex items-center justify-center text-white shadow-sm">
                     <AstroidIcon className="w-3.5 h-3.5" />
                   </div>
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 bg-emerald-500 rounded-full border border-white dark:border-slate-900 animate-pulse" />
                 </div>
 
                 <div className="min-w-0">
                   <div className="flex items-center gap-1.5">
                     <span className="font-bold text-xs sm:text-sm font-display tracking-tight truncate">Sage AI Tutor</span>
-                    <span className="text-[9px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
-                      Grounded
+                    <span className="text-[10px] font-mono tabular-nums text-stone-500 dark:text-stone-400">
+                      · p.{pageNumber}
                     </span>
                   </div>
                   <p className="text-[10px] text-stone-500 dark:text-stone-400 truncate max-w-[190px]">
-                    {book.title} · Page {pageNumber}{numPages ? ` of ${numPages}` : ''}
+                    {book.title}{numPages ? ` · ${numPages} pp.` : ''}
                   </p>
                 </div>
               </div>
@@ -706,6 +745,12 @@ export function ReaderAiHoverTutor({
                         </ReactMarkdown>
                       </div>
 
+                      <CurriculumGroundingPanel
+                        groundingMode={msg.groundingMode}
+                        sources={msg.sources}
+                        compact
+                      />
+
                       {/* Action buttons (Copy + Speak) */}
                       <div className="flex items-center justify-end gap-2 pt-1 border-t border-stone-200/40 dark:border-white/5 text-stone-400">
                         <button
@@ -765,6 +810,14 @@ export function ReaderAiHoverTutor({
                         Sage is analyzing page {pageNumber}...
                       </span>
                     </div>
+                  )}
+
+                  {(liveGroundingMode || liveSources.length > 0) && (
+                    <CurriculumGroundingPanel
+                      groundingMode={liveGroundingMode}
+                      sources={liveSources}
+                      compact
+                    />
                   )}
                 </div>
               )}

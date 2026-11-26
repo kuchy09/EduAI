@@ -3,7 +3,7 @@ import { motion } from 'motion/react';
 import {
   Trophy, Book, CheckCircle2, Target, Flame, Activity, Brain,
   BookOpen, Sparkles, Compass, Map as MapIcon, Award, Star,
-  Library as LibraryIcon, Crown, ArrowRight
+  Library as LibraryIcon, Crown, ArrowRight, FlaskConical, AlertCircle, Zap
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import { getDailyGoal, GOAL_EVENT_NAME } from '../lib/readingGoal';
@@ -15,11 +15,17 @@ import {
   getStoredAchievements,
   UserAchievementState,
 } from '../lib/achievementsService';
+import {
+  analyzeLearningCycle,
+  LEARNING_CYCLE_UPDATED_EVENT,
+} from '../lib/learningCycleService';
 import { ACCOUNT_SYNC_EVENT } from '../lib/accountSyncService';
+import { safeStorage } from '../lib/safeStorage';
 import { ViewState } from '../types';
 
 interface ProgressProps {
   user: any;
+  profile?: any;
   books: any[];
   onNavigate?: (view: ViewState) => void;
 }
@@ -53,7 +59,7 @@ function getBadgeIcon(iconName: AchievementBadgeDefinition['iconName']) {
   }
 }
 
-export function Progress({ user, books, onNavigate }: ProgressProps) {
+export function Progress({ user, profile, books, onNavigate }: ProgressProps) {
   const [loading, setLoading] = useState(true);
   const [tokenUsage, setTokenUsage] = useState({ total: 0, count: 0, limit: 50000 });
   const [achievements, setAchievements] = useState<UserAchievementState>(() =>
@@ -73,10 +79,14 @@ export function Progress({ user, books, onNavigate }: ProgressProps) {
     window.addEventListener(ACHIEVEMENTS_UPDATED_EVENT, refreshAchievements);
     window.addEventListener(ACCOUNT_SYNC_EVENT, refreshAchievements);
     window.addEventListener(GOAL_EVENT_NAME, refreshGoal);
+    window.addEventListener(LEARNING_CYCLE_UPDATED_EVENT, refreshGoal);
+    window.addEventListener('edu-ai-progress-updated', refreshGoal);
     return () => {
       window.removeEventListener(ACHIEVEMENTS_UPDATED_EVENT, refreshAchievements);
       window.removeEventListener(ACCOUNT_SYNC_EVENT, refreshAchievements);
       window.removeEventListener(GOAL_EVENT_NAME, refreshGoal);
+      window.removeEventListener(LEARNING_CYCLE_UPDATED_EVENT, refreshGoal);
+      window.removeEventListener('edu-ai-progress-updated', refreshGoal);
     };
   }, [user?.id]);
 
@@ -190,6 +200,11 @@ export function Progress({ user, books, onNavigate }: ProgressProps) {
   const earnedBadgeCount = Object.keys(achievements.earnedBadges).length;
   const usagePercent = Math.min(100, Math.round((tokenUsage.total / tokenUsage.limit) * 100));
 
+  const cycleAnalysis = useMemo(
+    () => analyzeLearningCycle({ books, user, profile }),
+    [books, user, profile, achievements, goalTick]
+  );
+
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -211,20 +226,145 @@ export function Progress({ user, books, onNavigate }: ProgressProps) {
           </p>
         </div>
 
-        <div className="flex items-center gap-3 bg-white dark:bg-[#1a1a1a] px-4 py-3 rounded-2xl border border-slate-200 dark:border-[#2a2a2a] shadow-sm">
+        <div className="flex items-center gap-3 bg-white dark:bg-[#171E24] px-4 py-3 rounded-2xl border border-[#E2DDD3] dark:border-[#26313A] shadow-sm">
           <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
             <Trophy className="w-5 h-5" />
           </div>
           <div>
-            <div className="text-xs font-medium text-slate-500 dark:text-[#A0A0A0]">
+            <div className="text-xs font-medium text-slate-500 dark:text-[#98A4AF]">
               {scholarRank.title}
             </div>
-            <div className="text-lg font-bold font-display text-slate-900 dark:text-[#EDEDED] tabular-nums">
+            <div className="text-lg font-bold font-display text-slate-900 dark:text-[#F2EFE9] tabular-nums">
               {achievements.totalEduPoints.toLocaleString()} EP
             </div>
           </div>
         </div>
       </div>
+
+      {/* Stage 05 · Improve: Weakness Tracking & Targeted Recommendations */}
+      <section className="rounded-2xl bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] p-6 space-y-5 shadow-xs">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-[#E2DDD3] dark:border-[#26313A]">
+          <div>
+            <div className="text-[11px] font-mono uppercase tracking-[0.14em] text-brand-700 dark:text-brand-400 font-semibold">
+              Stage 05 · Improve Loop
+            </div>
+            <h3 className="text-xl font-display font-bold text-slate-900 dark:text-[#F2EFE9] mt-0.5">
+              Weakness Diagnostics &amp; Targeted Recommendations
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-500 dark:text-[#98A4AF] mt-0.5">
+              Signals drawn from your reading progress, EduLab practicals, and quiz performance.
+            </p>
+          </div>
+          <span className="text-xs font-mono text-slate-600 dark:text-[#98A4AF] tabular-nums shrink-0">
+            {cycleAnalysis.completedStagesCount}/5 cycle stages active
+          </span>
+        </div>
+
+        {cycleAnalysis.weaknesses.length > 0 ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {cycleAnalysis.weaknesses.slice(0, 4).map((weakness) => (
+              <div
+                key={weakness.id}
+                className="p-4 rounded-xl bg-[#FAF8F4] dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A] flex flex-col justify-between gap-3.5"
+              >
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between gap-2 text-xs">
+                    <span className="font-display font-bold text-slate-900 dark:text-[#F2EFE9] text-sm">
+                      {weakness.subject}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 font-mono text-[11px] font-semibold ${
+                        weakness.severity === 'priority'
+                          ? 'text-rose-700 dark:text-rose-400'
+                          : 'text-amber-700 dark:text-amber-400'
+                      }`}
+                    >
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>{weakness.statusLabel}</span>
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-slate-600 dark:text-[#98A4AF] leading-relaxed">
+                    {weakness.reason}
+                  </p>
+
+                  {weakness.missedTopics.length > 0 && (
+                    <div className="space-y-1 pt-1">
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-slate-500 dark:text-[#7F8C97]">
+                        Concepts to Revisit
+                      </div>
+                      <ul className="space-y-1">
+                        {weakness.missedTopics.slice(0, 2).map((topic, idx) => (
+                          <li
+                            key={idx}
+                            className="text-xs text-slate-700 dark:text-[#D5D1C8] line-clamp-1"
+                          >
+                            · {topic}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+
+                {onNavigate && (
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-[#E2DDD3]/70 dark:border-[#26313A]">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        safeStorage.setItem('ai_tutor_prefill', weakness.sagePrefillPrompt);
+                        onNavigate('ai-tutor');
+                      }}
+                      className="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5"
+                    >
+                      <Brain className="w-3.5 h-3.5" />
+                      <span>Ask Sage AI</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('edulab')}
+                      className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] hover:border-brand-400 text-slate-700 dark:text-[#F2EFE9] text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <FlaskConical className="w-3 h-3 text-brand-600 dark:text-brand-400" />
+                      <span>EduLab</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('quizzes')}
+                      className="px-2.5 py-1.5 rounded-lg bg-white dark:bg-[#171E24] border border-[#E2DDD3] dark:border-[#26313A] hover:border-brand-400 text-slate-700 dark:text-[#F2EFE9] text-xs font-medium transition-colors cursor-pointer inline-flex items-center gap-1"
+                    >
+                      <Zap className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                      <span>Retake Quiz</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="p-4 rounded-xl bg-[#FAF8F4] dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-0.5">
+              <div className="text-sm font-semibold text-slate-900 dark:text-[#F2EFE9] flex items-center gap-1.5">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <span>No priority weaknesses detected yet</span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-[#98A4AF]">
+                Complete a chapter quiz in Stage 04 or explore an experiment in EduLab so Edu AI can pinpoint focus topics.
+              </p>
+            </div>
+            {onNavigate && (
+              <button
+                type="button"
+                onClick={() => onNavigate(cycleAnalysis.recommendedNextStage.targetView)}
+                className="px-3.5 py-2 rounded-xl bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold transition-colors cursor-pointer inline-flex items-center gap-1.5 shrink-0"
+              >
+                <span>{cycleAnalysis.recommendedNextStage.actionLabel}</span>
+                <ArrowRight className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+      </section>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Stats */}

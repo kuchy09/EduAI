@@ -35,6 +35,7 @@
     "react-pdf": "^10.4.1",
     "rehype-katex": "^7.0.1",
     "remark-math": "^6.0.0",
+    "tesseract.js": "^7.0.0",
     "vite": "^6.2.3",
     "ws": "^8.23.0"
   },

@@ -1704,6 +1704,7 @@ export default function App() {
                       <Progress
                         books={books}
                         user={session?.user}
+                        profile={profile}
                         onNavigate={(view) => changeView(view)}
                       />
                     )}
@@ -1744,7 +1745,14 @@ export default function App() {
                         onSidebarStateChange={setIsSageSidebarOpen}
                       />
                     )}
-                    {currentView === 'quizzes' && <Quizzes user={session?.user} profile={profile} books={books} />}
+                    {currentView === 'quizzes' && (
+                      <Quizzes
+                        user={session?.user}
+                        profile={profile}
+                        books={books}
+                        onNavigate={(view) => changeView(view)}
+                      />
+                    )}
                     {currentView === 'community' && <Community />}
                     {currentView === 'users-portal' && (
                       <UserPortal

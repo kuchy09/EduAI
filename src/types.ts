@@ -49,6 +49,17 @@ export interface Book {
   isbn?: string;
   pages?: number;
   publishedYear?: number;
+  sha256Checksum?: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  pageCount?: number;
+  language?: string;
+  processingStatus?: ProcessingStatus;
+  epubFileKey?: string;
+  epubPublished?: boolean;
+  conversionConfidence?: ConversionConfidence;
+  conversionQualityScore?: number;
+  rightsConversionAllowed?: boolean;
 }
 
 export interface Bookmark {
@@ -58,6 +69,12 @@ export interface Bookmark {
   chapter: string;
   textSnippet: string;
   timestamp: number;
+  canonicalSectionId?: string;
+  epubHref?: string;
+  epubAnchor?: string;
+  format?: BookFormat;
+  pageNumber?: number;
+  title?: string;
 }
 
 export interface Highlight {
@@ -180,4 +197,203 @@ export interface RAGSearchResult {
   contentText: string;
   similarity: number;
 }
+
+export type GroundingMode = 'curriculum_grounded' | 'mixed' | 'general_ai';
+
+export interface CurriculumSourceReference {
+  id: string;
+  bookId: string;
+  bookTitle: string;
+  publisher: string;
+  curriculum?: string;
+  subject?: string;
+  chapterTitle?: string;
+  subTopicTitle?: string;
+  pageNumber: number;
+  pageRange?: string;
+  excerpt: string;
+  matchType: 'vector_chunk' | 'textbook_chunk' | 'pdf_page' | 'curriculum_taxonomy' | 'reader_context';
+  similarity: number;
+  isKicdApproved?: boolean;
+}
+
+export type ProcessingStatus =
+  | 'pending'
+  | 'queued'
+  | 'processing'
+  | 'completed'
+  | 'needs_review'
+  | 'failed'
+  | 'pdf_only';
+
+export type ConversionConfidence = 'high' | 'medium' | 'low';
+
+export type ContentBlockType =
+  | 'heading'
+  | 'paragraph'
+  | 'image'
+  | 'table'
+  | 'math'
+  | 'exercise'
+  | 'learning_objective'
+  | 'callout'
+  | 'list_item';
+
+export interface CanonicalBookBlock {
+  id: string;
+  type: ContentBlockType;
+  orderIndex: number;
+  text: string;
+  level?: number;
+  mathMl?: string;
+  latex?: string;
+  tableData?: { headers: string[]; rows: string[][] };
+  assetId?: string;
+  assetUrl?: string;
+  caption?: string;
+  pdfPageNumber: number;
+  epubAnchor: string;
+}
+
+export interface CanonicalBookSection {
+  id: string;
+  stableId: string;
+  chapterId: string;
+  parentSectionId?: string;
+  title: string;
+  hierarchyLevel: number; // 2 = section, 3 = subsection
+  sectionType: 'section' | 'subsection' | 'exercise' | 'learning_objectives';
+  orderIndex: number;
+  pdfPageStart: number;
+  pdfPageEnd: number;
+  epubHref: string;
+  epubAnchor: string;
+  contentRef: string;
+  blocks: CanonicalBookBlock[];
+}
+
+export interface CanonicalBookChapter {
+  id: string;
+  stableId: string;
+  chapterNumber: number;
+  title: string;
+  hierarchyLevel: number;
+  sectionType: 'front_matter' | 'chapter' | 'exercises' | 'glossary' | 'appendix';
+  orderIndex: number;
+  pdfPageStart: number;
+  pdfPageEnd: number;
+  epubHref: string;
+  epubAnchor: string;
+  contentRef: string;
+  summary?: string;
+  sections: CanonicalBookSection[];
+  blocks: CanonicalBookBlock[];
+}
+
+export interface ExtractedAsset {
+  id: string;
+  bookId: string;
+  assetType: 'image' | 'diagram' | 'figure';
+  storageKey: string;
+  mimeType: string;
+  width?: number;
+  height?: number;
+  pdfPageNumber: number;
+  caption?: string;
+  sha256Checksum?: string;
+  url?: string;
+}
+
+export interface CanonicalBookStructure {
+  bookId: string;
+  title: string;
+  author: string;
+  publisher?: string;
+  language: string;
+  totalPages: number;
+  sourcePdfKey: string;
+  sourceChecksum: string;
+  epubKey?: string;
+  epubPublished: boolean;
+  confidenceStatus?: ConversionConfidence;
+  qualityScore?: number;
+  tocSource: 'pdf_bookmarks' | 'layout_heuristics' | 'hybrid' | 'admin_edited';
+  updatedAt: string;
+  chapters: CanonicalBookChapter[];
+  assets: ExtractedAsset[];
+}
+
+export interface ProcessingJobStatus {
+  id: string;
+  bookId: string;
+  sourcePdfKey: string;
+  status: ProcessingStatus;
+  currentStage: string;
+  stageIndex: number;
+  totalStages: number;
+  progressPct: number;
+  ocrStatus: 'not_needed' | 'running' | 'completed' | 'partial' | 'failed';
+  ocrPagesCount: number;
+  errorMessage?: string;
+  retryCount: number;
+  startedAt?: string;
+  completedAt?: string;
+  updatedAt: string;
+}
+
+export interface ConversionQualityReport {
+  id: string;
+  bookId: string;
+  jobId: string;
+  confidenceStatus: ConversionConfidence;
+  qualityScore: number;
+  totalPages: number;
+  extractedChaptersCount: number;
+  extractedSectionsCount: number;
+  extractedImagesCount: number;
+  extractedTablesCount: number;
+  mathBlocksCount: number;
+  ocrPages: number[];
+  warnings: string[];
+  errors: string[];
+  validationPassed: boolean;
+  autoPublished: boolean;
+  createdAt: string;
+}
+
+export interface EpubArtifactInfo {
+  id: string;
+  bookId: string;
+  version: number;
+  epubKey: string;
+  sha256Checksum: string;
+  fileSizeBytes: number;
+  validationPassed: boolean;
+  validationErrors: string[];
+  validationWarnings: string[];
+  published: boolean;
+  createdAt: string;
+}
+
+export interface BookConversionOverview {
+  bookId: string;
+  processingStatus: ProcessingStatus;
+  epubFileKey?: string;
+  epubPublished: boolean;
+  confidenceStatus?: ConversionConfidence;
+  qualityScore?: number;
+  rightsConversionAllowed: boolean;
+  sha256Checksum?: string;
+  fileSizeBytes?: number;
+  mimeType?: string;
+  pageCount?: number;
+  language?: string;
+  job?: ProcessingJobStatus | null;
+  report?: ConversionQualityReport | null;
+  artifact?: EpubArtifactInfo | null;
+  chaptersCount: number;
+  sectionsCount: number;
+}
+
+
 

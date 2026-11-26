@@ -25,11 +25,16 @@ import {
   hydrateAccountSync,
   ACCOUNT_SYNC_EVENT,
 } from '../lib/accountSyncService';
+import { extractUserAcademicProfile } from '../lib/bookPersonalization';
+import { CurriculumGroundingPanel } from './CurriculumGroundingPanel';
+import type { CurriculumSourceReference, GroundingMode } from '../types';
 
 interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  sources?: CurriculumSourceReference[];
+  groundingMode?: GroundingMode;
 }
 
 interface ChatSession {
@@ -104,6 +109,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
   const [isGenerating, setIsGenerating] = useState(false);
   const [liveStreamingText, setLiveStreamingText] = useState<string>('');
   const [liveThoughtText, setLiveThoughtText] = useState<string>('');
+  const [liveSources, setLiveSources] = useState<CurriculumSourceReference[]>([]);
+  const [liveGroundingMode, setLiveGroundingMode] = useState<GroundingMode | undefined>(undefined);
   const [isThoughtOpen, setIsThoughtOpen] = useState<boolean>(true);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [speakingMsgId, setSpeakingMsgId] = useState<string | null>(null);
@@ -383,6 +390,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
     try {
       const allowDataCollection = JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
+      const academicProfile = extractUserAcademicProfile(profile, user);
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -392,7 +400,13 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
           speedMode: 'fast',
           stream: false,
           history: [...messages, userMessage].slice(-6).map(m => ({ role: m.role, content: m.content })),
-          allowDataCollection
+          allowDataCollection,
+          ragContext: {
+            curriculum: academicProfile.curriculum,
+            educationLevel: academicProfile.educationLevel,
+            subjects: academicProfile.subjects,
+            fieldOfStudy: academicProfile.fieldOfStudy,
+          },
         })
       });
 
@@ -407,7 +421,16 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
             return {
               ...s,
               updatedAt: replyIso,
-              messages: [...s.messages, { id: Date.now().toString() + 'ai', role: 'assistant', content: replyText }]
+              messages: [
+                ...s.messages,
+                {
+                  id: Date.now().toString() + 'ai',
+                  role: 'assistant',
+                  content: replyText,
+                  sources: Array.isArray(data.sources) ? data.sources : undefined,
+                  groundingMode: data.groundingMode,
+                },
+              ]
             };
           }
           return s;
@@ -889,7 +912,9 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
               {
                 id: Date.now().toString() + 'ai',
                 role: 'assistant',
-                content: textToSave
+                content: textToSave,
+                sources: liveSources.length > 0 ? liveSources : undefined,
+                groundingMode: liveGroundingMode,
               }
             ]
           };
@@ -899,6 +924,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     }
     setLiveStreamingText('');
     setLiveThoughtText('');
+    setLiveSources([]);
+    setLiveGroundingMode(undefined);
     setIsGenerating(false);
   };
 
@@ -932,6 +959,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
     }
     setLiveStreamingText('');
     setLiveThoughtText('');
+    setLiveSources([]);
+    setLiveGroundingMode(undefined);
     setIsGenerating(true);
 
     const userMessage: Message = { id: Date.now().toString(), role: 'user', content: promptToSend };
@@ -973,6 +1002,7 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
 
     try {
       const allowDataCollection = JSON.parse(safeStorage.getItem('privacy_data') ?? 'true');
+      const academicProfile = extractUserAcademicProfile(profile, user);
       
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -987,7 +1017,13 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
           speedMode: speedMode,
           stream: true,
           history: historyToSend,
-          allowDataCollection
+          allowDataCollection,
+          ragContext: {
+            curriculum: academicProfile.curriculum,
+            educationLevel: academicProfile.educationLevel,
+            subjects: academicProfile.subjects,
+            fieldOfStudy: academicProfile.fieldOfStudy,
+          },
         })
       });
 
@@ -999,6 +1035,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
         let buffer = '';
         let accumulated = '';
         let accumulatedThought = '';
+        let accumulatedSources: CurriculumSourceReference[] = [];
+        let accumulatedGroundingMode: GroundingMode | undefined = undefined;
 
         while (true) {
           const { done, value } = await reader.read();
@@ -1016,6 +1054,14 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
             }
             try {
               const parsed = JSON.parse(dataStr);
+              if (Array.isArray(parsed.sources)) {
+                accumulatedSources = parsed.sources;
+                setLiveSources(parsed.sources);
+              }
+              if (parsed.groundingMode) {
+                accumulatedGroundingMode = parsed.groundingMode;
+                setLiveGroundingMode(parsed.groundingMode);
+              }
               if (parsed.thought) {
                 accumulatedThought += parsed.thought;
                 setLiveThoughtText(accumulatedThought);
@@ -1040,6 +1086,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
           if (dataStr && dataStr !== '[DONE]') {
             try {
               const parsed = JSON.parse(dataStr);
+              if (Array.isArray(parsed.sources)) accumulatedSources = parsed.sources;
+              if (parsed.groundingMode) accumulatedGroundingMode = parsed.groundingMode;
               if (parsed.thought) accumulatedThought += parsed.thought;
               if (parsed.text) accumulated += parsed.text;
               else if (parsed.error) accumulated += accumulated.trim() ? `\n\n*(Error: ${parsed.error})*` : String(parsed.error);
@@ -1058,7 +1106,9 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                   ? {
                       id: assistantMsgId,
                       role: 'assistant',
-                      content: accumulated.trim()
+                      content: accumulated.trim(),
+                      sources: accumulatedSources.length > 0 ? accumulatedSources : undefined,
+                      groundingMode: accumulatedGroundingMode,
                     }
                   : {
                       id: Date.now().toString() + 'err',
@@ -1082,7 +1132,9 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                 { 
                   id: assistantMsgId, 
                   role: 'assistant', 
-                  content: data.reply || '' 
+                  content: data.reply || '',
+                  sources: Array.isArray(data.sources) ? data.sources : undefined,
+                  groundingMode: data.groundingMode,
                 }
               ]
             };
@@ -1137,6 +1189,8 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
       abortControllerRef.current = null;
       setLiveStreamingText('');
       setLiveThoughtText('');
+      setLiveSources([]);
+      setLiveGroundingMode(undefined);
       setIsGenerating(false);
     }
   };
@@ -1511,6 +1565,11 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                           </ReactMarkdown>
                         </div>
 
+                        <CurriculumGroundingPanel
+                          groundingMode={msg.groundingMode}
+                          sources={msg.sources}
+                        />
+
                         {/* Action Bar: Copy & Speak TTS */}
                         <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-white/10 text-slate-400 dark:text-[#8E8E93]">
                           <div className="flex items-center gap-1.5">
@@ -1628,6 +1687,13 @@ export function AiTutor({ user, profile, isSidebarOpen, onToggleSidebar, onSideb
                           : 'Sage is thinking deeply...'}
                       </span>
                     </div>
+                  )}
+
+                  {(liveGroundingMode || liveSources.length > 0) && (
+                    <CurriculumGroundingPanel
+                      groundingMode={liveGroundingMode}
+                      sources={liveSources}
+                    />
                   )}
 
                   {/* Live streaming status tag */}
