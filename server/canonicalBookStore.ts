@@ -444,13 +444,23 @@ export function searchCanonicalBook(
 ): CanonicalSearchHit[] {
   const query = String(rawQuery || "").trim().toLowerCase();
   if (!query) return [];
+  const tokens = query.split(/\s+/).filter(Boolean);
+
+  const matchesText = (raw: string): number => {
+    const lower = raw.toLowerCase();
+    const exactIdx = lower.indexOf(query);
+    if (exactIdx !== -1) return exactIdx;
+    if (tokens.length > 1 && tokens.every((tok) => lower.includes(tok))) {
+      return lower.indexOf(tokens[0]);
+    }
+    return -1;
+  };
 
   const hits: CanonicalSearchHit[] = [];
 
   for (const ch of structure.chapters) {
     for (const blk of ch.blocks || []) {
-      const lower = blk.text.toLowerCase();
-      const idx = lower.indexOf(query);
+      const idx = matchesText(blk.text);
       if (idx !== -1) {
         const start = Math.max(0, idx - 45);
         const end = Math.min(blk.text.length, idx + query.length + 110);
@@ -470,7 +480,7 @@ export function searchCanonicalBook(
     }
 
     for (const sec of ch.sections || []) {
-      if (sec.title.toLowerCase().includes(query)) {
+      if (matchesText(sec.title) !== -1) {
         hits.push({
           chapterId: ch.id,
           chapterTitle: ch.title,
@@ -487,8 +497,7 @@ export function searchCanonicalBook(
       }
 
       for (const blk of sec.blocks || []) {
-        const lower = blk.text.toLowerCase();
-        const idx = lower.indexOf(query);
+        const idx = matchesText(blk.text);
         if (idx !== -1) {
           const start = Math.max(0, idx - 45);
           const end = Math.min(blk.text.length, idx + query.length + 110);

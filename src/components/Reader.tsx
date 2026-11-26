@@ -1,9 +1,9 @@
-import { Book, Bookmark, Highlight } from '../types';
+import { Book, Bookmark, Highlight, BookConversionOverview, CanonicalBookChapter } from '../types';
 import { ChevronLeft, List, Settings, MessageSquareText, Search, BookmarkPlus, Bookmark as BookmarkIcon, ExternalLink, FileText, ChevronRight, Highlighter, Trash2, X, CheckCircle2, Loader2, Download as DownloadIcon, Clock, Sun, Type, Copy, BookOpen, Share, Sparkles, WifiOff, Wifi, CloudDownload, HardDriveDownload, Headphones, Quote as QuoteIcon, Image as ImageIcon, SpellCheck } from 'lucide-react';
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { Document, Page } from 'react-pdf';
 import { motion, AnimatePresence } from 'motion/react';
-import { supabase } from '../lib/supabase';
+import { supabase, getPersistedDeviceSession } from '../lib/supabase';
 import { logReadingProgress } from '../lib/readingGoal';
 import { useOffline } from '../lib/useOffline';
 import {
@@ -188,7 +188,223 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
   const [highlights, setHighlights] = useState<Highlight[]>([]);
   const [selectionRange, setSelectionRange] = useState<{ x: number; y: number; text: string } | null>(null);
   const [showSidebar, setShowSidebar] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<'chapters' | 'bookmarks' | 'highlights' | 'settings'>('highlights');
+  const [sidebarTab, setSidebarTab] = useState<'chapters' | 'search' | 'bookmarks' | 'highlights'>('chapters');
+
+  // Hybrid PDF <-> EPUB, Canonical TOC, Search & Server Progress/Bookmarks State
+  const [conversionOverview, setConversionOverview] = useState<BookConversionOverview | null>(null);
+  const [canonicalChapters, setCanonicalChapters] = useState<CanonicalBookChapter[]>([]);
+  const [activeEpubHref, setActiveEpubHref] = useState<string | undefined>(undefined);
+  const [activeEpubTitle, setActiveEpubTitle] = useState<string | undefined>(undefined);
+  const [epubNavigation, setEpubNavigation] = useState<{ href?: string; anchor?: string; token: number } | null>(null);
+  const [serverBookmarks, setServerBookmarks] = useState<Bookmark[]>([]);
+  const [bookSearchQuery, setBookSearchQuery] = useState('');
+  const [bookSearchHits, setBookSearchHits] = useState<
+    Array<{
+      blockId: string;
+      chapterId: string;
+      chapterTitle: string;
+      sectionId?: string;
+      sectionTitle?: string;
+      snippet: string;
+      pdfPageNumber: number;
+      epubHref: string;
+      epubAnchor: string;
+    }>
+  >([]);
+  const [isSearchingBook, setIsSearchingBook] = useState(false);
+  const pendingPdfScrollPageRef = useRef<number | null>(null);
+
+  const getReaderAuthHeaders = async (): Promise<Record<string, string>> => {
+    try {
+      if (supabase) {
+        const { data } = await supabase.auth.getSession();
+        if (data?.session?.access_token) {
+          return { Authorization: `Bearer ${data.session.access_token}` };
+        }
+      }
+    } catch {}
+    const persisted = getPersistedDeviceSession();
+    if (persisted?.access_token && persisted.access_token !== 'demo_token' && persisted.access_token !== 'local_token') {
+      return { Authorization: `Bearer ${persisted.access_token}` };
+    }
+    return {};
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadHybridMetadata() {
+      try {
+        const headers = await getReaderAuthHeaders();
+        const [convRes, tocRes, progRes, bmRes] = await Promise.all([
+          fetch(`/api/books/${encodeURIComponent(book.id)}/conversion`).catch(() => null),
+          fetch(`/api/books/${encodeURIComponent(book.id)}/toc`).catch(() => null),
+          fetch(`/api/books/${encodeURIComponent(book.id)}/progress`, { headers }).catch(() => null),
+          fetch(`/api/books/${encodeURIComponent(book.id)}/bookmarks`, { headers }).catch(() => null),
+        ]);
+
+        let convData: BookConversionOverview | null = null;
+        if (convRes?.ok) {
+          convData = await convRes.json().catch(() => null);
+          if (!cancelled && convData) setConversionOverview(convData);
+        }
+        if (tocRes?.ok) {
+          const tocData = await tocRes.json().catch(() => null);
+          if (!cancelled && Array.isArray(tocData?.chapters)) {
+            setCanonicalChapters(tocData.chapters);
+          }
+        }
+        if (bmRes?.ok) {
+          const bmData = await bmRes.json().catch(() => null);
+          if (!cancelled && Array.isArray(bmData?.bookmarks)) {
+            setServerBookmarks(bmData.bookmarks);
+          }
+        }
+        if (progRes?.ok) {
+          const progData = await progRes.json().catch(() => null);
+          const rec = progData?.progress;
+          if (!cancelled && rec) {
+            if (typeof rec.currentPage === 'number' && rec.currentPage > 0) {
+              setPageNumber(rec.currentPage);
+              pendingPdfScrollPageRef.current = rec.currentPage;
+            }
+            const epubReady = Boolean(convData?.epubPublished || book.epubPublished || isNativeEpub);
+            if (rec.activeFormat === 'epub' && epubReady) {
+              setActiveFormat('epub');
+              if (rec.epubChapterHref) {
+                setEpubNavigation({ href: rec.epubChapterHref, token: Date.now() });
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[Reader] Hybrid metadata load notice:', err);
+      }
+    }
+    loadHybridMetadata();
+    return () => {
+      cancelled = true;
+    };
+  }, [book.id, book.epubPublished, isNativeEpub]);
+
+  const epubAvailable = Boolean(isNativeEpub || conversionOverview?.epubPublished || book.epubPublished);
+
+  const activeCanonicalPosition = useMemo(() => {
+    if (canonicalChapters.length === 0) return null;
+    if (activeFormat === 'epub' && activeEpubHref) {
+      const cleanHref = activeEpubHref.replace(/^OEBPS\//i, '').toLowerCase();
+      const ch = canonicalChapters.find((c) => c.epubHref.toLowerCase() === cleanHref);
+      if (ch) return { chapter: ch, section: ch.sections?.[0] || null };
+    }
+    const byPage =
+      canonicalChapters.find((c) => pageNumber >= c.pdfPageStart && pageNumber <= c.pdfPageEnd) ||
+      canonicalChapters[0];
+    if (!byPage) return null;
+    const sec =
+      byPage.sections?.find((s) => pageNumber >= s.pdfPageStart && pageNumber <= s.pdfPageEnd) ||
+      null;
+    return { chapter: byPage, section: sec };
+  }, [canonicalChapters, activeFormat, activeEpubHref, pageNumber]);
+
+  const jumpToPdfPage = (targetPage: number) => {
+    const clamped = Math.max(1, Math.min(numPages || 9999, targetPage));
+    setPageNumber(clamped);
+    pendingPdfScrollPageRef.current = clamped;
+    setTimeout(() => {
+      const el = pdfContainerRef.current?.querySelector(`[data-page-number="${clamped}"]`) as HTMLElement | null;
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }, 80);
+  };
+
+  const handleSwitchFormat = (target: 'pdf' | 'epub') => {
+    if (target === activeFormat) return;
+    if (target === 'epub') {
+      if (!epubAvailable) {
+        const statusLabel = conversionOverview?.processingStatus;
+        setToastMessage(
+          statusLabel === 'queued' || statusLabel === 'processing'
+            ? 'EPUB 3 conversion is still running. Original PDF remains open.'
+            : statusLabel === 'needs_review'
+            ? 'EPUB 3 edition is awaiting Admin review. Original PDF remains open.'
+            : 'EPUB 3 edition not published yet. Original PDF remains available.'
+        );
+        setShowToast(true);
+        setTimeout(() => setShowToast(false), 3500);
+        return;
+      }
+      if (canonicalChapters.length > 0) {
+        const matchingCh =
+          canonicalChapters.find((c) => pageNumber >= c.pdfPageStart && pageNumber <= c.pdfPageEnd) ||
+          canonicalChapters[0];
+        const matchingSec = matchingCh?.sections?.find(
+          (s) => pageNumber >= s.pdfPageStart && pageNumber <= s.pdfPageEnd
+        );
+        if (matchingCh) {
+          setEpubNavigation({
+            href: matchingSec?.epubHref || matchingCh.epubHref,
+            anchor: matchingSec?.epubAnchor || matchingCh.epubAnchor,
+            token: Date.now(),
+          });
+        }
+      }
+      setActiveFormat('epub');
+    } else {
+      if (canonicalChapters.length > 0 && activeEpubHref) {
+        const cleanHref = activeEpubHref.replace(/^OEBPS\//i, '').toLowerCase();
+        const matchingCh = canonicalChapters.find((c) => c.epubHref.toLowerCase() === cleanHref);
+        if (matchingCh?.pdfPageStart) {
+          jumpToPdfPage(matchingCh.pdfPageStart);
+        }
+      }
+      setActiveFormat('pdf');
+    }
+  };
+
+  const handleNavigateTocTarget = (item: {
+    pdfPageStart: number;
+    epubHref: string;
+    epubAnchor?: string;
+  }) => {
+    if (activeFormat === 'epub') {
+      setEpubNavigation({ href: item.epubHref, anchor: item.epubAnchor, token: Date.now() });
+    } else {
+      jumpToPdfPage(item.pdfPageStart || 1);
+    }
+    if (window.innerWidth < 1024) {
+      setShowSidebar(false);
+    }
+  };
+
+  useEffect(() => {
+    const q = bookSearchQuery.trim();
+    if (q.length < 2) {
+      setBookSearchHits([]);
+      setIsSearchingBook(false);
+      return;
+    }
+    let cancelled = false;
+    setIsSearchingBook(true);
+    const timer = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `/api/books/${encodeURIComponent(book.id)}/search?q=${encodeURIComponent(q)}`
+        );
+        const data = res.ok ? await res.json().catch(() => ({})) : { hits: [] };
+        if (!cancelled) {
+          setBookSearchHits(Array.isArray(data?.hits) ? data.hits : []);
+        }
+      } catch {
+        if (!cancelled) setBookSearchHits([]);
+      } finally {
+        if (!cancelled) setIsSearchingBook(false);
+      }
+    }, 260);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [book.id, bookSearchQuery]);
 
   // Shareable Quote Card Overlay State
   const [quoteCardModalOpen, setQuoteCardModalOpen] = useState(false);
@@ -561,9 +777,57 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     };
   }, [book.id, user]);
 
-  function onDocumentLoadSuccess({ numPages }: { numPages: number }) {
-    setNumPages(numPages);
-    setPageNumber(1);
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const headers = {
+          ...(await getReaderAuthHeaders()),
+          'Content-Type': 'application/json',
+        };
+        await fetch(`/api/books/${encodeURIComponent(book.id)}/progress`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify({
+            progress: readingProgress,
+            currentPage: pageNumber,
+            totalPages: numPages || conversionOverview?.pageCount || undefined,
+            activeFormat,
+            epubChapterHref: activeEpubHref,
+            canonicalSectionId: activeCanonicalPosition?.section?.id || activeCanonicalPosition?.chapter?.id,
+          }),
+        });
+      } catch {}
+    }, 750);
+    return () => clearTimeout(timer);
+  }, [
+    book.id,
+    readingProgress,
+    pageNumber,
+    numPages,
+    activeFormat,
+    activeEpubHref,
+    activeCanonicalPosition?.section?.id,
+    activeCanonicalPosition?.chapter?.id,
+    conversionOverview?.pageCount,
+  ]);
+
+  function onDocumentLoadSuccess({ numPages: loadedTotal }: { numPages: number }) {
+    setNumPages(loadedTotal);
+    setPageNumber((prev) => {
+      const target = pendingPdfScrollPageRef.current || prev;
+      if (target >= 1 && target <= loadedTotal) {
+        if (pendingPdfScrollPageRef.current) {
+          const scrollToPage = pendingPdfScrollPageRef.current;
+          pendingPdfScrollPageRef.current = null;
+          setTimeout(() => {
+            const el = pdfContainerRef.current?.querySelector(`[data-page-number="${scrollToPage}"]`) as HTMLElement | null;
+            el?.scrollIntoView({ behavior: 'auto', block: 'start' });
+          }, 120);
+        }
+        return target;
+      }
+      return 1;
+    });
   }
 
   const goToPrevPage = () => {
@@ -576,6 +840,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target && ['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement).tagName)) return;
       if (e.key === 'ArrowLeft') {
         setPageNumber((prev) => Math.max(prev - 1, 1));
       } else if (e.key === 'ArrowRight') {
@@ -586,19 +851,59 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [numPages]);
 
-  const handleBookmark = () => {
+  const combinedBookmarks = useMemo(() => {
+    const merged = [...serverBookmarks, ...bookmarks.filter((b) => b.bookId === book.id)];
+    const seen = new Set<string>();
+    return merged.filter((bm) => {
+      const k = bm.id || `${bm.chapter}-${bm.pageNumber || ''}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    });
+  }, [serverBookmarks, bookmarks, book.id]);
+
+  const handleBookmark = async () => {
+    const activeChapterLabel =
+      activeCanonicalPosition?.section?.title ||
+      activeCanonicalPosition?.chapter?.title ||
+      activeEpubTitle ||
+      `Page ${pageNumber}`;
     const newBookmark: Bookmark = {
-      id: Date.now().toString(),
+      id: `bm-${Date.now()}`,
       bookId: book.id,
       bookTitle: book.title,
-      chapter: 'Chapter 1: The Foundations',
-      textSnippet: `This text from ${book.title} represents a core foundation of ${book.category} studies.`,
+      title: activeChapterLabel,
+      chapter: activeChapterLabel,
+      textSnippet: `${book.title} · ${activeChapterLabel} (${activeFormat.toUpperCase()} p.${pageNumber})`,
+      canonicalSectionId: activeCanonicalPosition?.section?.id || activeCanonicalPosition?.chapter?.id,
+      epubHref: activeEpubHref || activeCanonicalPosition?.section?.epubHref || activeCanonicalPosition?.chapter?.epubHref,
+      epubAnchor: activeCanonicalPosition?.section?.epubAnchor || activeCanonicalPosition?.chapter?.epubAnchor,
+      format: activeFormat,
+      pageNumber,
       timestamp: Date.now(),
     };
     onAddBookmark(newBookmark);
     saveBookmarkLocal(newBookmark);
-    
-    if (!navigator.onLine) {
+
+    if (navigator.onLine) {
+      try {
+        const headers = {
+          ...(await getReaderAuthHeaders()),
+          'Content-Type': 'application/json',
+        };
+        const res = await fetch(`/api/books/${encodeURIComponent(book.id)}/bookmarks`, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(newBookmark),
+        });
+        if (res.ok) {
+          const data = await res.json().catch(() => null);
+          if (Array.isArray(data?.bookmarks)) {
+            setServerBookmarks(data.bookmarks);
+          }
+        }
+      } catch {}
+    } else {
       queueOfflineAction('bookmark', {
         id: newBookmark.id,
         book_id: book.id,
@@ -609,12 +914,27 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
       });
     }
 
-    setToastMessage(!navigator.onLine ? 'Bookmark saved locally (IndexedDB Offline)' : 'Bookmark saved');
+    setToastMessage(!navigator.onLine ? 'Bookmark saved locally (IndexedDB Offline)' : `Bookmarked: ${activeChapterLabel}`);
     setShowToast(true);
     setTimeout(() => setShowToast(false), 3000);
   };
 
-  const isBookmarked = bookmarks.some(b => b.chapter === 'Chapter 1: The Foundations');
+  const handleDeleteServerBookmark = async (bookmarkId: string) => {
+    setServerBookmarks((prev) => prev.filter((b) => b.id !== bookmarkId));
+    try {
+      const headers = await getReaderAuthHeaders();
+      await fetch(`/api/books/${encodeURIComponent(book.id)}/bookmarks/${encodeURIComponent(bookmarkId)}`, {
+        method: 'DELETE',
+        headers,
+      });
+    } catch {}
+  };
+
+  const isBookmarked = combinedBookmarks.some(
+    (b) =>
+      b.pageNumber === pageNumber ||
+      (activeCanonicalPosition?.chapter?.title && b.chapter === activeCanonicalPosition.chapter.title)
+  );
 
   // Save new highlight to IndexedDB, DB & Local State
   const addHighlight = async (selectedText: string, color: string) => {
@@ -946,21 +1266,73 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
         'bg-[#F4ECD8]/85 border-stone-300/60 text-[#2C2925]'
       }`}>
       
-        <div className="flex items-center gap-2">
-          <button onClick={onClose} className="p-2 opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-colors cursor-pointer">
+        <div className="flex items-center gap-2 min-w-0">
+          <button onClick={onClose} className="p-2 opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-colors cursor-pointer shrink-0">
             <ChevronLeft className="w-5 h-5" />
           </button>
-          <div>
-            <h1 className="text-sm font-semibold truncate max-w-[150px] md:max-w-md opacity-95">{book.title}</h1>
-            <p className="text-[11px] opacity-60">
+          <div className="min-w-0">
+            <h1 className="text-sm font-semibold truncate max-w-[140px] sm:max-w-xs md:max-w-md opacity-95">{book.title}</h1>
+            <p className="text-[11px] opacity-65 truncate max-w-[200px] sm:max-w-sm tabular-nums">
+              {activeCanonicalPosition?.chapter?.title
+                ? `${activeCanonicalPosition.chapter.title} · `
+                : ''}
               {activeFormat === 'epub'
-                ? (numPages ? `Chapter ${pageNumber} of ${numPages} · Reflowable EPUB` : 'Reflowable EPUB')
+                ? (numPages ? `Chapter ${pageNumber} of ${numPages} · EPUB 3` : 'EPUB 3 Reflowable')
                 : (numPages ? `Page ${pageNumber} of ${numPages}` : (book.author || 'Academic Reader'))}
             </p>
           </div>
         </div>
         
-        <div className="flex items-center gap-1 md:gap-2">
+        <div className="flex items-center gap-1 md:gap-2 shrink-0">
+          {/* Hybrid PDF / EPUB 3 Switcher */}
+          {book.fileUrl && (
+            <div className="hidden sm:flex items-center bg-black/5 dark:bg-white/10 p-0.5 rounded-lg border border-black/5 dark:border-white/10">
+              <button
+                type="button"
+                onClick={() => handleSwitchFormat('pdf')}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeFormat === 'pdf'
+                    ? 'bg-white dark:bg-stone-800 shadow-xs text-brand-700 dark:text-brand-300'
+                    : 'opacity-70 hover:opacity-100'
+                }`}
+              >
+                PDF
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSwitchFormat('epub')}
+                title={epubAvailable ? 'Switch to reflowable EPUB 3 edition' : 'EPUB 3 conversion not yet published'}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-semibold transition-all cursor-pointer whitespace-nowrap shrink-0 ${
+                  activeFormat === 'epub'
+                    ? 'bg-white dark:bg-stone-800 shadow-xs text-brand-700 dark:text-brand-300'
+                    : epubAvailable
+                    ? 'opacity-75 hover:opacity-100'
+                    : 'opacity-45'
+                }`}
+              >
+                EPUB 3
+              </button>
+            </div>
+          )}
+
+          {/* Unified Table of Contents, Search & Bookmarks Drawer Toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              setSidebarTab((prev) => (showSidebar ? prev : 'chapters'));
+              setShowSidebar((prev) => !prev);
+            }}
+            className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 cursor-pointer whitespace-nowrap shrink-0 ${
+              showSidebar
+                ? 'bg-brand-600 text-white shadow-xs'
+                : 'opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5'
+            }`}
+            title="Table of Contents, Search & Bookmarks"
+          >
+            <List className="w-4 h-4" />
+            <span className="hidden md:inline">Contents</span>
+          </button>
+
           {/* Offline / Online Status Badge */}
           {!isOnline ? (
             <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-amber-500/15 text-amber-500 border border-amber-500/30">
@@ -1013,7 +1385,7 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
           <button 
             onClick={handleBookmark}
             className={`p-2 rounded-full transition-colors flex items-center gap-1 cursor-pointer ${isBookmarked ? 'text-indigo-500 bg-indigo-500/10' : 'opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5'}`}
-            title="Bookmarked"
+            title="Bookmark Current Location"
           >
             {isBookmarked ? <BookmarkIcon className="w-4 h-4 fill-current" /> : <BookmarkPlus className="w-4 h-4" />}
           </button>
@@ -1042,14 +1414,14 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                   <div className="flex items-center bg-black/5 dark:bg-white/5 p-1 rounded-xl">
                     <button
                       type="button"
-                      onClick={() => setActiveFormat('epub')}
-                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${activeFormat === 'epub' ? 'bg-white dark:bg-stone-800 shadow-sm text-brand-600 dark:text-brand-400' : 'opacity-70'}`}
+                      onClick={() => handleSwitchFormat('epub')}
+                      className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${activeFormat === 'epub' ? 'bg-white dark:bg-stone-800 shadow-sm text-brand-600 dark:text-brand-400' : epubAvailable ? 'opacity-70' : 'opacity-45'}`}
                     >
-                      EPUB Reflow
+                      EPUB 3 Reflow
                     </button>
                     <button
                       type="button"
-                      onClick={() => setActiveFormat('pdf')}
+                      onClick={() => handleSwitchFormat('pdf')}
                       className={`flex-1 py-1.5 text-xs font-semibold rounded-lg transition-all cursor-pointer whitespace-nowrap ${activeFormat === 'pdf' ? 'bg-white dark:bg-stone-800 shadow-sm text-brand-600 dark:text-brand-400' : 'opacity-70'}`}
                     >
                       PDF Pages
@@ -1164,18 +1536,33 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
                 (isNativeEpub && cachedBlobUrl) ||
                 (book.fileUrl && book.fileUrl.startsWith('http') && isNativeEpub
                   ? book.fileUrl
-                  : `/api/download?key=${encodeURIComponent(book.fileUrl || book.id)}&format=epub`)
+                  : `/api/books/${encodeURIComponent(book.id)}/epub`)
               }
               theme={theme}
               fontSize={fontSize}
               fontFamily={fontFamily}
               isCachedLocally={isCachedLocally}
               renderTextWithHighlights={renderTextWithHighlights}
-              onChapterProgress={(idx, total) => {
-                setPageNumber(idx + 1);
+              canonicalChapters={canonicalChapters}
+              externalChapterHref={epubNavigation?.href}
+              externalAnchor={epubNavigation?.anchor}
+              navigationToken={epubNavigation?.token}
+              onFallbackToPdf={() => setActiveFormat('pdf')}
+              onChapterProgress={(idx, total, chapterTitle, chapterHref) => {
+                setActiveEpubHref(chapterHref);
+                setActiveEpubTitle(chapterTitle);
                 setNumPages(total);
+                const matchingChapter = canonicalChapters.find(
+                  (c) => c.epubHref.toLowerCase() === chapterHref.replace(/^OEBPS\//i, '').toLowerCase()
+                );
+                if (matchingChapter?.pdfPageStart) {
+                  setPageNumber(matchingChapter.pdfPageStart);
+                } else {
+                  setPageNumber(idx + 1);
+                }
                 if (total > 0) {
                   const pct = Math.min(100, Math.round(((idx + 1) / total) * 100));
+                  setReadingProgress(pct);
                   onUpdateProgressRef.current?.(book.id, pct);
                 }
               }}
@@ -1363,6 +1750,245 @@ export function Reader({ book, onClose, onOpenAi, onAddBookmark, bookmarks, user
             </div>
           )}
         </main>
+
+        {/* Right-Hand Unified Canonical TOC, Search, Bookmarks & Highlights Drawer */}
+        {showSidebar && (
+          <aside
+            className={`fixed right-0 top-16 bottom-0 w-80 max-w-[90vw] z-40 border-l flex flex-col font-sans shadow-2xl ${
+              theme === 'dark'
+                ? 'bg-[#161618] border-white/10 text-[#EDEDED]'
+                : theme === 'amoled'
+                ? 'bg-[#080808] border-stone-800 text-[#E5E5EA]'
+                : 'bg-[#F8F3E6] border-stone-300/70 text-[#2C2925]'
+            }`}
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-current/10">
+              <div className="flex items-center gap-1 bg-black/5 dark:bg-white/5 p-0.5 rounded-lg flex-1 mr-2">
+                {(
+                  [
+                    { id: 'chapters', label: 'Contents' },
+                    { id: 'search', label: 'Search' },
+                    { id: 'bookmarks', label: 'Saved' },
+                    { id: 'highlights', label: 'Notes' },
+                  ] as const
+                ).map((tab) => (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    onClick={() => setSidebarTab(tab.id)}
+                    className={`flex-1 py-1 text-[11px] font-semibold rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      sidebarTab === tab.id
+                        ? 'bg-white dark:bg-stone-800 text-brand-600 dark:text-brand-300 shadow-xs'
+                        : 'opacity-70 hover:opacity-100'
+                    }`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSidebar(false)}
+                className="p-1.5 rounded-lg opacity-70 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/10 cursor-pointer"
+                aria-label="Close Contents Drawer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-4 pb-28 space-y-3">
+              {sidebarTab === 'chapters' && (
+                canonicalChapters.length === 0 ? (
+                  <div className="text-xs opacity-70 py-8 text-center space-y-2">
+                    <BookOpen className="w-7 h-7 mx-auto opacity-50" />
+                    <p>No structured Table of Contents generated for this book yet.</p>
+                    <p className="text-[11px] opacity-75">
+                      Status: {conversionOverview?.processingStatus || 'pending'}. Original PDF remains readable.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-1.5">
+                    {canonicalChapters.map((ch) => {
+                      const isActiveCh = activeCanonicalPosition?.chapter?.id === ch.id;
+                      return (
+                        <div key={ch.id} className="space-y-0.5">
+                          <button
+                            type="button"
+                            onClick={() => handleNavigateTocTarget(ch)}
+                            className={`w-full text-left px-3 py-2 rounded-xl text-xs transition-colors flex items-start justify-between gap-2 cursor-pointer ${
+                              isActiveCh
+                                ? 'bg-brand-600 text-white font-semibold'
+                                : 'hover:bg-black/5 dark:hover:bg-white/5 font-semibold'
+                            }`}
+                          >
+                            <span className="leading-snug">{ch.title}</span>
+                            <span className="text-[10px] font-mono tabular-nums opacity-75 shrink-0 mt-0.5">
+                              p.{ch.pdfPageStart}
+                            </span>
+                          </button>
+                          {ch.sections && ch.sections.length > 0 && (
+                            <div className="pl-3 space-y-0.5 border-l border-current/10 ml-3">
+                              {ch.sections.map((sec) => {
+                                const isActiveSec = activeCanonicalPosition?.section?.id === sec.id;
+                                return (
+                                  <button
+                                    key={sec.id}
+                                    type="button"
+                                    onClick={() => handleNavigateTocTarget(sec)}
+                                    style={{ paddingLeft: `${sec.hierarchyLevel >= 3 ? 1 : 0.5}rem` }}
+                                    className={`w-full text-left pr-2 py-1.5 rounded-lg text-[11px] transition-colors flex items-start justify-between gap-2 cursor-pointer ${
+                                      isActiveSec
+                                        ? 'bg-brand-500/20 text-brand-700 dark:text-brand-300 font-semibold'
+                                        : 'opacity-80 hover:opacity-100 hover:bg-black/5 dark:hover:bg-white/5'
+                                    }`}
+                                  >
+                                    <span className="leading-snug">{sec.title}</span>
+                                    <span className="text-[10px] font-mono tabular-nums opacity-65 shrink-0">
+                                      {sec.pdfPageStart}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )
+              )}
+
+              {sidebarTab === 'search' && (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-1/2 -translate-y-1/2 opacity-50" />
+                    <input
+                      type="text"
+                      value={bookSearchQuery}
+                      onChange={(e) => setBookSearchQuery(e.target.value)}
+                      placeholder="Search chapters, formulas, definitions..."
+                      className="w-full pl-8 pr-3 py-2 text-xs rounded-xl bg-black/5 dark:bg-white/10 border border-current/15 outline-none focus:border-brand-500"
+                    />
+                  </div>
+                  {isSearchingBook ? (
+                    <div className="flex items-center justify-center py-8 gap-2 text-xs opacity-70">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Searching textbook...
+                    </div>
+                  ) : bookSearchQuery.trim().length < 2 ? (
+                    <p className="text-xs opacity-65 text-center py-6">
+                      Type at least 2 characters to search across chapters and sections.
+                    </p>
+                  ) : bookSearchHits.length === 0 ? (
+                    <p className="text-xs opacity-65 text-center py-6">
+                      No matching passages found in canonical structure.
+                    </p>
+                  ) : (
+                    <div className="space-y-2">
+                      {bookSearchHits.map((hit) => (
+                        <button
+                          key={hit.blockId}
+                          type="button"
+                          onClick={() =>
+                            handleNavigateTocTarget({
+                              pdfPageStart: hit.pdfPageNumber,
+                              epubHref: hit.epubHref,
+                              epubAnchor: hit.epubAnchor,
+                            })
+                          }
+                          className="w-full text-left p-2.5 rounded-xl bg-black/5 dark:bg-white/5 hover:bg-brand-500/10 border border-current/10 transition-colors space-y-1 cursor-pointer"
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[10px] font-semibold opacity-75">
+                            <span className="truncate">{hit.sectionTitle || hit.chapterTitle}</span>
+                            <span className="font-mono tabular-nums shrink-0">p.{hit.pdfPageNumber}</span>
+                          </div>
+                          <p className="text-xs leading-relaxed line-clamp-3">{hit.snippet}</p>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {sidebarTab === 'bookmarks' && (
+                combinedBookmarks.length === 0 ? (
+                  <p className="text-xs opacity-65 text-center py-8">
+                    No bookmarks yet. Tap the bookmark icon in the header to save your place.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {combinedBookmarks.map((bm) => (
+                      <div
+                        key={bm.id}
+                        className="p-2.5 rounded-xl bg-black/5 dark:bg-white/5 border border-current/10 flex items-start justify-between gap-2"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (bm.epubHref && activeFormat === 'epub') {
+                              setEpubNavigation({ href: bm.epubHref, anchor: bm.epubAnchor, token: Date.now() });
+                            } else if (bm.pageNumber) {
+                              if (activeFormat === 'epub' && bm.epubHref) {
+                                setEpubNavigation({ href: bm.epubHref, anchor: bm.epubAnchor, token: Date.now() });
+                              } else {
+                                setActiveFormat('pdf');
+                                jumpToPdfPage(bm.pageNumber);
+                              }
+                            }
+                          }}
+                          className="text-left flex-1 min-w-0 cursor-pointer"
+                        >
+                          <div className="text-xs font-semibold truncate">{bm.title || bm.chapter}</div>
+                          <div className="text-[10px] opacity-65 mt-0.5 font-mono">
+                            {(bm.format || 'pdf').toUpperCase()} {bm.pageNumber ? `· p.${bm.pageNumber}` : ''}
+                          </div>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteServerBookmark(bm.id)}
+                          className="p-1 opacity-60 hover:opacity-100 hover:text-rose-500 cursor-pointer"
+                          title="Remove bookmark"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )
+              )}
+
+              {sidebarTab === 'highlights' && (
+                highlights.length === 0 ? (
+                  <p className="text-xs opacity-65 text-center py-8">
+                    Select any text passage while reading to highlight or create study notes.
+                  </p>
+                ) : (
+                  <div className="space-y-2">
+                    {highlights.map((hl) => (
+                      <div
+                        key={hl.id}
+                        className="p-2.5 rounded-xl bg-black/5 dark:bg-white/5 border border-current/10 space-y-1"
+                      >
+                        <div className="flex items-center justify-between text-[10px] opacity-65">
+                          <span>{hl.pageNumber ? `Page ${hl.pageNumber}` : 'Highlight'}</span>
+                          <button
+                            type="button"
+                            onClick={() => deleteHighlight(hl.id)}
+                            className="hover:text-rose-500 cursor-pointer"
+                            title="Delete highlight"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <p className="text-xs leading-relaxed">"{hl.text}"</p>
+                      </div>
+                    ))}
+                  </div>
+                )
+              )}
+            </div>
+          </aside>
+        )}
       </div>
 
       {/* Smooth linear fade gradient so page text scrolling beneath dock fades out cleanly (Reference: file 1000052645.jpg) */}

@@ -14,6 +14,7 @@ import {
   computeSha256,
   readEpubArtifact,
   readProcessingJob,
+  resolveBookConversionOverview,
   saveCanonicalStructure,
   saveConversionReport,
   saveEpubArtifact,
@@ -421,7 +422,12 @@ export async function runPdfToEpubConversion(
       updatedAt: new Date().toISOString(),
     });
 
-    return { structure: finalStructure };
+    return {
+      structure: finalStructure,
+      overview: resolveBookConversionOverview(deps.uploadsDir, bookId, {
+        rightsConversionAllowed: true,
+      }),
+    };
   } catch (err: any) {
     const errMsg = err?.message || "PDF-to-EPUB conversion failed; source PDF remains intact.";
     console.error(`[PdfToEpubPipeline] Failed for book ${bookId}:`, errMsg);
@@ -599,6 +605,7 @@ export async function rebuildAndPublishFromEditedStructure(
       progressPct: 100,
       ocrStatus: "not_needed",
       ocrPagesCount: 0,
+      retryCount: 0,
       completedAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     },

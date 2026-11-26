@@ -17,6 +17,7 @@ import { getCurriculumBooks } from '../lib/kenyaCurriculumService';
 import { CURRICULA, SCHOOL_SUBJECTS, COLLEGE_SUBJECTS_MAP } from '../lib/bookPersonalization';
 import { BookCoverVisual } from './BookCoverVisual';
 import { BookCoverEditorModal } from './BookCoverEditorModal';
+import { BookConversionModal } from './BookConversionModal';
 import { ADMIN_LOGIN_EMAIL, isAdminLoginEmail } from '../../shared/adminAuth';
 import {
   CANONICAL_SUBJECT_CATEGORIES,
@@ -42,8 +43,9 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
   const [isDeleting, setIsDeleting] = useState(false);
   const [deleteErrorMsg, setDeleteErrorMsg] = useState('');
   
-  // Book editing state for cover page
+  // Book editing state for cover page & EPUB conversion
   const [editingCoverBook, setEditingCoverBook] = useState<Book | null>(null);
+  const [conversionModalBook, setConversionModalBook] = useState<Book | null>(null);
 
   // Search and filter for library directory
   const [searchQuery, setSearchQuery] = useState('');
@@ -68,6 +70,7 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
   const [requireEncryptedOffline, setRequireEncryptedOffline] = useState(true);
   const [watermarkUser, setWatermarkUser] = useState(true);
   const [allowRawExport, setAllowRawExport] = useState(false);
+  const [rightsConversionAllowed, setRightsConversionAllowed] = useState(true);
   const [coverImage, setCoverImage] = useState('');
   const [isImportingCoverUrl, setIsImportingCoverUrl] = useState(false);
   const [coverUrlError, setCoverUrlError] = useState('');
@@ -578,6 +581,7 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
           b2Bucket: syncedBucket || b2Status.bucket,
           b2Synced: Boolean(b2Synced),
           format: resolvedFormat,
+          rightsConversionAllowed,
           securityPolicy: {
             requireEncryptedOffline,
             watermarkUser,
@@ -1390,6 +1394,15 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
                   />
                   Allow unencrypted file export
                 </label>
+                <label className="flex items-center gap-2 text-xs text-slate-600 dark:text-[#c4c4c8] cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={rightsConversionAllowed}
+                    onChange={e => setRightsConversionAllowed(e.target.checked)}
+                    className="rounded border-slate-300 dark:border-[#3f3f46]"
+                  />
+                  Auto-convert PDF to structured EPUB 3 (if licensed)
+                </label>
               </div>
 
               <div>
@@ -1664,7 +1677,7 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
                                 Legacy Path: {b.fileUrl}
                               </div>
                             ) : null}
-                            {(b.supabaseSynced || b.b2Synced || b.needsShelfMigration) && (
+                            {(b.supabaseSynced || b.b2Synced || b.needsShelfMigration || b.processingStatus || b.epubPublished) && (
                               <div className="flex flex-wrap items-center gap-2 mt-1 text-[10px] font-medium">
                                 {b.supabaseSynced && (
                                   <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400">
@@ -1681,6 +1694,27 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
                                   <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-300">
                                     <Cloud className="w-2.5 h-2.5" />
                                     Needs B2 Sync
+                                  </span>
+                                ) : null}
+                                {b.epubPublished ? (
+                                  <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-300 font-semibold">
+                                    <CheckCircle2 className="w-2.5 h-2.5" />
+                                    EPUB 3 Published{b.conversionQualityScore ? ` (${b.conversionQualityScore}%)` : ''}
+                                  </span>
+                                ) : b.processingStatus === 'queued' || b.processingStatus === 'processing' ? (
+                                  <span className="inline-flex items-center gap-1 text-brand-600 dark:text-brand-300">
+                                    <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                                    Converting EPUB 3…
+                                  </span>
+                                ) : b.processingStatus === 'needs_review' ? (
+                                  <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-300 font-semibold">
+                                    <AlertCircle className="w-2.5 h-2.5" />
+                                    TOC Needs Review
+                                  </span>
+                                ) : b.processingStatus === 'failed' ? (
+                                  <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400">
+                                    <AlertCircle className="w-2.5 h-2.5" />
+                                    Conversion Failed (PDF Active)
                                   </span>
                                 ) : null}
                               </div>
@@ -1752,11 +1786,22 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
                                 </span>
                               </button>
 
+                              {/* Inspect Conversion / Edit Canonical TOC & Publish EPUB 3 */}
+                              <button
+                                type="button"
+                                onClick={() => setConversionModalBook(b)}
+                                className="px-2.5 py-1.5 bg-indigo-50 dark:bg-indigo-500/15 hover:bg-indigo-100 dark:hover:bg-indigo-500/25 text-indigo-700 dark:text-indigo-300 font-semibold rounded-lg text-xs transition-colors flex items-center gap-1.5 shadow-xs border border-indigo-200 dark:border-indigo-500/30 cursor-pointer whitespace-nowrap"
+                                title="Inspect PDF-to-EPUB 3 conversion status, quality report, and edit Table of Contents"
+                              >
+                                <BookOpen className="w-3.5 h-3.5" />
+                                <span>EPUB / TOC</span>
+                              </button>
+
                               {/* Edit Cover Action Button */}
                               <button
                                 type="button"
                                 onClick={() => setEditingCoverBook(b)}
-                                className="px-2.5 py-1.5 bg-brand-50 dark:bg-[#252236] hover:bg-brand-100 dark:hover:bg-[#312c48] text-brand-700 dark:text-[#c4b5fd] font-semibold rounded-lg text-xs transition-colors flex items-center gap-1.5 shadow-xs border border-brand-200 dark:border-brand-500/30 cursor-pointer"
+                                className="px-2.5 py-1.5 bg-brand-50 dark:bg-[#252236] hover:bg-brand-100 dark:hover:bg-[#312c48] text-brand-700 dark:text-[#c4b5fd] font-semibold rounded-lg text-xs transition-colors flex items-center gap-1.5 shadow-xs border border-brand-200 dark:border-brand-500/30 cursor-pointer whitespace-nowrap"
                                 title="Edit Cover Page"
                               >
                                 <Palette className="w-3.5 h-3.5" />
@@ -1793,6 +1838,19 @@ export function Admin({ appBooks, user: propUser, onUpdateBook, onDeleteBook }: 
           isOpen={true}
           onClose={() => setEditingCoverBook(null)}
           onSave={handleSaveCoverPage}
+        />
+      )}
+
+      {/* PDF-to-EPUB 3 Conversion & Canonical TOC Editor Modal */}
+      {conversionModalBook && (
+        <BookConversionModal
+          book={conversionModalBook}
+          isOpen={true}
+          onClose={() => setConversionModalBook(null)}
+          getAdminAuthHeaders={getAdminAuthHeaders}
+          onUpdated={() => {
+            void loadBooks();
+          }}
         />
       )}
 
