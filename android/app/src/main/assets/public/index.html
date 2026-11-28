@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <title>Edu AI — Scholarly Reading & Study Studio</title>
+    <meta name="description" content="A warm, distraction-free study studio uniting curated academic textbooks, guided learning paths, science labs, and Sage AI tutoring." />
+    <meta property="og:title" content="Edu AI — Scholarly Reading & Study Studio" />
+    <meta property="og:description" content="A warm, distraction-free study studio uniting curated academic textbooks, guided learning paths, science labs, and Sage AI tutoring." />
+    <meta name="theme-color" content="#0F5C6E" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Edu AI" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="icon" type="image/png" sizes="192x192" href="/pwa-192x192.png" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Mono:wght@400;500;600&family=Lora:ital,wght@0,400..700;1,400..700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+    <!-- Storage Defense & Mobile iFrame Polyfill -->
+    <script>
+      (function() {
+        var localMem = {};
+        var sessionMem = {};
+
+        function createMockStorage(store) {
+          return {
+            getItem: function(k) { return store.hasOwnProperty(k) ? store[k] : null; },
+            setItem: function(k, v) { store[k] = String(v); },
+            removeItem: function(k) { delete store[k]; },
+            clear: function() { for (var k in store) delete store[k]; },
+            get length() { return Object.keys(store).length; },
+            key: function(i) { return Object.keys(store)[i] || null; }
+          };
+        }
+
+        var mockLocal = createMockStorage(localMem);
+        var mockSession = createMockStorage(sessionMem);
+
+        // Patch Storage.prototype so any direct call to localStorage or sessionStorage never throws SecurityError on mobile iframes
+        try {
+          if (typeof Storage !== 'undefined' && Storage.prototype) {
+            var proto = Storage.prototype;
+            var origGet = proto.getItem;
+            var origSet = proto.setItem;
+            var origRemove = proto.removeItem;
+            var origClear = proto.clear;
+
+            proto.getItem = function(k) {
+              try {
+                return origGet.call(this, k);
+              } catch (_) {
+                return (this === window.sessionStorage ? sessionMem : localMem)[k] || null;
+              }
+            };
+            proto.setItem = function(k, v) {
+              try {
+                origSet.call(this, k, v);
+              } catch (_) {
+                (this === window.sessionStorage ? sessionMem : localMem)[k] = String(v);
+              }
+            };
+            proto.removeItem = function(k) {
+              try {
+                origRemove.call(this, k);
+              } catch (_) {
+                delete (this === window.sessionStorage ? sessionMem : localMem)[k];
+              }
+            };
+            proto.clear = function() {
+              try {
+                origClear.call(this);
+              } catch (_) {
+                var s = (this === window.sessionStorage ? sessionMem : localMem);
+                for (var key in s) delete s[key];
+              }
+            };
+          }
+        } catch (_) {}
+
+        // Safely test whether native localStorage works
+        var localWorking = false;
+        try {
+          var k = '__edu_probe__';
+          window.localStorage.setItem(k, '1');
+          window.localStorage.removeItem(k);
+          localWorking = true;
+        } catch (_) {
+          localWorking = false;
+        }
+
+        if (!localWorking) {
+          try {
+            Object.defineProperty(window, 'localStorage', {
+              value: mockLocal,
+              writable: true,
+              configurable: true
+            });
+          } catch (_) {}
+          try {
+            Object.defineProperty(Window.prototype, 'localStorage', {
+              get: function() { return mockLocal; },
+              configurable: true
+            });
+          } catch (_) {}
+          try {
+            window.localStorage = mockLocal;
+          } catch (_) {}
+        }
+
+        var sessionWorking = false;
+        try {
+          var sk = '__edu_sprobe__';
+          window.sessionStorage.setItem(sk, '1');
+          window.sessionStorage.removeItem(sk);
+          sessionWorking = true;
+        } catch (_) {
+          sessionWorking = false;
+        }
+
+        if (!sessionWorking) {
+          try {
+            Object.defineProperty(window, 'sessionStorage', {
+              value: mockSession,
+              writable: true,
+              configurable: true
+            });
+          } catch (_) {}
+          try {
+            Object.defineProperty(Window.prototype, 'sessionStorage', {
+              get: function() { return mockSession; },
+              configurable: true
+            });
+          } catch (_) {}
+          try {
+            window.sessionStorage = mockSession;
+          } catch (_) {}
+        }
+
+        // Safe theme initialization now that storage is defended
+        try {
+          var savedTheme = window.localStorage ? window.localStorage.getItem('theme') : null;
+          if (savedTheme === 'dark' || (!savedTheme && window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+          }
+        } catch (_) {}
+
+        // Global uncaught error display banner fallback
+        window.addEventListener('error', function(e) {
+          var details = (e && e.message) ? e.message : String(e);
+          var str = (details + ' ' + (e.filename || '')).toLowerCase();
+          if (str.indexOf('websocket') !== -1 || str.indexOf('vite') !== -1 || str.indexOf('hmr') !== -1) {
+            e.preventDefault && e.preventDefault();
+            return;
+          }
+          try {
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                type: 'uncaught_error', 
+                message: details, 
+                filename: e.filename, 
+                lineno: e.lineno, 
+                colno: e.colno,
+                stack: e.error ? e.error.stack : null 
+              })
+            }).catch(function() {});
+          } catch (_) {}
+        });
+
+        window.addEventListener('unhandledrejection', function(e) {
+          var reason = e.reason ? (e.reason.stack || e.reason.message || String(e.reason)) : 'Unhandled rejection';
+          var str = String(reason).toLowerCase();
+          if (str.indexOf('websocket') !== -1 || str.indexOf('vite') !== -1 || str.indexOf('hmr') !== -1) {
+            e.preventDefault && e.preventDefault();
+            return;
+          }
+          try {
+            fetch('/api/client-log', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ type: 'unhandled_rejection', reason: reason })
+            }).catch(function() {});
+          } catch (_) {}
+        });
+        // Capture Chromium/Android beforeinstallprompt even if fired before React mounts
+        window.__eduDeferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', function(e) {
+          e.preventDefault();
+          window.__eduDeferredInstallPrompt = e;
+        });
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-B8JlynZb.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-DtqZmCzD.css">
+  <link rel="manifest" href="/manifest.webmanifest"></head>
+  <body class="bg-[#F7F5F0] dark:bg-[#11161A] font-sans antialiased text-[#182026] dark:text-[#EDF2F4]">
+    <div id="root"></div>
+  </body>
+</html>

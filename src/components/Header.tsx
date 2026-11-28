@@ -8,7 +8,8 @@ import { Book, ViewState } from '../types';
 import { getStoredNotifications } from '../lib/notifications';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { useUserAvatar, saveUserAvatarLocally, uploadAndSyncUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
-import { safeStorage } from '../lib/safeStorage';
+import { safeStorage, safeSessionStorage } from '../lib/safeStorage';
+import { PWAInstallButton } from './PWAInstallButton';
 import {
   ACHIEVEMENT_BADGES,
   ACHIEVEMENTS_UPDATED_EVENT,
@@ -273,6 +274,13 @@ export function Header({
       </div>
 
       <div className="flex items-center gap-2 sm:gap-2.5 shrink-0 pointer-events-auto">
+        <PWAInstallButton
+          variant="header"
+          onOpenAndroidSettings={() => {
+            safeSessionStorage.setItem('edu_ai_settings_tab', 'flutter');
+            onNavigate('settings');
+          }}
+        />
         {/* Hovering Profile Button & Quick Menu */}
         <div className="relative" ref={profileMenuRef}>
           <input

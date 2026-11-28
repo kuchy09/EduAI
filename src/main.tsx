@@ -1,10 +1,45 @@
 import './lib/supabase'; // Ensure auth error interceptors and session sanitizers are primed
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
+import { registerSW } from 'virtual:pwa-register';
 import App from './App.tsx';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import './index.css';
 import { safeStorage } from './lib/safeStorage';
+
+if (typeof window !== 'undefined' && (window as any).Capacitor?.isNativePlatform?.() && window.location.hostname === 'localhost') {
+  const configuredBase =
+    safeStorage.getItem('edu_ai_api_base_url') ||
+    (import.meta as any).env?.VITE_API_BASE_URL ||
+    'https://ais-pre-vvfmzub4fuhwyulg6tacri-72101744053.europe-west3.run.app';
+  const cleanBase = String(configuredBase).replace(/\/+$/, '');
+  const origFetch = window.fetch.bind(window);
+  window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+    if (typeof input === 'string' && input.startsWith('/api/')) {
+      return origFetch(`${cleanBase}${input}`, init);
+    }
+    if (input instanceof Request) {
+      try {
+        const u = new URL(input.url);
+        if (u.origin === window.location.origin && u.pathname.startsWith('/api/')) {
+          return origFetch(new Request(`${cleanBase}${u.pathname}${u.search}`, input), init);
+        }
+      } catch {}
+    }
+    return origFetch(input, init);
+  };
+}
+
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  try {
+    registerSW({
+      immediate: true,
+      onRegisterError(error) {
+        console.warn('[Edu AI] PWA service worker notice:', error);
+      },
+    });
+  } catch (_) {}
+}
 
 // Safe theme initialization
 try {

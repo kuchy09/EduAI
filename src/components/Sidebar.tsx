@@ -4,9 +4,10 @@ import { ViewState } from '../types';
 import { supabase, clearStaleSupabaseTokens } from '../lib/supabase';
 import { triggerCapsuleFeedback } from '../lib/feedback';
 import { useUserAvatar, markAvatarUrlFailed } from '../lib/userAvatarService';
-import { safeStorage } from '../lib/safeStorage';
+import { safeStorage, safeSessionStorage } from '../lib/safeStorage';
 import { isAdminLoginEmail } from '../../shared/adminAuth';
 import { EduAiBrandMark } from './icons/EduAiBrandMark';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SidebarProps {
   currentView: ViewState;
@@ -218,6 +219,15 @@ export function Sidebar({ currentView, onChangeView, isOpen, onClose, user: prop
 
         {/* User profile & Theme footer */}
         <div className="p-3.5 border-t border-[#E2DDD3] dark:border-[#26313A] space-y-2">
+          <PWAInstallButton
+            variant="sidebar"
+            onOpenAndroidSettings={() => {
+              safeSessionStorage.setItem('edu_ai_settings_tab', 'flutter');
+              onChangeView('settings');
+              onClose();
+            }}
+            onActionDone={onClose}
+          />
           <button
             onClick={toggleTheme}
             className="w-full flex items-center justify-between px-3 py-2 rounded-xl bg-slate-100/80 dark:bg-[#11161A] border border-[#E2DDD3] dark:border-[#26313A] text-slate-700 dark:text-slate-200 hover:bg-slate-200/70 dark:hover:bg-white/5 transition-all cursor-pointer text-xs font-medium"

@@ -521,8 +521,9 @@ export async function generateAudiobookChapterScript(params: {
       tutorModel: "textbook-concept-parser",
       engine: "textbook-concept-parser",
       ttsAvailable: false,
-      aiNotice:
-        "Add GROQ_API_KEY in Settings > Secrets for Qwen 3 narration. Playing extracted Library chapter narration with Device Voice.",
+      aiNotice: process.env.VERCEL
+        ? "Add GROQ_API_KEY in Vercel Project Settings > Environment Variables and redeploy for Qwen 3 narration. Playing extracted Library chapter narration with Device Voice."
+        : "Add GROQ_API_KEY in Settings > Secrets for Qwen 3 narration. Playing extracted Library chapter narration with Device Voice.",
       segments: buildDeterministicChapterSegments({
         title: params.title,
         category: params.category,
@@ -733,7 +734,9 @@ ${truncatedSource}
       : isAuthKeyError(lastError)
       ? "Configured GEMINI_API_KEY was rejected by Google AI. Using extracted Library chapter narration with Device Voice."
       : isBillingOrQuotaError(lastError)
-      ? "AI Studio credits or quota are currently depleted. Add GROQ_API_KEY in Settings > Secrets for Qwen 3, or use Device Voice."
+      ? process.env.VERCEL
+        ? "AI credits or quota are currently depleted. Add GROQ_API_KEY in Vercel Project Settings > Environment Variables for Qwen 3, or use Device Voice."
+        : "AI Studio credits or quota are currently depleted. Add GROQ_API_KEY in Settings > Secrets for Qwen 3, or use Device Voice."
       : "Cloud AI Tutor narration is temporarily busy. Playing full extracted textbook chapter with local concept diagrams.";
     return {
       bookId: params.bookId,

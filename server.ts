@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import http from "http";
 import path from "path";
@@ -10,6 +11,7 @@ import { S3Client, PutObjectCommand, GetObjectCommand, HeadObjectCommand, ListOb
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import PDFDocument from "pdfkit";
+import JSZip from "jszip";
 import { generateKLBPhysicsPdf } from "./server/klbPhysicsPdf";
 import { generateEducationalEpub } from "./server/epubBuilder";
 import {
@@ -19,6 +21,7 @@ import {
 import {
   formatQwenErrorPayload,
   generateQwenCompletion,
+  getMissingGroqMessage,
   isQwenConfigured,
   resolveQwenRuntimeConfig,
   streamQwenCompletion,
@@ -2264,19 +2267,53 @@ const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: "5mb" }));
 
+// Allow Capacitor / Android WebView origins to reach /api/* cleanly
+app.use((req, res, next) => {
+  const origin = String(req.headers.origin || "");
+  if (
+    origin === "https://localhost" ||
+    origin === "http://localhost" ||
+    origin === "capacitor://localhost" ||
+    origin.endsWith(".vercel.app") ||
+    origin.endsWith(".run.app")
+  ) {
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    res.setHeader("Vary", "Origin");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    if (req.method === "OPTIONS") {
+      return res.status(204).end();
+    }
+  }
+  next();
+});
+
 // Health check endpoint
 app.get("/api/health", (req, res) => {
   const qwenCfg = resolveQwenRuntimeConfig();
+  const geminiReady = Boolean(
+    String(
+      process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY ||
+        process.env.GOOGLE_GENERATIVE_AI_API_KEY ||
+        ""
+    ).trim().length >= 16
+  );
+  const anthropicReady = Boolean(String(process.env.ANTHROPIC_API_KEY || "").trim().length >= 16);
   let qwenHost: string | null = null;
   try {
     if (qwenCfg?.endpointUrl) qwenHost = new URL(qwenCfg.endpointUrl).host;
   } catch {}
   res.json({
     status: "ok",
+    runtime: process.env.VERCEL ? "vercel" : "node",
     cloudConnected: {
       supabase: Boolean(getServerSupabase()),
       b2: Boolean(getS3Client() && B2_BUCKET_NAME),
       qwen3: Boolean(qwenCfg),
+      gemini: geminiReady,
+      anthropic: anthropicReady,
       qwenModel: qwenCfg?.model || null,
       qwenProvider: qwenCfg?.providerLabel || null,
       qwenHost,
@@ -6635,6 +6672,125 @@ app.get("/api/download", async (req, res) => {
     });
   });
 
+  // Android App Links / Trusted Web Activity verification
+  app.get("/.well-known/assetlinks.json", (_req, res) => {
+    const rawFingerprints = String(process.env.ANDROID_SHA256_FINGERPRINT || "").trim();
+    const fingerprints = rawFingerprints
+      ? rawFingerprints.split(",").map((s) => s.trim()).filter(Boolean)
+      : ["REPLACE_WITH_YOUR_ANDROID_SIGNING_SHA256_FINGERPRINT"];
+    res.setHeader("Content-Type", "application/json");
+    res.json([
+      {
+        relation: ["delegate_permission/common.handle_all_urls"],
+        target: {
+          namespace: "android_app",
+          package_name: process.env.ANDROID_PACKAGE_NAME || "io.supabase.eduai",
+          sha256_cert_fingerprints: fingerprints,
+        },
+      },
+    ]);
+  });
+
+  // Android Studio / Capacitor / APK packaging manifest & optional direct APK download
+  app.get("/api/android/manifest", (req, res) => {
+    const protocol = req.headers["x-forwarded-proto"] || req.protocol || "https";
+    const host = req.get("host") || "";
+    const apiBaseUrl = host ? `${protocol}://${host}` : "";
+    const localApkCandidates = [
+      path.join(process.cwd(), "public", "downloads", "eduai-android.apk"),
+      path.join(UPLOADS_DIR, "android", "eduai-android.apk"),
+      path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk"),
+      path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "release", "app-release.apk"),
+    ];
+    const hasLocalApk = localApkCandidates.some((p) => fs.existsSync(p));
+    const configuredApkUrl = String(process.env.ANDROID_APK_URL || "").trim();
+    const apkAvailable = Boolean(configuredApkUrl || hasLocalApk);
+    const apkDownloadUrl = configuredApkUrl || (hasLocalApk ? "/api/android/apk" : null);
+
+    res.json({
+      appId: process.env.ANDROID_PACKAGE_NAME || "io.supabase.eduai",
+      appName: "Edu AI",
+      scheme: "io.supabase.eduai://login-callback",
+      apiBaseUrl,
+      pwaReady: true,
+      capacitorReady: fs.existsSync(path.join(process.cwd(), "android", "app", "build.gradle")),
+      flutterMobileReady: fs.existsSync(path.join(process.cwd(), "mobile", "pubspec.yaml")),
+      apkAvailable,
+      apkDownloadUrl,
+      androidStudio: {
+        projectDir: "android",
+        minSdk: 24,
+        targetSdk: 36,
+        syncCommand: "npm run android:sync",
+        openCommand: "npm run android:open",
+        debugApkCommand: "npm run android:apk",
+        releaseAabCommand: "npm run android:aab",
+      },
+    });
+  });
+
+  app.get("/api/android/apk", (_req, res) => {
+    const configuredApkUrl = String(process.env.ANDROID_APK_URL || "").trim();
+    if (configuredApkUrl) {
+      return res.redirect(302, configuredApkUrl);
+    }
+    const candidates = [
+      path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "release", "app-release.apk"),
+      path.join(process.cwd(), "android", "app", "build", "outputs", "apk", "debug", "app-debug.apk"),
+      path.join(process.cwd(), "public", "downloads", "eduai-android.apk"),
+      path.join(UPLOADS_DIR, "android", "eduai-android.apk"),
+    ];
+    const found = candidates.find((p) => fs.existsSync(p));
+    if (!found) {
+      return res.status(404).json({
+        error: "No compiled APK is hosted yet. Install directly from Chrome (PWA) or build android/ in Android Studio.",
+      });
+    }
+    res.setHeader("Content-Type", "application/vnd.android.package-archive");
+    res.setHeader("Content-Disposition", 'attachment; filename="eduai-android.apk"');
+    return res.sendFile(found);
+  });
+
+  // Downloadable Android Studio project bundle (.zip)
+  app.get("/api/android/studio-bundle.zip", async (_req, res) => {
+    try {
+      const androidDir = path.join(process.cwd(), "android");
+      if (!fs.existsSync(androidDir)) {
+        return res.status(404).json({ error: "Android Studio project directory was not found on this server." });
+      }
+      const zip = new JSZip();
+      const skipDirs = new Set([".gradle", "build", ".idea", "captures", ".cxx"]);
+
+      const addDirRecursive = (absDir: string, zipPrefix: string) => {
+        for (const entry of fs.readdirSync(absDir, { withFileTypes: true })) {
+          if (entry.isDirectory()) {
+            if (skipDirs.has(entry.name)) continue;
+            addDirRecursive(path.join(absDir, entry.name), `${zipPrefix}/${entry.name}`);
+          } else if (entry.isFile()) {
+            const absFile = path.join(absDir, entry.name);
+            zip.file(`${zipPrefix}/${entry.name}`, fs.readFileSync(absFile));
+          }
+        }
+      };
+
+      addDirRecursive(androidDir, "android");
+      for (const rel of ["capacitor.config.ts", "docs/ANDROID_STUDIO_GUIDE.md", "scripts/setup-android-studio.sh"]) {
+        const abs = path.join(process.cwd(), rel);
+        if (fs.existsSync(abs)) {
+          zip.file(rel, fs.readFileSync(abs));
+        }
+      }
+
+      const buf = await zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE", compressionOptions: { level: 6 } });
+      res.setHeader("Content-Type", "application/zip");
+      res.setHeader("Content-Disposition", 'attachment; filename="eduai-android-studio.zip"');
+      return res.send(buf);
+    } catch (err: any) {
+      console.error("[Android Studio Bundle Error]:", err?.message || err);
+      return res.status(500).json({ error: "Could not package Android Studio bundle." });
+    }
+  });
+
   const extractCleanApiError = (error: any, fallback: string) => {
     const raw = String(error?.message || fallback);
     if (raw.trim().startsWith("{")) {
@@ -6833,11 +6989,22 @@ Return ONLY a valid JSON object with a single "steps" array (no surrounding mark
 - "status": "completed", "current", or "upcoming"
 - "duration": The estimated duration to complete (e.g., "2 weeks")`;
 
+      let effectiveProvider = normalizedProvider;
+      if (effectiveProvider !== "gemini" && effectiveProvider !== "anthropic" && !isQwenConfigured()) {
+        if (getUsableServerGeminiKey().apiKey) {
+          effectiveProvider = "gemini";
+        } else {
+          return res.status(503).json({
+            error: getMissingGroqMessage(),
+          });
+        }
+      }
+
       // Default: route through Qwen3 adapter (independent of Gemini)
-      if (normalizedProvider !== "gemini") {
+      if (effectiveProvider !== "gemini") {
         if (!isQwenConfigured()) {
           return res.status(503).json({
-            error: "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets.",
+            error: getMissingGroqMessage(),
           });
         }
         try {
@@ -7068,12 +7235,24 @@ Core Pedagogical & Speed Rules:
 Behavioral Persona:
 - Tone: Encouraging, expert, collaborative, and peer-like co-pilot.`;
 
+      let effectiveProvider = normalizedProvider;
+      if ((effectiveProvider === 'qwen3' || effectiveProvider === 'qwen') && !isQwenConfigured()) {
+        if (getUsableServerGeminiKey().apiKey) {
+          effectiveProvider = 'gemini';
+        } else if (String(process.env.ANTHROPIC_API_KEY || '').trim()) {
+          effectiveProvider = 'anthropic';
+        } else {
+          return res.status(503).json({
+            error: getMissingGroqMessage(),
+          });
+        }
+      }
+
       // Qwen 3 Single-Host Adapter (default provider)
-      if (normalizedProvider === 'qwen3' || normalizedProvider === 'qwen') {
+      if (effectiveProvider === 'qwen3' || effectiveProvider === 'qwen') {
         if (!isQwenConfigured()) {
           return res.status(503).json({
-            error:
-              "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets.",
+            error: getMissingGroqMessage(),
           });
         }
 
@@ -7161,10 +7340,13 @@ Behavioral Persona:
       }
 
       // Anthropic Handler
-      if (normalizedProvider === 'anthropic') {
+      if (effectiveProvider === 'anthropic') {
         const apiKey = process.env.ANTHROPIC_API_KEY;
         if (!apiKey) {
-          return res.status(503).json({ error: "ANTHROPIC_API_KEY environment variable is missing. Configure it in Settings > Secrets or switch to Qwen 3." });
+          const hint = process.env.VERCEL
+            ? "Vercel Dashboard > Project Settings > Environment Variables"
+            : "Settings > Secrets";
+          return res.status(503).json({ error: `ANTHROPIC_API_KEY environment variable is missing. Configure it in ${hint} or switch to Qwen 3.` });
         }
 
         const anthropic = new Anthropic({ apiKey });
@@ -7245,8 +7427,11 @@ Behavioral Persona:
       // Gemini Handler (explicitly selected fallback option)
       const { apiKey, reason } = getUsableServerGeminiKey();
       if (!apiKey) {
+        const hint = process.env.VERCEL
+          ? "Vercel Dashboard > Project Settings > Environment Variables"
+          : "Settings > Secrets";
         return res.status(503).json({
-          error: reason || "Gemini API key is not configured. Please check GEMINI_API_KEY in Settings > Secrets.",
+          error: reason || `Gemini API key is not configured. Please check GEMINI_API_KEY in ${hint}.`,
         });
       }
 
@@ -7668,10 +7853,12 @@ async function startDevServer() {
   });
 }
 
-startDevServer().catch((err) => {
-  console.error("[Server] Failed to start dev server:", err);
-  process.exit(1);
-});
+if (!process.env.VERCEL) {
+  startDevServer().catch((err) => {
+    console.error("[Server] Failed to start dev server:", err);
+    process.exit(1);
+  });
+}
 
 export default app;
 

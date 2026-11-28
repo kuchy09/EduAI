@@ -9,9 +9,10 @@ import {
   pushAccountSyncPatch,
   UserSettingsSync,
 } from '../lib/accountSyncService';
-import { safeStorage } from '../lib/safeStorage';
+import { safeStorage, safeSessionStorage } from '../lib/safeStorage';
 import { Support } from './Support';
 import { Developer } from './Developer';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type SettingsTab = 'appearance' | 'notifications' | 'privacy' | 'offline' | 'flutter' | 'support' | 'developer';
 
@@ -23,10 +24,21 @@ export interface SettingsProps {
 }
 
 export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOut }: SettingsProps = {}) {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(initialTab);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => {
+    const requested = safeSessionStorage.getItem('edu_ai_settings_tab') as SettingsTab | null;
+    if (requested) {
+      safeSessionStorage.removeItem('edu_ai_settings_tab');
+      return requested;
+    }
+    return initialTab;
+  });
 
   useEffect(() => {
-    if (initialTab) {
+    const requested = safeSessionStorage.getItem('edu_ai_settings_tab') as SettingsTab | null;
+    if (requested) {
+      safeSessionStorage.removeItem('edu_ai_settings_tab');
+      setActiveTab(requested);
+    } else if (initialTab) {
       setActiveTab(initialTab);
     }
   }, [initialTab]);
@@ -38,8 +50,10 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
   const [cachedBooksList, setCachedBooksList] = useState<CachedBookMeta[]>([]);
   const [isLoadingBooks, setIsLoadingBooks] = useState(false);
   const [flutterManifest, setFlutterManifest] = useState<any>(null);
+  const [androidManifest, setAndroidManifest] = useState<any>(null);
   const [loadingFlutterManifest, setLoadingFlutterManifest] = useState(false);
   const [copiedFlutterCmd, setCopiedFlutterCmd] = useState(false);
+  const [copiedAndroidCmd, setCopiedAndroidCmd] = useState(false);
 
   useEffect(() => {
     if (activeTab === 'offline') {
@@ -52,10 +66,13 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
       });
     } else if (activeTab === 'flutter') {
       setLoadingFlutterManifest(true);
-      fetch('/api/flutter/manifest')
-        .then(r => r.ok ? r.json() : null)
-        .then(data => {
-          setFlutterManifest(data);
+      Promise.all([
+        fetch('/api/flutter/manifest').then(r => r.ok ? r.json() : null).catch(() => null),
+        fetch('/api/android/manifest').then(r => r.ok ? r.json() : null).catch(() => null),
+      ])
+        .then(([flutterData, androidData]) => {
+          setFlutterManifest(flutterData);
+          setAndroidManifest(androidData);
           setLoadingFlutterManifest(false);
         })
         .catch(() => setLoadingFlutterManifest(false));
@@ -257,9 +274,9 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
             >
               <div className="flex items-center gap-3">
                 <Smartphone className="w-4 h-4" />
-                <span>Flutter & EPUB</span>
+                <span>Android &amp; Mobile</span>
               </div>
-              <span className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400">Mobile</span>
+              <span className="text-[11px] font-medium text-indigo-600 dark:text-indigo-400">Install</span>
             </button>
           </div>
 
@@ -671,22 +688,95 @@ export function Settings({ initialTab = 'appearance', onNavigate, user, onSignOu
             </div>
           )}
 
-          {/* Flutter Mobile & Publisher EPUB Tab */}
+          {/* Android Studio, Phone Install & Flutter Mobile Tab */}
           {activeTab === 'flutter' && (
             <div className="bg-white dark:bg-[#161616]/75 dark:backdrop-blur-xl rounded-2xl border border-slate-200 dark:border-white/10 p-6 shadow-sm dark:shadow-[0_12px_36px_rgba(0,0,0,0.5)] space-y-6 settings-overlay-card">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-bold text-slate-900 dark:text-[#EDEDED] flex items-center gap-2">
-                    <Smartphone className="w-5 h-5 text-indigo-500" />
-                    Flutter Mobile Reader &amp; Publisher EPUB Pipeline
+                    <Smartphone className="w-5 h-5 text-brand-600 dark:text-brand-400" />
+                    Android Install &amp; Android Studio Tools
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-[#A0A0A0] mt-1">
-                    Reflowable EPUB, native PDF, and hardware-backed AES-256 offline storage synced across mobile and web.
+                    Install Edu AI directly onto your Android phone as a standalone app, or open the Gradle project in Android Studio.
                   </p>
                 </div>
                 <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400 whitespace-nowrap shrink-0">
-                  {flutterManifest?.minSdk || 'Flutter >= 3.3.0'}
+                  {androidManifest?.capacitorReady ? 'Android Studio Ready' : flutterManifest?.minSdk || 'Android + PWA'}
                 </span>
+              </div>
+
+              {/* Instant Phone Install Card */}
+              <div className="p-4 rounded-xl border border-brand-200/80 dark:border-brand-800/40 bg-brand-50/50 dark:bg-brand-950/20 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="text-sm font-bold text-slate-900 dark:text-[#EDEDED]">
+                    Install Edu AI on Your Phone
+                  </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+                    Installs directly from Chrome on Android with offline textbooks, launcher icon, and standalone full-screen window. iOS Safari Add-to-Home-Screen is also ready.
+                  </p>
+                </div>
+                <div className="shrink-0">
+                  <PWAInstallButton variant="card" />
+                </div>
+              </div>
+
+              {/* Android Studio Capacitor Project */}
+              <div className="p-4 rounded-xl border border-slate-200 dark:border-white/10 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-xs font-semibold text-slate-800 dark:text-[#EDEDED] block">
+                      Android Studio Native Container (Capacitor Gradle Project)
+                    </span>
+                    <span className="text-[11px] text-slate-500 dark:text-[#A0A0A0] font-mono">
+                      Package: {androidManifest?.appId || 'io.supabase.eduai'} · API {androidManifest?.androidStudio?.minSdk || 24}–{androidManifest?.androidStudio?.targetSdk || 35} · Project: ./android
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {androidManifest?.apkAvailable && androidManifest?.apkDownloadUrl && (
+                      <a
+                        href={androidManifest.apkDownloadUrl}
+                        download="eduai-android.apk"
+                        className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold"
+                      >
+                        Download APK
+                      </a>
+                    )}
+                    <a
+                      href="/api/android/studio-bundle.zip"
+                      download="eduai-android-studio.zip"
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-white/20 hover:bg-slate-100 dark:hover:bg-white/10 text-slate-800 dark:text-[#EDEDED] text-xs font-semibold"
+                    >
+                      Download Android Studio (.zip)
+                    </a>
+                  </div>
+                </div>
+                <pre className="p-3 rounded-lg bg-slate-900 text-slate-100 text-xs font-mono overflow-x-auto">
+{`# Sync latest web build into Android Studio & open project
+npm run android:sync
+npm run android:open
+
+# Or build a debug APK directly from terminal:
+npm run android:apk`}
+                </pre>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-slate-500 dark:text-[#A0A0A0]">
+                    Includes deep-link callback <code className="font-mono">io.supabase.eduai://login-callback</code> and adaptive launcher icons.
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cmd = 'npm run android:sync && npm run android:open';
+                      navigator.clipboard?.writeText(cmd);
+                      setCopiedAndroidCmd(true);
+                      setTimeout(() => setCopiedAndroidCmd(false), 2500);
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-brand-600 hover:bg-brand-700 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    {copiedAndroidCmd ? 'Copied Android Cmd' : 'Copy Android Studio Cmd'}
+                  </button>
+                </div>
               </div>
 
               {loadingFlutterManifest ? (

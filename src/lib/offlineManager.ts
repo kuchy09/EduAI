@@ -160,23 +160,16 @@ export function openDB(): Promise<IDBDatabase> {
  * Register Service Worker for offline shell and asset caching
  */
 export async function registerServiceWorker(): Promise<ServiceWorkerRegistration | null> {
-  // In development, preview frames, or iframes, never register service workers to prevent navigation and storage interception loops
-  if (
-    typeof window === 'undefined' || 
-    !('serviceWorker' in navigator) ||
-    window.location.hostname.includes('run.app') ||
-    window.location.hostname.includes('localhost') ||
-    window.self !== window.top
-  ) {
+  if (typeof window === 'undefined' || !('serviceWorker' in navigator)) {
     return null;
   }
 
   try {
-    const registration = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
-    console.log('[Edu AI] Service Worker successfully registered:', registration.scope);
-    return registration;
+    const existing = await navigator.serviceWorker.getRegistration('/');
+    if (existing) return existing;
+    return await navigator.serviceWorker.ready.catch(() => null);
   } catch (error) {
-    console.warn('[Edu AI] Service Worker registration failed (normal in some sandboxes):', error);
+    console.warn('[Edu AI] Service Worker lookup notice:', error);
     return null;
   }
 }

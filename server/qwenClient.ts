@@ -44,8 +44,20 @@ function normalizeChatCompletionsUrl(rawBase: string): string {
   return `${clean}/v1/chat/completions`;
 }
 
+export function getMissingGroqMessage(): string {
+  if (process.env.VERCEL) {
+    return "Qwen 3 inference is not configured on this Vercel deployment. Add GROQ_API_KEY in Vercel Dashboard > Project Settings > Environment Variables and redeploy.";
+  }
+  return "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets.";
+}
+
 export function resolveQwenRuntimeConfig(): QwenRuntimeConfig | null {
-  const apiKey = isUsableSecret(process.env.GROQ_API_KEY);
+  const apiKey = isUsableSecret(
+    process.env.GROQ_API_KEY ||
+      process.env.GROQ_KEY ||
+      process.env.QWEN_API_KEY ||
+      process.env.VITE_GROQ_API_KEY
+  );
   if (!apiKey) {
     return null;
   }
@@ -180,10 +192,12 @@ export function formatQwenErrorPayload(err: any): { status: number; message: str
 
   if (status === 401 || status === 403 || lower.includes("invalid api key") || lower.includes("unauthorized")) {
     const cleanReason = raw && raw.length < 140 ? ` (${raw})` : "";
+    const locationHint = process.env.VERCEL
+      ? "Vercel Dashboard > Project Settings > Environment Variables (and redeploy)"
+      : "Settings > Secrets";
     return {
       status,
-      message:
-        `The GROQ_API_KEY secret was rejected by ${host}${cleanReason}. Please verify GROQ_API_KEY in Settings > Secrets.`,
+      message: `The GROQ_API_KEY secret was rejected by ${host}${cleanReason}. Please verify GROQ_API_KEY in ${locationHint}.`,
     };
   }
   if (status === 429 || lower.includes("rate limit") || lower.includes("too many requests")) {
@@ -210,9 +224,7 @@ export function formatQwenErrorPayload(err: any): { status: number; message: str
   if (status === 503 || lower.includes("unavailable") || lower.includes("not configured")) {
     return {
       status: 503,
-      message:
-        raw ||
-        "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets.",
+      message: raw || getMissingGroqMessage(),
     };
   }
   return {
@@ -268,10 +280,7 @@ export async function generateQwenCompletion(params: {
 }): Promise<{ text: string; thought: string; model: string; providerLabel: string }> {
   const cfg = resolveQwenRuntimeConfig();
   if (!cfg) {
-    throw new QwenUpstreamError(
-      503,
-      "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets."
-    );
+    throw new QwenUpstreamError(503, getMissingGroqMessage());
   }
 
   const speedMode = params.speedMode || "fast";
@@ -379,10 +388,7 @@ export async function streamQwenCompletion(params: {
 }): Promise<{ streamedAny: boolean; model: string; providerLabel: string }> {
   const cfg = resolveQwenRuntimeConfig();
   if (!cfg) {
-    throw new QwenUpstreamError(
-      503,
-      "Qwen 3 inference is not configured yet. Add GROQ_API_KEY in Settings > Secrets."
-    );
+    throw new QwenUpstreamError(503, getMissingGroqMessage());
   }
 
   const speedMode = params.speedMode || "fast";
